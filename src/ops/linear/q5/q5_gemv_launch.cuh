@@ -26,7 +26,7 @@ void launch_q5_a16_gemv(const Q5LinearOperands& operands, Output output, Epilogu
                              (operands.k / 64) % (W * 8) == 0 &&
                              (operands.padded_k / 64) % 8 == 0 &&
                              reinterpret_cast<std::uintptr_t>(operands.scales) % 16 == 0;
-    const auto launch = [&]<bool WideScales>() {
+    const auto launch      = [&]<bool WideScales>() {
         if constexpr (Dependent) {
             CUDA_CHECK(pdl::launch_dependent(
                 {grid, block, shared_bytes, stream},

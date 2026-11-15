@@ -58,14 +58,14 @@ int run_append_case(CudaExecutionView execution, const Geometry& geometry, KvCac
     const std::int32_t total       = test_case.base + test_case.tokens;
     const std::int32_t max_context = static_cast<std::int32_t>(
         std::max<std::uint32_t>(static_cast<std::uint32_t>(total + 3), test_case.envelope_max));
-    const std::size_t q_elements = static_cast<std::size_t>(kHeadDim) *
-                                   static_cast<std::size_t>(geometry.q_heads) *
-                                   static_cast<std::size_t>(test_case.tokens);
+    const std::size_t q_elements  = static_cast<std::size_t>(kHeadDim) *
+                                    static_cast<std::size_t>(geometry.q_heads) *
+                                    static_cast<std::size_t>(test_case.tokens);
     const std::size_t kv_elements = static_cast<std::size_t>(kHeadDim) *
                                     static_cast<std::size_t>(geometry.kv_heads) *
                                     static_cast<std::size_t>(test_case.tokens);
-    const float amplitude = test_case.qk_amplitude;
-    std::vector<float> q  = make_bf16_values(q_elements, test_case.seed, -amplitude, amplitude);
+    const float amplitude         = test_case.qk_amplitude;
+    std::vector<float> q = make_bf16_values(q_elements, test_case.seed, -amplitude, amplitude);
     if (test_case.zero_q) std::fill(q.begin(), q.end(), 0.0f);
     std::vector<float> k =
         make_bf16_values(kv_elements, test_case.seed + 1u, -amplitude, amplitude);
@@ -120,8 +120,8 @@ int run_append_case(CudaExecutionView execution, const Geometry& geometry, KvCac
     int graph_failures = 0;
     const auto launch  = [&](CudaExecutionView cuda) {
         ops::causal_softmax_attention(tq, tk, tv, tp, Tensor{}, ttable_row, op_geometry(geometry),
-                                       kAttentionScale, cache.batch_view(), envelope, workspace,
-                                       tout, cuda);
+                                      kAttentionScale, cache.batch_view(), envelope, workspace,
+                                      tout, cuda);
     };
     if (graph_limits.empty()) {
         launch_attention_case(launch, test_case.graph_replay);
@@ -193,8 +193,8 @@ int run_cached_case(CudaExecutionView execution, const Geometry& geometry, KvCac
     const std::size_t q_elements = static_cast<std::size_t>(kHeadDim) *
                                    static_cast<std::size_t>(geometry.q_heads) *
                                    static_cast<std::size_t>(test_case.tokens);
-    const float amplitude = test_case.qk_amplitude;
-    std::vector<float> q  = make_bf16_values(q_elements, test_case.seed, -amplitude, amplitude);
+    const float amplitude        = test_case.qk_amplitude;
+    std::vector<float> q = make_bf16_values(q_elements, test_case.seed, -amplitude, amplitude);
     if (test_case.zero_q) std::fill(q.begin(), q.end(), 0.0f);
     std::vector<std::int32_t> positions(static_cast<std::size_t>(test_case.tokens));
     for (std::int32_t token = 0; token < test_case.tokens; ++token) {
@@ -422,7 +422,7 @@ int run_batch_case(CudaExecutionView execution, const Geometry& geometry, KvCach
         const std::string label = std::string("causal batch ") + geometry.name + " " +
                                   cache_name(storage) + " W=" + std::to_string(width) +
                                   " B=" + std::to_string(batch) + " phase=" + std::to_string(phase);
-        const auto output = copy_from_guarded<std::uint16_t>(dout, q.size());
+        const auto output       = copy_from_guarded<std::uint16_t>(dout, q.size());
         failures += verify_attention(label, bf16_bits_to_double(output), reference,
                                      attention_criterion(storage));
         failures += verify_invalid_columns_zero(label, output, geometry, width, valid);

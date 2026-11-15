@@ -42,8 +42,7 @@ constexpr std::int32_t kHidden      = 5120;
 
 ProjectionProfile paired(std::int32_t rows) {
     const LinearProfile parent{ninfer::QType::BF16, rows, kHidden,
-                               ninfer::ops::LinearPolicy::A16Only,
-                               ninfer::QuantLayout::Contiguous};
+                               ninfer::ops::LinearPolicy::A16Only, ninfer::QuantLayout::Contiguous};
     return ProjectionProfile{parent, parent};
 }
 
@@ -56,7 +55,7 @@ void check_profile_gate() {
     } catch (const std::invalid_argument&) { single_ok = false; }
     check(single_ok && heads == 48, "the 48-row paired control profile is accepted, heads 48");
 
-    bool rank_ok = false;
+    bool rank_ok            = false;
     std::int32_t rank_heads = 0;
     try {
         rank_heads = describe_profile(paired(kRankHeads)).heads;
@@ -64,7 +63,8 @@ void check_profile_gate() {
     } catch (const std::invalid_argument&) { rank_ok = false; }
     std::printf("  control profile at 24 rows: %s (heads %d)\n", rank_ok ? "accepted" : "REFUSED",
                 rank_heads);
-    check(rank_ok && rank_heads == 24, "the 24-row paired control profile is now accepted, heads 24");
+    check(rank_ok && rank_heads == 24,
+          "the 24-row paired control profile is now accepted, heads 24");
 }
 
 // ------------------------------------------------------------------ the padded M tile
@@ -118,8 +118,7 @@ void check_routes() {
                 select_projection_plan(single, 9).tile_cols,
                 select_projection_plan(single, 9).split_k,
                 static_cast<int>(select_projection_plan(rank, 9).kernel),
-                select_projection_plan(rank, 9).tile_cols,
-                select_projection_plan(rank, 9).split_k);
+                select_projection_plan(rank, 9).tile_cols, select_projection_plan(rank, 9).split_k);
 }
 
 // ------------------------------------------------------------------ the norm fallback
@@ -131,8 +130,8 @@ void check_norm_fallback() {
     const auto rank = select_norm_plan({kRankHeads, kHidden}, 4);
     check(rank.kernel == NormKernel::Materialized,
           "a 24-head rank takes the materialized norm fallback, not the 48-head kernel");
-    std::printf("  norm plan: single kernel=%d, rank kernel=%d\n", static_cast<int>(NormKernel::Simt),
-                static_cast<int>(rank.kernel));
+    std::printf("  norm plan: single kernel=%d, rank kernel=%d\n",
+                static_cast<int>(NormKernel::Simt), static_cast<int>(rank.kernel));
 }
 
 // ------------------------------------------------------------------ no half-built acceptance

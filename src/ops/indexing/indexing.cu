@@ -62,8 +62,8 @@ void launch_scatter(const Tensor& source, const Tensor& indices, Tensor& destina
     const int columns = source.ne[1];
     const int items   = source.ne[0] / Width;
     const auto* map   = static_cast<const std::int32_t*>(indices.data);
-    using Unit        = std::conditional_t<Width == 8, uint4,
-                                           std::conditional_t<Width == 2, __nv_bfloat162, __nv_bfloat16>>;
+    using Unit = std::conditional_t<Width == 8, uint4,
+                                    std::conditional_t<Width == 2, __nv_bfloat162, __nv_bfloat16>>;
     scatter_kernel<<<columns, Width == 8 ? 128 : 256, 0, stream>>>(
         static_cast<const Unit*>(source.data), map, static_cast<Unit*>(destination.data), items,
         source.nb[1] / static_cast<std::int64_t>(sizeof(Unit)),

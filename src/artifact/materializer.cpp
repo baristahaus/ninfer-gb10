@@ -265,8 +265,7 @@ const DeviceBuffer* MaterializedArtifact::tier_state(ObjectHandle handle) const 
     return tensor.tier_state ? &*tensor.tier_state : nullptr;
 }
 
-const DeviceBuffer* MaterializedArtifact::tier_swap_staging(ObjectHandle handle) const
-    noexcept {
+const DeviceBuffer* MaterializedArtifact::tier_swap_staging(ObjectHandle handle) const noexcept {
     if (handle.index >= object_storage_.size() || !object_storage_[handle.index]) {
         return nullptr;
     }
@@ -330,9 +329,9 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     out.stats_.host_capacity_bytes   = plan.host_capacity_bytes;
     out.stats_.device_object_count   = plan.device_objects.size();
     out.stats_.host_object_count     = plan.ordinary_host_objects.size() +
-                                   plan.registered_host_objects.size() +
-                                   plan.resources.objects.size();
-    out.host_storage_ = HostBuffer(plan.host_capacity_bytes, plan.host_alignment);
+                                       plan.registered_host_objects.size() +
+                                       plan.resources.objects.size();
+    out.host_storage_                = HostBuffer(plan.host_capacity_bytes, plan.host_alignment);
     if (cuda) { out.device_storage_ = DeviceBuffer(plan.device, plan.device_capacity_bytes); }
     populate_host_pages(out.host_storage_.span());
     if (plan.registered_host_bytes) {
@@ -413,21 +412,20 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             throw ArtifactError("tiered EXL3 weights (banks and dense linears) require "
                                 "the SP-4 variable-extent change");
         }
-        const bool batched  = geometry.shape.size() == 3;
-        const auto rows     = batched ? static_cast<std::uint64_t>(geometry.shape[0]) *
-                                            static_cast<std::uint64_t>(geometry.shape[1])
-                                      : static_cast<std::uint64_t>(geometry.shape[0]);
+        const bool batched = geometry.shape.size() == 3;
+        const auto rows    = batched ? static_cast<std::uint64_t>(geometry.shape[0]) *
+                                           static_cast<std::uint64_t>(geometry.shape[1])
+                                     : static_cast<std::uint64_t>(geometry.shape[0]);
         const auto experts = tier.new_order.size();
         // The object's bytes include the trailing per-expert divisor table for NVFP4 banks;
         // the per-expert block arithmetic uses the exact block size, not a raw division.
-        const auto block    = tier_expert_block_bytes(geometry, experts);
+        const auto block         = tier_expert_block_bytes(geometry, experts);
         const auto divisor_words = geometry.divisor_count;
         if ((batched && geometry.layout != QuantLayout::BatchedBlockScaleK16M128x4) ||
             (!batched && geometry.shape.size() != 2) || rows == 0 ||
             (batched && geometry.shape[1] == 0) || (!batched && geometry.shape[1] == 0) ||
             experts == 0 || rows % experts != 0 || tier.hot_experts == 0 ||
-            tier.hot_experts >= experts ||
-            (geometry.bytes - divisor_words * 4) % rows != 0 ||
+            tier.hot_experts >= experts || (geometry.bytes - divisor_words * 4) % rows != 0 ||
             tier.bytes != block * (tier.hot_experts + tier.cache_slots)) {
             throw ArtifactError(reader.directory().tensor(tier.object).id +
                                 ": tiered placement does not divide into per-expert mini-banks");
@@ -443,14 +441,13 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         const auto warm_experts    = experts - tier.hot_experts;
         // The tier plan carries object handles; tensors_ indexes storage slots. The
         // placement's object map is the bridge (the same mapping the plain loop skipped by).
-        auto& storage              = out.tensors_.at(out.object_storage_.at(tier.object.index)->index);
+        auto& storage = out.tensors_.at(out.object_storage_.at(tier.object.index)->index);
         if (storage.device || storage.host || storage.pinned.has_value()) {
             throw ArtifactError("duplicate tiered placement");
         }
         const auto hot_bytes = static_cast<std::size_t>(tier.bytes);
         std::vector<std::byte> hot_packed(hot_bytes);
-        storage.pinned.emplace(
-            static_cast<std::size_t>(block * warm_experts));
+        storage.pinned.emplace(static_cast<std::size_t>(block * warm_experts));
         const auto staging = reader.read_object(tier.object);
         out.stats_.read_bytes =
             checked_add(out.stats_.read_bytes, staging.size(), "tiered read bytes");
@@ -476,10 +473,9 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                 const auto source =
                     checked_add(object_offset, checked_mul(expert, block, "tiered source block"),
                                 "tiered source offset");
-                const auto destination =
-                    checked_add(warm ? warm_plane : hot_plane,
-                                checked_mul(dst_slot, block, "tiered slot block"),
-                                "tiered destination offset");
+                const auto destination = checked_add(
+                    warm ? warm_plane : hot_plane,
+                    checked_mul(dst_slot, block, "tiered slot block"), "tiered destination offset");
                 if (warm) {
                     std::memcpy(static_cast<std::byte*>(storage.pinned->data()) + destination,
                                 staging.data() + source, static_cast<std::size_t>(block));
@@ -490,13 +486,13 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                     hot_written = checked_add(hot_written, block, "tiered hot bytes");
                 }
             }
-            hot_plane  = checked_add(
+            hot_plane = checked_add(
                 hot_plane,
                 checked_mul(block, tier.hot_experts + tier.cache_slots, "tiered hot plane"),
                 "tiered hot plane base");
-            warm_plane = checked_add(warm_plane,
-                                     checked_mul(block, warm_experts, "tiered warm plane"),
-                                     "tiered warm plane base");
+            warm_plane =
+                checked_add(warm_plane, checked_mul(block, warm_experts, "tiered warm plane"),
+                            "tiered warm plane base");
         }
         // The trailing per-expert divisor table: one float per expert, compacted to the slot
         // order. The row-plane loop above cannot carry it (it is not per-row data).
@@ -505,13 +501,12 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                 const auto expert   = tier.new_order[slot];
                 const bool warm     = slot >= tier.hot_experts;
                 const auto dst_slot = warm ? slot - tier.hot_experts : slot;
-                const auto source   = checked_add(geometry.divisor_offset,
-                                                  checked_mul(expert, 4, "divisor source"),
-                                                  "divisor source offset");
-                const auto destination =
-                    checked_add(warm ? warm_plane : hot_plane,
-                                checked_mul(dst_slot, 4, "divisor slot"),
-                                "divisor destination offset");
+                const auto source =
+                    checked_add(geometry.divisor_offset, checked_mul(expert, 4, "divisor source"),
+                                "divisor source offset");
+                const auto destination = checked_add(warm ? warm_plane : hot_plane,
+                                                     checked_mul(dst_slot, 4, "divisor slot"),
+                                                     "divisor destination offset");
                 auto* destination_bytes =
                     warm ? static_cast<std::byte*>(storage.pinned->data()) + destination
                          : hot_packed.data() + destination;
@@ -520,8 +515,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         }
         // The row-plane totals exclude the divisor table; the pinned size includes it.
         const auto row_block       = block - (divisor_words != 0 ? 4 : 0);
-        const auto hot_slice_bytes = checked_mul(tier.hot_experts, row_block,
-                                                 "tiered hot slice");
+        const auto hot_slice_bytes = checked_mul(tier.hot_experts, row_block, "tiered hot slice");
         if (hot_written != hot_slice_bytes ||
             warm_written + (divisor_words ? warm_experts * 4 : 0) !=
                 static_cast<std::uint64_t>(storage.pinned->size())) {
@@ -538,36 +532,35 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             mini.scale_bytes    = checked_mul(geometry.scale_row_bytes, mini_rows, "scales");
             mini.high_offset    = mini.code_bytes;
             mini.scale_offset   = checked_add(mini.code_bytes, mini.high_bytes, "scale offset");
-            mini.divisor_offset = checked_add(mini.scale_offset, mini.scale_bytes,
-                                              "divisor offset");
-            mini.divisor_count  = mini_divisors;
-            mini.bytes          = checked_add(mini.divisor_offset,
-                                              checked_mul(mini_divisors, 4, "divisor bytes"),
-                                              "mini bytes");
+            mini.divisor_offset =
+                checked_add(mini.scale_offset, mini.scale_bytes, "divisor offset");
+            mini.divisor_count = mini_divisors;
+            mini.bytes = checked_add(mini.divisor_offset,
+                                     checked_mul(mini_divisors, 4, "divisor bytes"), "mini bytes");
             return mini;
         };
         const auto hot_region = LayoutRegion{tier.offset, tier.bytes, tier.alignment};
         const auto hot_bound  = hot_region.bind(out.device_storage_.span());
-        storage.device = WeightParent{mini_geometry(
-                                          (tier.hot_experts + tier.cache_slots) * rows_per_expert,
-                                          tier.hot_experts + tier.cache_slots),
-                                      hot_bound.device, static_cast<const std::byte*>(hot_bound.data), {}};
-        storage.host   = WeightParent{mini_geometry(warm_experts * rows_per_expert, warm_experts),
-                                      Device::cpu(), static_cast<const std::byte*>(storage.pinned->data()),
-                                      {}};
+        storage.device =
+            WeightParent{mini_geometry((tier.hot_experts + tier.cache_slots) * rows_per_expert,
+                                       tier.hot_experts + tier.cache_slots),
+                         hot_bound.device,
+                         static_cast<const std::byte*>(hot_bound.data),
+                         {}};
+        storage.host = WeightParent{mini_geometry(warm_experts * rows_per_expert, warm_experts),
+                                    Device::cpu(),
+                                    static_cast<const std::byte*>(storage.pinned->data()),
+                                    {}};
         // One-shot synchronous upload: the staging and packed buffers are per-bank locals.
-        check_cuda(
-            cudaMemcpy(hot_bound.data, hot_packed.data(), hot_packed.size(),
-                       cudaMemcpyHostToDevice),
-            "tiered hot upload");
-        out.stats_.h2d_bytes =
-            checked_add(out.stats_.h2d_bytes, hot_packed.size(), "tiered h2d");
+        check_cuda(cudaMemcpy(hot_bound.data, hot_packed.data(), hot_packed.size(),
+                              cudaMemcpyHostToDevice),
+                   "tiered hot upload");
+        out.stats_.h2d_bytes = checked_add(out.stats_.h2d_bytes, hot_packed.size(), "tiered h2d");
         // The tier state: residency[expert] = compacted slot | warm bit, counters zeroed.
         // The runtime owns the counters from here; the residency is read-only state until
         // an adapt round rewrites it.
-        storage.tier_state.emplace(plan.device,
-                                   checked_mul(experts, 2 * sizeof(std::uint32_t),
-                                               "tiered state bytes"));
+        storage.tier_state.emplace(
+            plan.device, checked_mul(experts, 2 * sizeof(std::uint32_t), "tiered state bytes"));
         storage.tier_state->fill(0);
         // The tier-exchange scratch: the demoted expert's block must survive the promote
         // copy, so it stages here. The code plane's per-expert block is the largest plane.
@@ -590,9 +583,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         }
         out.stats_.retained_host_bytes = checked_add(out.stats_.retained_host_bytes,
                                                      storage.pinned->size(), "tiered warm bytes");
-        out.stats_.tier_pinned_warm_bytes = checked_add(out.stats_.tier_pinned_warm_bytes,
-                                                        storage.pinned->size(),
-                                                        "tiered warm bytes");
+        out.stats_.tier_pinned_warm_bytes = checked_add(
+            out.stats_.tier_pinned_warm_bytes, storage.pinned->size(), "tiered warm bytes");
     }
     std::vector<CopyRange> ranges;
     // SP-4: the tiered banks' payloads are packed by the tier block above; their encoded

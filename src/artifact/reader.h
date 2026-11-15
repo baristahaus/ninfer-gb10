@@ -28,9 +28,11 @@ struct MappedSegment {
 class MappedRange {
 public:
     std::vector<MappedSegment> segments;
+
     [[nodiscard]] std::uint64_t size() const noexcept {
         return segments.empty() ? 0 : segments.back().begin + segments.back().bytes;
     }
+
     void copy(std::uint64_t offset, std::span<std::byte> destination) const;
     // Page-cache advice for the mapped file pages; both are best effort and never change
     // contents. advise_random() stops fault readahead around scattered reads. prefetch() starts

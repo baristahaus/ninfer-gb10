@@ -70,15 +70,15 @@ int expect_ok(Fn&& fn, const std::string& label) {
 StateImageSpec make_spec(std::uint32_t layers, std::int32_t slots, std::int32_t value_heads,
                          std::int32_t hidden, std::uint32_t dflash_layers, bool mtp_hidden) {
     StateImageSpec spec;
-    spec.linear.layers        = layers;
-    spec.linear.conv_channels = 8;
-    spec.linear.conv_width    = 4;
-    spec.linear.value_heads   = value_heads;
+    spec.linear.layers         = layers;
+    spec.linear.conv_channels  = 8;
+    spec.linear.conv_width     = 4;
+    spec.linear.value_heads    = value_heads;
     spec.linear.value_head_dim = 4;
-    spec.linear.key_head_dim  = 2;
-    spec.linear.slot_count    = slots;
-    spec.linear.conv_dtype    = ninfer::DType::BF16;
-    spec.hidden               = hidden;
+    spec.linear.key_head_dim   = 2;
+    spec.linear.slot_count     = slots;
+    spec.linear.conv_dtype     = ninfer::DType::BF16;
+    spec.hidden                = hidden;
     if (mtp_hidden) { spec.mtp_hidden = 8; }
     if (dflash_layers > 0) {
         spec.dflash_local = DFlashLocalStateSpec{.layers   = dflash_layers,
@@ -111,7 +111,7 @@ HostPool make_host_pool(const StateImageSpec& spec) {
 }
 
 int exercise_contract() {
-    int failures = 0;
+    int failures              = 0;
     const StateImageSpec base = make_spec(2, 2, 2, 8, 1, true);
     HostPool origin           = make_host_pool(base);
     HostPool same             = make_host_pool(base);
@@ -119,7 +119,7 @@ int exercise_contract() {
     HostPool no_mtp           = make_host_pool(make_spec(2, 2, 2, 8, 1, false));
     HostPool more_dflash      = make_host_pool(make_spec(2, 2, 2, 8, 2, true));
     // A rank-1 shard: same slots and components, narrower GDN and hidden widths.
-    HostPool shard            = make_host_pool(make_spec(2, 2, 1, 4, 1, true));
+    HostPool shard = make_host_pool(make_spec(2, 2, 1, 4, 1, true));
 
     failures += expect_ok(
         [&] {
@@ -202,7 +202,7 @@ bool range_is_zero(const std::vector<std::byte>& bytes, std::size_t offset, std:
 }
 
 int exercise_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) {
-    int failures = 0;
+    int failures              = 0;
     const StateImageSpec spec = make_spec(2, 2, 2, 8, 1, true);
     ninfer::LayoutBuilder builder;
     const StateImageDeviceLayout layout = plan_state_image_device_pool(builder, spec);
@@ -210,9 +210,8 @@ int exercise_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) 
 
     DevicePool origin = make_device_pool(rank0, layout, bytes);
     DevicePool mirror = make_device_pool(rank1, layout, bytes);
-    const ninfer::tp2::MirrorTarget where{.device          = &rank1,
-                                          .stream          = rank1.stream(),
-                                          .transfer_stream = rank1.transfer_stream()};
+    const ninfer::tp2::MirrorTarget where{
+        .device = &rank1, .stream = rank1.stream(), .transfer_stream = rank1.transfer_stream()};
     ninfer::models::qwen3_8_flash_next::MirroredStateImageDevicePool mirrored(*origin.pool,
                                                                               *mirror.pool, where);
 
@@ -230,10 +229,10 @@ int exercise_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) 
     std::memcpy(image_rank1.data(), pattern_rank1.data(), image_bytes);
 
     // The contract: each rank's source slot holds its OWN content before the replayed copy.
-    origin.pool->copy_from_host({static_cast<const std::byte*>(image_rank0.data()), &layout.host}, 0,
-                                rank0.stream());
-    mirror.pool->copy_from_host({static_cast<const std::byte*>(image_rank1.data()), &layout.host}, 0,
-                                rank1.stream());
+    origin.pool->copy_from_host({static_cast<const std::byte*>(image_rank0.data()), &layout.host},
+                                0, rank0.stream());
+    mirror.pool->copy_from_host({static_cast<const std::byte*>(image_rank1.data()), &layout.host},
+                                0, rank1.stream());
     rank0.synchronize();
     rank1.synchronize();
 
@@ -241,7 +240,8 @@ int exercise_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) 
     rank0.synchronize();
     rank1.synchronize();
 
-    // Read back with the same prefill so alignment gaps compare equal and only payload bytes differ.
+    // Read back with the same prefill so alignment gaps compare equal and only payload bytes
+    // differ.
     std::memcpy(readback_rank0.data(), pattern_rank0.data(), image_bytes);
     std::memcpy(readback_rank1.data(), pattern_rank1.data(), image_bytes);
     origin.pool->copy_to_host(1, {static_cast<std::byte*>(readback_rank0.data()), &layout.host},
@@ -271,10 +271,10 @@ int exercise_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) 
     mirrored.zero_all(rank0.stream());
     rank0.synchronize();
     rank1.synchronize();
-    origin.pool->copy_from_host({static_cast<const std::byte*>(image_rank0.data()), &layout.host}, 0,
-                                rank0.stream());
-    mirror.pool->copy_from_host({static_cast<const std::byte*>(image_rank1.data()), &layout.host}, 0,
-                                rank1.stream());
+    origin.pool->copy_from_host({static_cast<const std::byte*>(image_rank0.data()), &layout.host},
+                                0, rank0.stream());
+    mirror.pool->copy_from_host({static_cast<const std::byte*>(image_rank1.data()), &layout.host},
+                                0, rank1.stream());
     mirrored.copy_dflash_local(0, 1, rank0.stream());
     rank0.synchronize();
     rank1.synchronize();
@@ -323,7 +323,7 @@ int exercise_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) 
     for (ninfer::DeviceContext* context : {&rank0, &rank1}) {
         StateImageDevicePool& pool = context == &rank0 ? *origin.pool : *mirror.pool;
         auto* base = static_cast<std::byte*>(context == &rank0 ? readback_rank0.data()
-                                                              : readback_rank1.data());
+                                                               : readback_rank1.data());
         std::memset(base, 0xff, image_bytes);
         pool.copy_to_host(1, {base, &layout.host}, context->stream());
         context->synchronize();
@@ -353,7 +353,8 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; the replay cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the replay cases did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {

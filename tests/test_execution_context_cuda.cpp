@@ -61,16 +61,14 @@ int test_two_devices() {
 }
 
 int test_rejections() {
-    int failures = 0;
+    int failures       = 0;
     const auto rejects = [&failures](const std::vector<int>& ids, const std::string& what) {
         try {
             ExecutionContext context(ids);
             failures += check(false, what + " was accepted");
         } catch (const std::invalid_argument&) {
             // expected
-        } catch (...) {
-            failures += check(false, what + " threw the wrong exception type");
-        }
+        } catch (...) { failures += check(false, what + " threw the wrong exception type"); }
     };
     rejects({}, "an empty device list");
     rejects({0, 0}, "a repeated device");
@@ -81,9 +79,7 @@ int test_rejections() {
     bool out_of_range = false;
     try {
         (void)context.device(1);
-    } catch (const std::out_of_range&) {
-        out_of_range = true;
-    }
+    } catch (const std::out_of_range&) { out_of_range = true; }
     failures += check(out_of_range, "device(rank) rejects a rank outside the group");
     return failures;
 }
@@ -94,7 +90,8 @@ int main() {
     const int devices = device_count();
     if (devices < 1) {
         // Nothing in this test can run without a device.
-        std::cerr << "SKIP: no CUDA device is available; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no CUDA device is available; supply one with CUDA_VISIBLE_DEVICES "
+                     "(sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     int failures = 0;
@@ -102,7 +99,8 @@ int main() {
     if (devices >= 2) {
         failures += test_two_devices();
     } else {
-        std::cerr << "SKIP: the two-device cases did not run; one device is present. Set CUDA_VISIBLE_DEVICES to two devices, for example 0,1\n";
+        std::cerr << "SKIP: the two-device cases did not run; one device is present. Set "
+                     "CUDA_VISIBLE_DEVICES to two devices, for example 0,1\n";
     }
     failures += test_rejections();
     if (failures == 0) { std::cout << "ok (" << devices << " device(s))\n"; }

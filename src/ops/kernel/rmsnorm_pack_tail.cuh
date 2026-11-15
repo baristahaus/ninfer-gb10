@@ -30,8 +30,7 @@ __device__ __forceinline__ float rmsnorm_pack_tail_inverse(float local_sum, floa
         float block_sum = lane < kWarps ? warp_sums[lane] : 0.0F;
         block_sum       = warp_reduce_sum(block_sum);
         if (lane == 0) {
-            *inverse = rsqrtf(block_sum * (1.0F / static_cast<float>(Rows)) +
-                              kRmsnormPackTailEps);
+            *inverse = rsqrtf(block_sum * (1.0F / static_cast<float>(Rows)) + kRmsnormPackTailEps);
         }
     }
     __syncthreads();

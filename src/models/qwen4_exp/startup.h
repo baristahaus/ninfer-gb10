@@ -28,9 +28,8 @@ public:
     [[nodiscard]] std::optional<ExecutionPlan>
     plan(DeviceContext&, const EngineOptions&, WeightPlacement, std::size_t available,
          std::optional<std::uint32_t> published_tokens = std::nullopt) const;
-    [[nodiscard]] runtime::SequenceCapacityCurve capacity_curve(DeviceContext&,
-                                                                const EngineOptions&,
-                                                                WeightPlacement) const;
+    [[nodiscard]] runtime::SequenceCapacityCurve
+    capacity_curve(DeviceContext&, const EngineOptions&, WeightPlacement) const;
     [[nodiscard]] std::unique_ptr<ModelShard> materialize(DeviceContext&, WeightPlacement,
                                                           const StartupObserver&);
     [[nodiscard]] qwen::Frontend frontend(const EngineOptions&) const;
@@ -61,10 +60,9 @@ private:
 
 // The group resources are accepted for the shared call site and unused: qwen4_exp has no
 // two-GPU lane.
-[[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
-                                                               ExecutionPlan&&, DeviceContext&,
-                                                               const StartupObserver&,
-                                                               const models::ShardedGroup* = nullptr);
+[[nodiscard]] std::unique_ptr<RankProgram>
+create_rank_program(const execution::Parameters&, ExecutionPlan&&, DeviceContext&,
+                    const StartupObserver&, const models::ShardedGroup* = nullptr);
 [[nodiscard]] std::string prefill_signature(const ModelDefinition&, const moe::Plan*,
                                             std::uint32_t chunk);
 

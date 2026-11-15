@@ -291,8 +291,8 @@ static int run_profile(std::string_view label, const Profile& profile,
         Tensor x(device_activation.span(), DType::BF16, {profile.input_rows, tokens});
         Tensor destination(output.span(), DType::BF16, {profile.output_rows, tokens});
         const auto capacity = call.form == CallForm::RejectA16Extent
-                                           ? 0
-                                           : ops::linear_swiglu_workspace_capacity_bytes(
+                                  ? 0
+                                  : ops::linear_swiglu_workspace_capacity_bytes(
                                         profile.qtype, profile.gate_up_rows, profile.input_rows,
                                         policy, tokens, tokens);
         if (capacity > interval_capacity)
@@ -304,10 +304,10 @@ static int run_profile(std::string_view label, const Profile& profile,
                 try {
                     if (convenience)
                         ops::linear_swiglu(x, weight, destination, workspace,
-                                                    cuda_environment().default_execution);
+                                           cuda_environment().default_execution);
                     else
                         ops::linear_swiglu(x, weight, destination, policy, workspace,
-                                                    cuda_environment().default_execution);
+                                           cuda_environment().default_execution);
                     std::cerr << call.id << ": accepted NVFP4 A16 T=17\n";
                     ++failures;
                 } catch (const std::invalid_argument&) {}
@@ -320,13 +320,13 @@ static int run_profile(std::string_view label, const Profile& profile,
                                   std::numeric_limits<float>::quiet_NaN()}) {
                 try {
                     ops::linear_swiglu(x, weight, destination, invalid, policy, workspace,
-                                                cuda_environment().default_execution);
+                                       cuda_environment().default_execution);
                     ++failures;
                 } catch (const std::invalid_argument&) {}
             }
             std::vector<std::uint8_t> preserved(output.bytes(), 0x5a);
             failures += verify_unchanged("invalid clamp preserves output", output, preserved.data(),
-                                                  preserved.size());
+                                         preserved.size());
         }
         workspace.reset();
         workspace.reset_peak();
@@ -336,7 +336,7 @@ static int run_profile(std::string_view label, const Profile& profile,
         const auto launch = [&] {
             if (profile.clamp_limit > 0)
                 ops::linear_swiglu(x, weight, destination, profile.clamp_limit, policy, workspace,
-                                            cuda);
+                                   cuda);
             else if (call.form == CallForm::Convenience)
                 ops::linear_swiglu(x, weight, destination, workspace, cuda);
             else
@@ -356,7 +356,7 @@ static int run_profile(std::string_view label, const Profile& profile,
                 const auto& expected   = phase ? negative_reference : reference;
                 if (replay)
                     device_activation.copy_from_host(input_bits.data(),
-                                                              input_bits.size() * sizeof(std::uint16_t));
+                                                     input_bits.size() * sizeof(std::uint16_t));
                 output.fill(0xff);
                 test::cuda_check(cudaDeviceSynchronize(), "finish replay input update");
                 if (replay)
@@ -375,11 +375,11 @@ static int run_profile(std::string_view label, const Profile& profile,
                 failures += scratch.verify_guards(label_case + " workspace");
                 const auto actual = read_bf16_output(output, elements);
                 failures += compare_output(label_case, actual, expected.data(), profile.policy,
-                                                    profile.clamp_limit > 0);
+                                           profile.clamp_limit > 0);
                 if (replay)
                     failures += verify_unchanged(label_case + " input", device_activation,
-                                                          input_bits.data(),
-                                                          input_bits.size() * sizeof(std::uint16_t));
+                                                 input_bits.data(),
+                                                 input_bits.size() * sizeof(std::uint16_t));
             }
         } catch (const std::exception& error) {
             std::cerr << label_case << ": unexpected exception: " << error.what() << '\n';
@@ -487,7 +487,7 @@ void add_profile(Suite& suite, const Profile& profile, std::span<const std::int3
                                    (call.form == CallForm::Convenience       ? "convenience"
                                     : call.form == CallForm::RejectA16Extent ? "reject-extent"
                                                                              : "policy");
-        auto test = linear_suite::make_case(
+        auto test                = linear_suite::make_case(
             linear_suite::format_name(profile.qtype), profile.gate_up_rows, profile.input_rows,
             call.tokens, profile.policy,
             call.graph ? linear_suite::Execution::Graph : linear_suite::Execution::Eager, recipe);

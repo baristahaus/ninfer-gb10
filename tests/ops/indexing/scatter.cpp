@@ -108,7 +108,7 @@ int extract_case(std::int32_t source_rows, std::int32_t destination_rows,
                               " offset=" + std::to_string(source_offset) +
                               " rows=" + std::to_string(destination_rows) +
                               " T=" + std::to_string(tokens);
-    int failures = 0;
+    int failures            = 0;
     failures += verify_exact(label.c_str(),
                              from_device<std::uint16_t>(device_destination.data(), expected.size()),
                              expected);
@@ -206,8 +206,8 @@ int shared_image_case() {
                             cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy2D(preserved.data(), 16, source.data, source.nb[1], 16, 4,
                             cudaMemcpyDeviceToHost));
-    int failures = verify_exact("shared image destination", actual, expected) +
-                   verify_exact("shared image source", preserved, input);
+    int failures  = verify_exact("shared image destination", actual, expected) +
+                    verify_exact("shared image source", preserved, input);
     bool rejected = false;
     try {
         ops::scatter(source.slice(1, 0, 2), indices, source, cuda_environment().default_execution);

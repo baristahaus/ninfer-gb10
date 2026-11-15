@@ -40,9 +40,9 @@ SparseGqaPlan select_sparse_gqa_plan(KvCacheStorage storage, int tokens, int bat
     if (simt) splits = std::max(1, splits / 12);
     // A 16-key output tile admits four CTAs per SM. Fill those slots when a large
     // history otherwise leaves only two CTAs, keeping the same core/merge node pair.
-    const bool expand = !simt && storage != KvCacheStorage::BFloat16 && queries > 6 &&
-                        queries * kv_heads * splits <= 2 * sms &&
-                        streaming_history(storage, batch, kv_heads, visible);
+    const bool expand  = !simt && storage != KvCacheStorage::BFloat16 && queries > 6 &&
+                         queries * kv_heads * splits <= 2 * sms &&
+                         streaming_history(storage, batch, kv_heads, visible);
     const int key_rows = expand ? 16 : 32;
     if (expand) splits = std::min(partition_heads == 1 ? 64 : 32, splits * 2);
     const int tiles = std::max(1, (int(std::min(visible, 2051u)) + key_rows - 1) / key_rows);

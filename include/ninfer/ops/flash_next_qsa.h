@@ -51,9 +51,8 @@ struct FlashNextQsaWeights {
 // 24 repetitions of [query(256), gate(256)]. Project and unpack that physical
 // representation into the two logical contiguous outputs.
 [[nodiscard]] std::size_t flash_next_query_gate_workspace_capacity_bytes(std::int32_t tokens);
-void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate,
-                                   Tensor& query, Tensor& gate,
-                                   MemoryArena& workspace, cudaStream_t stream,
+void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate, Tensor& query,
+                                   Tensor& gate, MemoryArena& workspace, cudaStream_t stream,
                                    Bf16GemmContext* bf16_gemm = nullptr);
 
 void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_positions,
@@ -74,9 +73,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     const Tensor& rope_positions, const Tensor& valid_columns,
                     const Tensor& table_rows, const FlashNextQsaWeights& weights,
                     PagedKVBatchLayerView cache, CausalAttentionExecutionEnvelope envelope,
-                    Tensor& destination,
-                    MemoryArena& workspace, cudaStream_t stream,
-                    Bf16GemmContext* bf16_gemm = nullptr,
+                    Tensor& destination, MemoryArena& workspace, cudaStream_t stream,
+                    Bf16GemmContext* bf16_gemm             = nullptr,
                     FlashNextQsaIndexControl index_control = {});
 
 // Select one target-aligned QSA index row per request. `indices` is [2051,W,B], selectors is

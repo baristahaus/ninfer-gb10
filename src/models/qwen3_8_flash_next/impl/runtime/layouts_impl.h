@@ -125,31 +125,30 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     // exactly the spec it planned before the group existed; at width 2 the KV heads halve and every
     // page/state fact stays equal, which is what the rank-1 mirror needs.
     out.decoder = qwen3_8_flash_next::plan_decoder_state(
-        builder,
-        qwen3_8_flash_next::shard_decoder_state_spec(
-            qwen3_8_flash_next::DecoderStateSpec{
-                     .full_attention_layers     = TextConfig::full_attention_layers(),
-                     .mtp_layers                = TextConfig::mtp_layers,
-                     .capacity                  = plan.capacity,
-                     .kv_heads                  = TextConfig::kv_heads,
-                     .attention_head_dim        = TextConfig::head_dim,
-                     .kv_storage                = plan.kv_storage,
-                     .enable_mtp                = plan.features.mtp(),
-                     .kv_table_rows             = static_cast<std::int32_t>(plan.max_concurrency),
-                     .text_physical_page_groups = physical_pages,
-                     .mtp_physical_page_groups  = mtp_physical_pages,
-                     .auxiliary_planes =
-                         [] {
-                             if constexpr (requires { Variant::flash_next; }) {
-                                 if constexpr (Variant::flash_next) {
-                                     return std::vector<KVPlaneGeometry>{{DType::BF16, 128, 1, 256},
-                                                                         {DType::I32, 3, 1, 256}};
+        builder, qwen3_8_flash_next::shard_decoder_state_spec(
+                     qwen3_8_flash_next::DecoderStateSpec{
+                         .full_attention_layers = TextConfig::full_attention_layers(),
+                         .mtp_layers            = TextConfig::mtp_layers,
+                         .capacity              = plan.capacity,
+                         .kv_heads              = TextConfig::kv_heads,
+                         .attention_head_dim    = TextConfig::head_dim,
+                         .kv_storage            = plan.kv_storage,
+                         .enable_mtp            = plan.features.mtp(),
+                         .kv_table_rows         = static_cast<std::int32_t>(plan.max_concurrency),
+                         .text_physical_page_groups = physical_pages,
+                         .mtp_physical_page_groups  = mtp_physical_pages,
+                         .auxiliary_planes =
+                             [] {
+                                 if constexpr (requires { Variant::flash_next; }) {
+                                     if constexpr (Variant::flash_next) {
+                                         return std::vector<KVPlaneGeometry>{
+                                             {DType::BF16, 128, 1, 256}, {DType::I32, 3, 1, 256}};
+                                     }
                                  }
-                             }
-                             return std::vector<KVPlaneGeometry>{};
-                         }(),
-                 },
-            plan.width, plan.rank));
+                                 return std::vector<KVPlaneGeometry>{};
+                             }(),
+                     },
+                     plan.width, plan.rank));
     qwen3_8_flash_next::StateImageSpec state_image_spec{
         .linear =
             {
@@ -256,23 +255,20 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     }
 
     out.round = qwen3_8_flash_next::begin_round_state_layout(
-        builder, qwen3_8_flash_next::RoundStateSpec{.hidden = TextConfig::hidden,
-                                                    .mtp_hidden =
-                                                        [&] {
-                                                            if constexpr (Variant::flash_next) {
-                                                                return plan.features.mtp()
-                                                                           ? 4 * TextConfig::hidden
-                                                                           : 0;
-                                                            }
-                                                            return 0;
-                                                        }(),
-                                                    .output_rows    = TextConfig::output_rows,
-                                                    .batch_capacity = plan.max_concurrency,
-                                                    .draft_window   = plan.draft_window,
-                                                    .enable_mtp     = plan.features.mtp(),
-                                                    .enable_dflash  =
-                                                        plan.features.dflash() ||
-                                                        plan.features.dflash2()});
+        builder, qwen3_8_flash_next::RoundStateSpec{
+                     .hidden = TextConfig::hidden,
+                     .mtp_hidden =
+                         [&] {
+                             if constexpr (Variant::flash_next) {
+                                 return plan.features.mtp() ? 4 * TextConfig::hidden : 0;
+                             }
+                             return 0;
+                         }(),
+                     .output_rows    = TextConfig::output_rows,
+                     .batch_capacity = plan.max_concurrency,
+                     .draft_window   = plan.draft_window,
+                     .enable_mtp     = plan.features.mtp(),
+                     .enable_dflash  = plan.features.dflash() || plan.features.dflash2()});
     out.prefill_hidden = add_tensor(
         builder, DType::BF16, {TextConfig::hidden, effective_prefill_chunk}, "step prefill hidden");
     if constexpr (Variant::flash_next) {
@@ -669,8 +665,9 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                 if (plan.features.dflash2()) {
                     // The DFlash2 draft: the dynamic-conv branches around the fused q/k/v and
                     // packed gate/up projections, then the candidate selector.
-                    const std::size_t prepare = ops::rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes(
-                        width, width, batch, batch);
+                    const std::size_t prepare =
+                        ops::rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes(
+                            width, width, batch, batch);
                     {
                         auto attention = layout.scope();
                         dflash2_branch_capacity(layout, width, batch);
@@ -682,8 +679,8 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                         scratch(layout, ops::sliding_window_attention_workspace_capacity_bytes(
                                             {DFlashConfig::head_dim, DFlashConfig::query_heads,
                                              DFlashConfig::kv_heads},
-                                            DFlashConfig::local_capacity, {0, plan.capacity},
-                                            width, width, batch));
+                                            DFlashConfig::local_capacity, {0, plan.capacity}, width,
+                                            width, batch));
                         scratch(layout,
                                 ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
                                     DFlashConfig::query_size, width, width, batch, batch));
@@ -705,14 +702,13 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                     matrix(layout, DType::FP32, DFlashConfig::selector_top_k, mask_columns);
                     matrix(layout, DType::BF16, TextConfig::output_rows, mask_columns);
                     scratch(layout, ops::linear_workspace_capacity_bytes(
-                                        QType::BF16, TextConfig::output_rows,
-                                        DFlashConfig::hidden, ops::LinearPolicy::A16Only,
-                                        mask_columns, mask_columns));
+                                        QType::BF16, TextConfig::output_rows, DFlashConfig::hidden,
+                                        ops::LinearPolicy::A16Only, mask_columns, mask_columns));
                     matrix(layout, DType::BF16, DFlashConfig::selector_rank, mask_columns);
-                    scratch(layout, ops::linear_workspace_capacity_bytes(
-                                        QType::BF16, DFlashConfig::selector_rank,
-                                        DFlashConfig::hidden, ops::LinearPolicy::A16Only,
-                                        mask_columns, mask_columns));
+                    scratch(layout,
+                            ops::linear_workspace_capacity_bytes(
+                                QType::BF16, DFlashConfig::selector_rank, DFlashConfig::hidden,
+                                ops::LinearPolicy::A16Only, mask_columns, mask_columns));
                     scratch(layout, ops::candidate_selector_path_workspace_capacity_bytes(
                                         drafts, drafts, batch, batch));
                     return finish(layout);
@@ -958,8 +954,8 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
                 }
                 return requested;
             }(options.kv_cache),
-        .proposal_head = options.speculative.proposal_head,
-        .features      = qwen3_8_flash_next::startup_features(options),
+        .proposal_head  = options.speculative.proposal_head,
+        .features       = qwen3_8_flash_next::startup_features(options),
         .use_cuda_graph = options.use_cuda_graph,
         .causal_scoring = options.purpose == EnginePurpose::CausalScoring,
         .device         = options.device,

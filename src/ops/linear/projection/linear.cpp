@@ -70,11 +70,11 @@ void validate_linear_semantics(const Tensor& x, const Weight& w, const Tensor& o
         throw std::invalid_argument("linear: weight n/k must be positive");
     }
     if (x.ne[0] != w.k || out.ne[0] != w.n || out.ne[1] != x.ne[1]) {
-        throw std::invalid_argument(
-            "linear: expected [K,T] x [N,K] -> [N,T]; got x [" + std::to_string(x.ne[0]) + "," +
-            std::to_string(x.ne[1]) + "], weight [" + std::to_string(w.n) + "," +
-            std::to_string(w.k) + "], out [" + std::to_string(out.ne[0]) + "," +
-            std::to_string(out.ne[1]) + "]");
+        throw std::invalid_argument("linear: expected [K,T] x [N,K] -> [N,T]; got x [" +
+                                    std::to_string(x.ne[0]) + "," + std::to_string(x.ne[1]) +
+                                    "], weight [" + std::to_string(w.n) + "," +
+                                    std::to_string(w.k) + "], out [" + std::to_string(out.ne[0]) +
+                                    "," + std::to_string(out.ne[1]) + "]");
     }
     if (!x.is_contiguous() || !out.is_contiguous()) {
         throw std::invalid_argument("linear: x/out must be contiguous");
@@ -121,12 +121,11 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
         // folded, transform the activation with the input-side Hadamard and suh, and run
         // the registered BF16 linear route.
         {
-            const std::int32_t n = w.n;
-            const std::int32_t k = w.k;
-            auto scope = workspace->scope();
-            const auto prime_span =
-                workspace->alloc_bytes(static_cast<std::size_t>(n) * static_cast<std::size_t>(k) * 2,
-                                       256);
+            const std::int32_t n  = w.n;
+            const std::int32_t k  = w.k;
+            auto scope            = workspace->scope();
+            const auto prime_span = workspace->alloc_bytes(
+                static_cast<std::size_t>(n) * static_cast<std::size_t>(k) * 2, 256);
             const auto u_span = workspace->alloc_bytes(
                 static_cast<std::size_t>(k) * static_cast<std::size_t>(out.ne[1]) * 2, 256);
             Tensor prime(prime_span.data, DType::BF16, {n, k});
@@ -134,12 +133,12 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
             detail::exl3_prefill_dequant(w, prime, stream);
             detail::exl3_prefill_transform(x, w, u, stream);
             Weight dense;
-            dense.qtype = QType::BF16;
+            dense.qtype  = QType::BF16;
             dense.layout = QuantLayout::Contiguous;
-            dense.ndim = 2;
+            dense.ndim   = 2;
             dense.n = dense.shape[0] = dense.padded_shape[0] = n;
             dense.k = dense.shape[1] = dense.padded_shape[1] = k;
-            dense.qdata = prime.data;
+            dense.qdata                                      = prime.data;
             detail::bf16_dispatch(u, dense, out, policy, stream);
             return;
         }
@@ -205,8 +204,8 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
         if (max_tokens > detail::kExl3DenseMaxTokens) {
             // The prefill composition: the decoded W'[n, k] and u[k, T] planes plus the
             // transformed-input GEMM; the registered BF16 route takes no transient bytes.
-            bytes = std::max(bytes, detail::exl3_prefill_workspace_bytes(output_rows, input_rows,
-                                                                         max_tokens));
+            bytes = std::max(
+                bytes, detail::exl3_prefill_workspace_bytes(output_rows, input_rows, max_tokens));
         }
         return bytes;
     }
@@ -234,7 +233,6 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, CudaExecutionView exe
     dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, execution.stream());
 }
 
-
 // Master-generation entry points beside the policy/view overloads above. The stream form routes
 // by quantization type; the stream+context form lets a registered BF16 projection use the vendor
 // tensor-core backend when its column count admits it.
@@ -254,7 +252,6 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
     }
     dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, stream);
 }
-
 
 void linear(const Tensor& x, const Weight& w, Tensor& out, CudaExecutionView execution,
             Bf16GemmContext* bf16_gemm) {

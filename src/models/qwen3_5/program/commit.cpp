@@ -9,11 +9,10 @@
 namespace ninfer::models::qwen3_5::detail {
 
 void RankProgramImpl::launch_commit(ComputeOperation& operation) {
-    auto& frame       = resources.frame;
-    const auto& value = *operation.commit;
-    const bool decode = std::holds_alternative<DecodeWork>(operation.request.work.operation);
-    const auto* forward =
-        std::get_if<ForwardWork>(&operation.request.work.operation);
+    auto& frame         = resources.frame;
+    const auto& value   = *operation.commit;
+    const bool decode   = std::holds_alternative<DecodeWork>(operation.request.work.operation);
+    const auto* forward = std::get_if<ForwardWork>(&operation.request.work.operation);
     // A generating commit carries one row per round member, and every loop below indexes
     // `value.rows[i]` by that count. Checking it here rather than trusting it is what keeps a
     // short commit from reading past the end: a segfault names nothing, and a refusal names both
@@ -28,12 +27,13 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
             "; a generating commit must carry one row per member");
     }
     if (!generated && row_count != 0 && row_count != operation.batch) {
-        throw std::invalid_argument(
-            "Qwen3.5 commit has " + std::to_string(row_count) + " rows for a round of batch " +
-            std::to_string(operation.batch) + "; a non-generating commit carries none or one per "
-            "member");
+        throw std::invalid_argument("Qwen3.5 commit has " + std::to_string(row_count) +
+                                    " rows for a round of batch " +
+                                    std::to_string(operation.batch) +
+                                    "; a non-generating commit carries none or one per "
+                                    "member");
     }
-    bool device_work  = false;
+    bool device_work = false;
     if (decode) {
         const bool mtp_history =
             backend == SpeculativeBackend::Mtp && operation.speculative &&
@@ -97,15 +97,13 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
         if (const char* trace = std::getenv("NINFER_FOLD_TRACE"); trace != nullptr && *trace) {
             const int rank = collective_ ? collective_->rank : 0;
             for (std::size_t row = 0; row < row_count; ++row) {
-                std::fprintf(stderr,
-                             "[fold] rank=%d row=%zu accepted=%u counts=%d fold=%d\n", rank, row,
-                             static_cast<unsigned>(value.rows[row].accepted_tokens),
+                std::fprintf(stderr, "[fold] rank=%d row=%zu accepted=%u counts=%d fold=%d\n", rank,
+                             row, static_cast<unsigned>(value.rows[row].accepted_tokens),
                              static_cast<int>(frame.host_egress->counts[row]),
                              (value.rows[row].accepted_tokens != 0 &&
                               (backend == SpeculativeBackend::Mtp ||
                                value.rows[row].accepted_tokens <
-                                   static_cast<std::uint32_t>(
-                                       frame.host_egress->counts[row])))
+                                   static_cast<std::uint32_t>(frame.host_egress->counts[row])))
                                  ? 1
                                  : 0);
             }
@@ -115,8 +113,8 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
             if (!accepted) continue;
             if (backend == SpeculativeBackend::Mtp ||
                 accepted < static_cast<std::uint32_t>(frame.host_egress->counts[i])) {
-                Tensor source = hidden.slice(2, static_cast<int>(i), 1)
-                                    .slice(1, static_cast<int>(accepted - 1), 1);
+                Tensor source      = hidden.slice(2, static_cast<int>(i), 1)
+                                         .slice(1, static_cast<int>(accepted - 1), 1);
                 Tensor destination = resources.state_images.continuation_hidden_slot(
                     operation.rows[i].state_slots.destination);
                 CUDA_CHECK(cudaMemcpyAsync(destination.data, source.data, destination.bytes(),

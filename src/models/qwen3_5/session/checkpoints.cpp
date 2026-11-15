@@ -43,14 +43,12 @@ bool SessionImpl::release_checkpoint(CheckpointHandle handle) noexcept {
         const auto release_pages = [&](const context::HistoryPrefix& prefix,
                                        context::HistoryDirectory& histories,
                                        context::PageDirectory& pages) {
-            const auto count = std::min<std::uint32_t>(
-                histories.mapped_pages(prefix.history()),
-                context::kv_pages_for_frontier(prefix.frontier()));
+            const auto count =
+                std::min<std::uint32_t>(histories.mapped_pages(prefix.history()),
+                                        context::kv_pages_for_frontier(prefix.frontier()));
             for (std::uint32_t position = 0; position < count; ++position) {
                 const auto page = histories.logical_page(prefix.history(), position);
-                if (const auto extent = pages.spill_extent(page)) {
-                    state_spill->release(*extent);
-                }
+                if (const auto extent = pages.spill_extent(page)) { state_spill->release(*extent); }
             }
         };
         release_pages(record.text_prefix(), *text_kv_histories, *text_kv_pages);
@@ -155,7 +153,7 @@ CheckpointMetadata SessionImpl::checkpoint_metadata(CheckpointHandle handle) con
     return {.frontier = record.frontier(),
             .role     = record.role,
             .leased   = checkpoints[handle.index].pins != 0 ||
-                      state_store->source_pins(record.continuation().image) != 0};
+                        state_store->source_pins(record.continuation().image) != 0};
 }
 
 CheckpointSummary SessionImpl::checkpoint_summary(CheckpointHandle handle) const {

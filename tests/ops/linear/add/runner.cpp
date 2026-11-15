@@ -344,9 +344,9 @@ static int run_cases(std::string_view label, QType format, const InvocationCase&
         MemoryArena workspace(scratch.span());
         const auto& case_label = invocation.id;
         const auto verify      = [&](std::string_view stage, ops::LinearPolicy policy,
-                                bool negative = false) {
+                                     bool negative = false) {
             failures += verify_output(case_label + " " + std::string(stage), output, shape,
-                                           invocation, oracle, residual, policy, negative);
+                                      invocation, oracle, residual, policy, negative);
         };
         try {
             if (invocation.policy) {
@@ -455,7 +455,7 @@ void add_cases(Suite& suite, QType format, const InvocationCase& shape) {
         auto test         = linear_suite::make_case(
             linear_suite::format_name(format), shape.n, shape.k, call.tokens, policy,
             call.graph == GraphReplay::None ? linear_suite::Execution::Eager
-                                                    : linear_suite::Execution::Graph,
+                                            : linear_suite::Execution::Graph,
             fixture + (call.policy ? "/policy" : "/convenience") + "/replay" +
                 std::to_string(static_cast<int>(call.graph)));
         if (call.graph_policy) {

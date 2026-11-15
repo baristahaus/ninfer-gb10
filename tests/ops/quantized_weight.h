@@ -282,11 +282,11 @@ struct PackedWeight {
                 static_cast<std::size_t>(groups_per_row) * detail::high_bytes_per_group(spec);
             const std::size_t scale_row =
                 static_cast<std::size_t>(groups_per_row) * sizeof(std::uint16_t);
-            w.qdata = static_cast<const std::uint8_t*>(w.qdata) +
-                      static_cast<std::size_t>(row_begin) * code_row;
+            w.qdata  = static_cast<const std::uint8_t*>(w.qdata) +
+                       static_cast<std::size_t>(row_begin) * code_row;
             w.qhigh  = high_row == 0 ? nullptr
                                      : static_cast<const std::uint8_t*>(w.qhigh) +
-                                          static_cast<std::size_t>(row_begin) * high_row;
+                                           static_cast<std::size_t>(row_begin) * high_row;
             w.scales = static_cast<const std::uint8_t*>(w.scales) +
                        static_cast<std::size_t>(row_begin) * scale_row;
         } else if (w.layout == QuantLayout::BlockScaleK16M128x4) {
@@ -294,8 +294,8 @@ struct PackedWeight {
                 throw std::invalid_argument(
                     "quantized-weight fixture: NVFP4 row view must align to 128 rows");
             }
-            w.qdata = static_cast<const std::uint8_t*>(w.qdata) +
-                      static_cast<std::size_t>(row_begin) * w.k / 2;
+            w.qdata  = static_cast<const std::uint8_t*>(w.qdata) +
+                       static_cast<std::size_t>(row_begin) * w.k / 2;
             w.scales = static_cast<const std::uint8_t*>(w.scales) +
                        static_cast<std::size_t>(row_begin / 128) *
                            static_cast<std::size_t>(w.k / 64) * 512;
@@ -463,9 +463,9 @@ inline PackedWeight make_patterned_weight(QType qtype, std::int32_t n, std::int3
                     static_cast<std::size_t>(row_inner % 32) * 16U +
                     static_cast<std::size_t>(row_inner / 32) * 4U +
                     static_cast<std::size_t>(scale_lane);
-                const std::size_t pattern = (static_cast<std::uint32_t>(row) * 5U +
-                                             static_cast<std::uint32_t>(group) * 3U + seed) &
-                                            7U;
+                const std::size_t pattern     = (static_cast<std::uint32_t>(row) * 5U +
+                                                 static_cast<std::uint32_t>(group) * 3U + seed) &
+                                                7U;
                 packed.payload[stored_offset] = kScaleWords[pattern];
             }
         }
@@ -667,7 +667,7 @@ inline PackedWeight make_patterned_weight(QType qtype, std::int32_t n, std::int3
             std::uint8_t* high   = high_bytes_per_group == 0
                                        ? nullptr
                                        : packed.payload.data() + packed.high_plane_offset +
-                                           group_index * high_bytes_per_group;
+                                             group_index * high_bytes_per_group;
             for (std::int32_t lane = 0; lane < partial_group_lanes; ++lane) {
                 codes[lane] =
                     static_cast<std::int8_t>(detail::unpack_lowbit_code(nibble, high, spec, lane));
@@ -826,9 +826,9 @@ inline double logical_weight_fp64(const PackedWeight& packed, std::int32_t row,
     const int nibble_bytes            = detail::nibble_bytes_per_group(spec);
     const int high_bytes              = detail::high_bytes_per_group(spec);
 
-    const std::uint8_t* nibble       = packed.payload.data() + group_index * nibble_bytes;
-    const std::uint8_t* high         = high_bytes == 0 ? nullptr
-                                                       : packed.payload.data() + packed.high_plane_offset +
+    const std::uint8_t* nibble = packed.payload.data() + group_index * nibble_bytes;
+    const std::uint8_t* high = high_bytes == 0 ? nullptr
+                                               : packed.payload.data() + packed.high_plane_offset +
                                                      group_index * high_bytes;
     const std::uint16_t stored_scale = detail::load_u16_le(
         packed.payload, packed.scale_plane_offset + group_index * sizeof(std::uint16_t));
@@ -881,8 +881,8 @@ inline std::vector<float> decode_row_split_lowbit(const std::vector<std::uint8_t
         static_cast<std::size_t>(n) * static_cast<std::size_t>(kg) * static_cast<std::size_t>(nib);
     const std::size_t high_bytes = static_cast<std::size_t>(n) * static_cast<std::size_t>(kg) *
                                    static_cast<std::size_t>(high_bpr);
-    const std::size_t high_off  = detail::align_up_size(nibble_bytes, 256);
-    const std::size_t scale_off = high_off + detail::align_up_size(high_bytes, 256);
+    const std::size_t high_off   = detail::align_up_size(nibble_bytes, 256);
+    const std::size_t scale_off  = high_off + detail::align_up_size(high_bytes, 256);
 
     std::vector<float> deq(static_cast<std::size_t>(n) * k);
     for (std::int32_t row = 0; row < n; ++row) {
@@ -1022,35 +1022,34 @@ inline PackedWeight make_exl3_dense_weight(std::int32_t n, std::int32_t k, std::
         throw std::invalid_argument("quantized-weight fixture: EXL3 dense requires 128-multiples");
     }
     exl3_ref::require_rate(k2, codebook);
-    const std::uint32_t codebook_id =
-        codebook == exl3_ref::Codebook::Inst3 ? 0U : (codebook == exl3_ref::Codebook::Mcg ? 1U : 2U);
+    const std::uint32_t codebook_id = codebook == exl3_ref::Codebook::Inst3
+                                          ? 0U
+                                          : (codebook == exl3_ref::Codebook::Mcg ? 1U : 2U);
 
     const std::size_t tiles = static_cast<std::size_t>(k) / 16 * (static_cast<std::size_t>(n) / 16);
-    const std::size_t tile_elements = static_cast<std::size_t>(8 * k2);  // exl3_ref's ring size
+    const std::size_t tile_elements = static_cast<std::size_t>(8 * k2); // exl3_ref's ring size
     std::vector<std::uint16_t> trellis(tiles * tile_elements);
     for (std::size_t i = 0; i < trellis.size(); ++i) {
-        trellis[i] = static_cast<std::uint16_t>(detail::mix64(seed * 0x100000001b3ULL + i) & 0xffffU);
+        trellis[i] =
+            static_cast<std::uint16_t>(detail::mix64(seed * 0x100000001b3ULL + i) & 0xffffU);
     }
     const auto scale_word = [&](std::size_t index) {
         const std::uint64_t hash = detail::mix64(seed + 0x9e3779b9ULL + index);
-        const float magnitude = std::ldexp(1.0F + static_cast<float>(hash & 0xffU) / 256.0F,
-                                           -static_cast<int>((hash >> 8) % 4));
+        const float magnitude    = std::ldexp(1.0F + static_cast<float>(hash & 0xffU) / 256.0F,
+                                              -static_cast<int>((hash >> 8) % 4));
         return detail::f32_to_f16((hash & 0x8000000000000000ULL) != 0 ? -magnitude : magnitude);
     };
     std::vector<std::uint16_t> suh(static_cast<std::size_t>(k));
     for (std::size_t i = 0; i < suh.size(); ++i) { suh[i] = scale_word(i); }
     std::vector<std::uint16_t> svh(static_cast<std::size_t>(n));
-    for (std::size_t i = 0; i < svh.size(); ++i) {
-        svh[i] = scale_word(0x40000000ULL + i);
-    }
+    for (std::size_t i = 0; i < svh.size(); ++i) { svh[i] = scale_word(0x40000000ULL + i); }
 
     // The exact codec oracle decodes the inner weight; the composed logical weight applies the
     // block Hadamards in FP64 with butterfly passes (each 1/sqrt(128) once per transform).
-    const std::vector<std::uint16_t> inner = exl3_ref::decode_inner(trellis.data(), k, n, k2, codebook);
+    const std::vector<std::uint16_t> inner =
+        exl3_ref::decode_inner(trellis.data(), k, n, k2, codebook);
     std::vector<double> m(static_cast<std::size_t>(k) * static_cast<std::size_t>(n));
-    for (std::size_t i = 0; i < m.size(); ++i) {
-        m[i] = exl3_ref::binary16_to_double(inner[i]);
-    }
+    for (std::size_t i = 0; i < m.size(); ++i) { m[i] = exl3_ref::binary16_to_double(inner[i]); }
     const double norm = 1.0 / std::sqrt(128.0);
     std::vector<double> column(static_cast<std::size_t>(128));
     // Right transform: every 128-column block of every row.
@@ -1062,7 +1061,7 @@ inline PackedWeight make_exl3_dense_weight(std::int32_t n, std::int32_t k, std::
                 for (int i = 0; i < 128; i += len << 1) {
                     for (int j = i; j < i + len; ++j) {
                         const double a = base[j], b = base[j + len];
-                        base[j] = a + b;
+                        base[j]       = a + b;
                         base[j + len] = a - b;
                     }
                 }
@@ -1072,14 +1071,17 @@ inline PackedWeight make_exl3_dense_weight(std::int32_t n, std::int32_t k, std::
     }
     // Left transform: every 128-row block of every column.
     for (std::int32_t block = 0; block < k / 128; ++block) {
-        double* base = m.data() + static_cast<std::size_t>(block) * 128 * static_cast<std::size_t>(n);
+        double* base =
+            m.data() + static_cast<std::size_t>(block) * 128 * static_cast<std::size_t>(n);
         for (std::int32_t col = 0; col < n; ++col) {
-            for (int i = 0; i < 128; ++i) { column[i] = base[static_cast<std::size_t>(i) * n + col]; }
+            for (int i = 0; i < 128; ++i) {
+                column[i] = base[static_cast<std::size_t>(i) * n + col];
+            }
             for (int len = 1; len < 128; len <<= 1) {
                 for (int i = 0; i < 128; i += len << 1) {
                     for (int j = i; j < i + len; ++j) {
                         const double a = column[j], b = column[j + len];
-                        column[j] = a + b;
+                        column[j]       = a + b;
                         column[j + len] = a - b;
                     }
                 }
@@ -1110,8 +1112,9 @@ inline PackedWeight make_exl3_dense_weight(std::int32_t n, std::int32_t k, std::
 
     // The payload: trellis bytes, aligned; suh [k]; svh [n]; the codebook id word.
     const std::size_t trellis_bytes = trellis.size() * 2;
-    const std::size_t aligned = (trellis_bytes + 255) / 256 * 256;
-    packed.payload.assign(aligned + 2 * static_cast<std::size_t>(k) + 2 * static_cast<std::size_t>(n) + 4,
+    const std::size_t aligned       = (trellis_bytes + 255) / 256 * 256;
+    packed.payload.assign(aligned + 2 * static_cast<std::size_t>(k) +
+                              2 * static_cast<std::size_t>(n) + 4,
                           std::uint8_t{0});
     for (std::size_t i = 0; i < trellis.size(); ++i) {
         detail::store_u16_le(packed.payload, 2 * i, trellis[i]);
@@ -1125,17 +1128,17 @@ inline PackedWeight make_exl3_dense_weight(std::int32_t n, std::int32_t k, std::
     }
     detail::store_u32_le(packed.payload, packed.payload.size() - 4, codebook_id);
 
-    packed.weight.qtype            = QType::EXL3;
-    packed.weight.layout           = QuantLayout::Exl3Dense;
-    packed.weight.ndim             = 2;
+    packed.weight.qtype  = QType::EXL3;
+    packed.weight.layout = QuantLayout::Exl3Dense;
+    packed.weight.ndim   = 2;
     packed.weight.n = packed.weight.shape[0] = packed.weight.padded_shape[0] = n;
     packed.weight.k = packed.weight.shape[1] = packed.weight.padded_shape[1] = k;
-    packed.weight.payload_bytes = packed.payload.size();
-    packed.weight.exl3_trellis_offset = 0;
-    packed.weight.exl3_suh_offset     = aligned;
-    packed.weight.exl3_svh_offset     = svh_offset;
-    packed.weight.exl3_codebook       = codebook_id;
-    packed.weight.exl3_experts        = 1;
+    packed.weight.payload_bytes        = packed.payload.size();
+    packed.weight.exl3_trellis_offset  = 0;
+    packed.weight.exl3_suh_offset      = aligned;
+    packed.weight.exl3_svh_offset      = svh_offset;
+    packed.weight.exl3_codebook        = codebook_id;
+    packed.weight.exl3_experts         = 1;
     packed.weight.exl3_rows_per_expert = static_cast<std::uint32_t>(n);
     return packed;
 }

@@ -18,7 +18,7 @@ Plan select_plan(const SwiGLUProfile&, int tokens, int shared_intermediate) {
                            .column_major_down      = tokens >= 1024,
                            .preserve_balanced_down = true,
                            .shared_algorithm =
-                             tokens < 8 ? SharedAlgorithm::Vector : SharedAlgorithm::Mma,
+                               tokens < 8 ? SharedAlgorithm::Vector : SharedAlgorithm::Mma,
                            .shared_split_activation = shared_intermediate != 320 || tokens < 128,
                            .shared_columns = shared_intermediate == 320 && tokens >= 512 ? 64 : 32,
                            .queued_ctas_per_sm = 6};

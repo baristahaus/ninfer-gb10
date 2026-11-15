@@ -91,10 +91,10 @@ struct ServeOptions {
     int port             = 8080;
     std::string api_key;
     std::optional<std::string> model_id_override;
-    bool enable_cors                       = false;
+    bool enable_cors = false;
     // Benchmark/measurement knob: suppress the model's default end-of-sequence stop tokens for
     // every request on the instance. Explicit per-request stop strings still apply.
-    bool ignore_eos                          = false;
+    bool ignore_eos = false;
     // Prefix-reuse miss diagnostic. Non-empty DIR enables it: a request that recomputes at least
     // min_tokens prompt tokens while sharing at least min_match of its prompt with a recent context
     // writes both texts, their token ids and a summary to a new directory under DIR. The dumps
@@ -109,12 +109,12 @@ struct ServeOptions {
     // --reasoning-close-retry: when a reply ends while thinking is still open with blank content
     // and no tool call, close the thinking with the canonical suffix and continue once. Off by
     // default; a request that does not end this way is unaffected.
-    bool reasoning_close_retry = false;
+    bool reasoning_close_retry                 = false;
     bool log_speculation_detail                = false;
     std::uint32_t speculation_detail_max_steps = 4096;
-    std::size_t max_request_bytes          = kDefaultMaxRequestBytes;
-    std::size_t response_store_max_records = kDefaultResponseStoreRecords;
-    std::size_t response_store_max_bytes   = kDefaultResponseStoreBytes;
+    std::size_t max_request_bytes              = kDefaultMaxRequestBytes;
+    std::size_t response_store_max_records     = kDefaultResponseStoreRecords;
+    std::size_t response_store_max_bytes       = kDefaultResponseStoreBytes;
 };
 
 [[nodiscard]] CliOptions parse_cli_options(int argc, char** argv);

@@ -51,11 +51,11 @@ void launch(const SparseGqaArguments& arguments, SparseGqaPlan plan, SparseGqaLa
     constexpr bool Async = kSparseQuantized<Storage> && Vector;
     if (plan.instance == SparseGqaInstance::Grouped) {
         constexpr int Queries = 8, N = 32, Parts = kSparseQuantized<Storage> ? 2 : 1;
-        constexpr int Warps   = Queries * 12 / 16 * Parts;
-        constexpr auto load   = Async ? SparseGqaLoad::Staged : SparseGqaLoad::Direct;
+        constexpr int Warps = Queries * 12 / 16 * Parts;
+        constexpr auto load = Async ? SparseGqaLoad::Staged : SparseGqaLoad::Direct;
         constexpr auto kernel =
             sparse_gqa_grouped_kernel<Storage, N, Parts, Queries, Vector, load, KvHeads>;
-        constexpr int bytes   = std::max(
+        constexpr int bytes = std::max(
             (sizeof(SparseGqaStorage<Storage, N, Warps, load, SparseGqaWarpSplit::Output>) + 15) /
                     16 * 16 +
                 Queries * 12 * 256 * 2,

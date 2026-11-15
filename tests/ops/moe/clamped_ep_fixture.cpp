@@ -262,10 +262,10 @@ void Weights::clamp_probe(int recipe) {
                 }
                 const auto b = std::size_t(r) * (m->k / 2) + c / 2;
                 packed.payload[b] |= std::uint8_t(code << ((c % 2) * 4));
-                const int group = c / 16;
-                const auto off  = m->scale_offset +
-                                 std::size_t((r / 128) * (m->k / 64) + group / 4) * 512 +
-                                 (r % 32) * 16 + ((r % 128) / 32) * 4 + group % 4;
+                const int group     = c / 16;
+                const auto off      = m->scale_offset +
+                                      std::size_t((r / 128) * (m->k / 64) + group / 4) * 512 +
+                                      (r % 32) * 16 + ((r % 128) / 32) * 4 + group % 4;
                 packed.payload[off] = scale;
             };
             if (gate) {

@@ -63,9 +63,15 @@ inline constexpr CausalHeadCounts kCausalHeadCounts[] = {
 template <class Call>
 inline void with_causal_geometry(int query_heads, Call&& call) {
     switch (query_heads) {
-    case 24: call.template operator()<CausalD256H24Kv4>(); return;
-    case 16: call.template operator()<CausalD256H16Kv2>(); return;
-    case 12: call.template operator()<CausalD256H12Kv2>(); return;
+    case 24:
+        call.template operator()<CausalD256H24Kv4>();
+        return;
+    case 16:
+        call.template operator()<CausalD256H16Kv2>();
+        return;
+    case 12:
+        call.template operator()<CausalD256H12Kv2>();
+        return;
     default:
         throw std::invalid_argument("causal attention: unregistered query head count " +
                                     std::to_string(query_heads));

@@ -78,8 +78,8 @@ NormPlan select_norm_plan(Geometry geometry, std::int32_t columns) {
             break;
         }
     // The fused 5120 norm kernel carries `H = 48` as a compile-time constant, so it serves only the
-    // single-device geometry. A 24-head rank falls through to the materialized fallback below, which
-    // normalizes with ops::rmsnorm and then runs the projection plan.
+    // single-device geometry. A 24-head rank falls through to the materialized fallback below,
+    // which normalizes with ops::rmsnorm and then runs the projection plan.
     if (geometry.input_rows == 5120 && geometry.heads == 48 && columns <= 42) {
         if (columns <= 2) return {NormKernel::Simt, {}, {}, 1, 512};
         if (columns <= 14) return {NormKernel::Simt, {}, {}, 2, 512};

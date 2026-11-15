@@ -22,7 +22,7 @@ int run(Weights& weights, std::span<const float> catalog, std::span<const Column
     const auto label = std::string(name(weights.kind)) + " M=" + std::to_string(m) +
                        " pattern=" + std::to_string(int(weights.pattern)) +
                        " graph=" + std::to_string(captured);
-    int failed = verify(f, ref, label) + f.check(label);
+    int failed       = verify(f, ref, label) + f.check(label);
     if (captured) {
         const auto next     = input_catalog(weights.pattern, 1);
         const auto next_ref = reference(weights, next);

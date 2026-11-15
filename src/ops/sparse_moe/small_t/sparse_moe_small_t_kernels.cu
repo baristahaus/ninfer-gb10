@@ -115,9 +115,8 @@ void launch_s1(const __nv_bfloat16* x, const __nv_bfloat16* router, float* parti
     CUDA_CHECK(cudaGetLastError());
 }
 
-void launch_s2(const float* partial_scores, int* token_ids, float* token_alpha,
-               float* shared_scale, std::int32_t tokens, std::uint32_t* expert_activations,
-               cudaStream_t stream) {
+void launch_s2(const float* partial_scores, int* token_ids, float* token_alpha, float* shared_scale,
+               std::int32_t tokens, std::uint32_t* expert_activations, cudaStream_t stream) {
     CUDA_CHECK(pdl::launch_dependent(
         {dim3(static_cast<unsigned int>(tokens)), dim3(kS2Threads), 0, stream},
         sparse_moe_small_t_s2_kernel, partial_scores, token_ids, token_alpha, shared_scale,

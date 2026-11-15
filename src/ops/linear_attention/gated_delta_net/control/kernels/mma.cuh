@@ -177,13 +177,13 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
         // Contiguous weights remain BF16 all the way into ldmatrix.
         const int weight_vecs = kBlockM * (kBlockK / 8);
         for (int all_vec = tid; all_vec < (Paired ? 2 : 1) * weight_vecs; all_vec += kThreads) {
-            const bool is_b    = Paired ? all_vec >= weight_vecs : head0 >= kHeads;
-            const int vec      = Paired && is_b ? all_vec - weight_vecs : all_vec;
-            const int row      = vec / (kBlockK / 8);
-            const int k_vec    = vec - row * (kBlockK / 8);
-            const int kk       = k_vec * 8;
-            __nv_bfloat16* dst = (Paired && is_b ? bws : aws) + stage * kBlockM * kBlockK +
-                                 row * kBlockK + swizzle(row, kk);
+            const bool is_b             = Paired ? all_vec >= weight_vecs : head0 >= kHeads;
+            const int vec               = Paired && is_b ? all_vec - weight_vecs : all_vec;
+            const int row               = vec / (kBlockK / 8);
+            const int k_vec             = vec - row * (kBlockK / 8);
+            const int kk                = k_vec * 8;
+            __nv_bfloat16* dst          = (Paired && is_b ? bws : aws) + stage * kBlockM * kBlockK +
+                                          row * kBlockK + swizzle(row, kk);
             const __nv_bfloat16* weight = is_b ? b_weight : a_weight;
             // A padded row of the last M tile has no weight behind it: the parent holds exactly
             // `kHeads` rows per matrix. Zero-fill instead of reading past the block, the same shape
@@ -191,8 +191,8 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
             const bool row_valid = weight_head0 + row < kHeads;
             common::cp_async_zfill<16, Cache::cg>(
                 dst,
-                &weight[static_cast<std::int64_t>(row_valid ? weight_head0 + row : 0) * kHidden + k0 +
-                        kk],
+                &weight[static_cast<std::int64_t>(row_valid ? weight_head0 + row : 0) * kHidden +
+                        k0 + kk],
                 row_valid ? 16 : 0);
         }
     };
@@ -324,7 +324,7 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
                                  static_cast<int>(blockIdx.x);
         const int grid_threads = static_cast<int>(gridDim.x) * static_cast<int>(gridDim.y) *
                                  static_cast<int>(gridDim.z) * kThreads;
-        const int elems = kHeads * t;
+        const int elems        = kHeads * t;
         if constexpr (NormalizeInput) {
             const float* norm_partial =
                 partial + static_cast<std::int64_t>(SplitK) * t * kPartialRows;

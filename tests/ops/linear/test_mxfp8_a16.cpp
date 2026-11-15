@@ -67,8 +67,8 @@ int run_mxfp8_a16() {
                                   ops::LinearPolicy::AllowA4};
     for (const ops::LinearPolicy policy : policies) {
         try {
-            const std::size_t capacity = ops::linear_workspace_capacity_bytes(
-                QType::MXFP8, 2560, 2560, policy, 1, 2048);
+            const std::size_t capacity =
+                ops::linear_workspace_capacity_bytes(QType::MXFP8, 2560, 2560, policy, 1, 2048);
             if (capacity != 0) {
                 std::cerr << "MXFP8 A16 route reported nonzero workspace\n";
                 ++failures;
@@ -85,7 +85,8 @@ int run_mxfp8_a16() {
 
 int main() {
     if (!cuda_available()) {
-        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     const int failures = run_mxfp8_a16();

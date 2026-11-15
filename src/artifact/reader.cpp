@@ -64,7 +64,7 @@ struct Reader::Impl {
 
     io::ReadOnlyFile open_file(std::size_t index, io::ReadMode mode) const {
         if (index >= files.size()) { throw ArtifactError("invalid continuation index"); }
-        const auto& record = directory.files[index];
+        const auto& record               = directory.files[index];
         const std::filesystem::path path = index ? entry.parent_path() / *record.path : entry;
         // The loader's direct reads must never start on a network filesystem: a read there can wait
         // uninterruptibly inside the filesystem's own direct path, so the engine would hang instead
@@ -166,8 +166,7 @@ const WeightGeometry& Reader::geometry(ObjectHandle handle) const {
                 const auto trellis_offset = [&] {
                     std::uint64_t value = 0;
                     for (unsigned i = 0; i < 8; ++i) {
-                        value |= static_cast<std::uint64_t>(
-                                     static_cast<std::uint8_t>(first[i]))
+                        value |= static_cast<std::uint64_t>(static_cast<std::uint8_t>(first[i]))
                                  << (8 * i);
                     }
                     return value;
@@ -206,7 +205,7 @@ std::vector<ReadSegment> Reader::segments(std::uint64_t offset, std::uint64_t by
     const auto found     = std::upper_bound(data.files.begin(), data.files.end(), offset,
                                             [](std::uint64_t position, const FileRecord& file) {
                                             return position < file.logical_begin;
-                                        });
+                                            });
     std::size_t index    = static_cast<std::size_t>(found - data.files.begin() - 1);
     std::uint64_t copied = 0;
     while (copied < bytes) {

@@ -2,7 +2,6 @@
 // Master-generation primitives. Cache hints come from the restructured layer.
 #include "ops/common/cuda/memory.cuh"
 
-
 namespace ninfer::ops {
 #include <cuda_pipeline.h>
 #include <cuda_runtime.h>

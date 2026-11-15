@@ -75,9 +75,9 @@ private:
     void checked_read(void* bytes, std::size_t count, std::uint64_t offset) const;
 
     std::filesystem::path path_;
-    int descriptor_             = -1;
-    std::size_t capacity_bytes_ = 0;
-    std::size_t reserved_bytes_ = 0;
+    int descriptor_                = -1;
+    std::size_t capacity_bytes_    = 0;
+    std::size_t reserved_bytes_    = 0;
     std::uint64_t append_offset_   = 0;
     std::uint32_t next_generation_ = 1;
     // Offsets of live extents to their generations: a released-then-reused offset cannot be

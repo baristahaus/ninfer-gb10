@@ -190,15 +190,15 @@ int main(int argc, char** argv) {
             const auto launch              = make_launch(tokens);
             const bench::ColdTiming timing = bench::measure_cold_launch_prepared(
                 restore, launch, flush, cuda, options.warmup, options.repeat);
-            const double seconds      = timing.median_us * 1.0e-6;
-            const double useful_flops = 2.0 * static_cast<double>(options.n) * options.k * tokens;
-            const double model_bytes  = static_cast<double>(packed.model_weight_bytes()) +
-                                       2.0 * static_cast<double>(options.k) * tokens +
-                                       4.0 * static_cast<double>(options.n) * tokens;
+            const double seconds       = timing.median_us * 1.0e-6;
+            const double useful_flops  = 2.0 * static_cast<double>(options.n) * options.k * tokens;
+            const double model_bytes   = static_cast<double>(packed.model_weight_bytes()) +
+                                         2.0 * static_cast<double>(options.k) * tokens +
+                                         4.0 * static_cast<double>(options.n) * tokens;
             const double useful_tflops = useful_flops / seconds / 1.0e12;
             const double effective_gbs = model_bytes / seconds / 1.0e9;
             const bool a4              = options.policy == ops::LinearPolicy::AllowA4 &&
-                            tokens >= (options.k == 6144 ? 17 : 8);
+                                         tokens >= (options.k == 6144 ? 17 : 8);
             const double nvfp4_percent =
                 a4 ? 100.0 * useful_tflops / bench::kRoofline.nvfp4_f32_tflops
                    : std::numeric_limits<double>::quiet_NaN();

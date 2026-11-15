@@ -81,8 +81,8 @@ int validate(Profile p, bool normalize_input, CudaExecutionView execution) {
     f.weights.prepared = saved_weights;
     auto mutate        = [&](auto change) {
         auto& weight = std::holds_alternative<ops::SingleProjectionWeight>(f.weights.prepared)
-                                  ? std::get<ops::SingleProjectionWeight>(f.weights.prepared).weight
-                                  : std::get<ops::PairedProjectionWeights>(f.weights.prepared).first;
+                           ? std::get<ops::SingleProjectionWeight>(f.weights.prepared).weight
+                           : std::get<ops::PairedProjectionWeights>(f.weights.prepared).first;
         change(weight);
         failed += rejects(name + " weight metadata", launch);
         f.weights.prepared = saved_weights;

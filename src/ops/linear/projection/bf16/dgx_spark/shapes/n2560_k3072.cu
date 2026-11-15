@@ -17,7 +17,7 @@ using Hot128 = Bf16ScheduleInstance<
     3072>;
 using HotTma = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<64, 64, 64, 32, 16, 3, 2>, 3072>;
 using Bulk   = Bf16ScheduleInstance<
-      Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::Grouped, 12, 3>, 3072>;
+    Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::Grouped, 12, 3>, 3072>;
 using Wide = Bf16ScheduleInstance<
     Bf16A16TmaMmaSchedule<160, 192, 64, 80, 48, 2, 1, Bf16MmaRaster::Grouped, 8>, 3072>;
 using Large = Bf16ScheduleInstance<

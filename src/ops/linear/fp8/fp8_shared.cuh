@@ -2,6 +2,7 @@
 #include "core/device.h"
 
 #include "ops/common/host/launch.h"
+
 namespace ninfer::ops::detail {
 template <int Bytes>
 __device__ __forceinline__ unsigned char* fp8_shared_storage() {

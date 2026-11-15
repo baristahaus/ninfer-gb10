@@ -31,8 +31,8 @@ namespace ninfer::product {
 }
 
 inline void validate_speculative_cli_options(const SpeculativeOptions& options) {
-    if (options.proposal_head_rows != 0 &&
-        (options.proposal_head != ProposalHead::Optimized || options.backend != SpeculativeBackend::Mtp)) {
+    if (options.proposal_head_rows != 0 && (options.proposal_head != ProposalHead::Optimized ||
+                                            options.backend != SpeculativeBackend::Mtp)) {
         throw std::invalid_argument(
             "--proposal-head-rows requires --spec mtp with --lm-head-draft");
     }

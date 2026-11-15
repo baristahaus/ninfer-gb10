@@ -60,8 +60,8 @@ void choice_masks() {
             bool expected = token == eos && language.contains(prefix);
             if (token < vocabulary.size() && !vocabulary[token].empty()) {
                 const auto next = prefix + vocabulary[token];
-                expected        = std::any_of(language.begin(), language.end(),
-                                              [&](const auto& value) { return value.starts_with(next); });
+                expected = std::any_of(language.begin(), language.end(),
+                                       [&](const auto& value) { return value.starts_with(next); });
             }
             require(bool(words[token / 32] & (1u << (token % 32))) == expected,
                     "choice mask differs from literal-set prefix membership");

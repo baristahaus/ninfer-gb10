@@ -313,9 +313,9 @@ bool StateDirectory::spill_resident(StateId image) const {
 
 bool StateDirectory::spill_host_replica(StateId image, SpillKVStore::Extent extent) {
     Object& object = require(image);
-    if (host_ == nullptr || object.role != StateRole::CheckpointImmutable ||
-        object.device_slot || !object.host_slot || object.source_pins != 0 ||
-        object.destination_pinned || has_pending_replica(object) || object.spill_extent) {
+    if (host_ == nullptr || object.role != StateRole::CheckpointImmutable || object.device_slot ||
+        !object.host_slot || object.source_pins != 0 || object.destination_pinned ||
+        has_pending_replica(object) || object.spill_extent) {
         return false;
     }
     object.spill_extent = extent;

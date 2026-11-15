@@ -109,7 +109,7 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
         transaction.consume_source =
             actual.consume_source &&
             std::find(transaction.carried_points.begin(), transaction.carried_points.end(),
-                         *source) == transaction.carried_points.end();
+                      *source) == transaction.carried_points.end();
         transaction.state_action = actual.state_action;
     };
     if (source && !own_snapshot) {
@@ -143,9 +143,9 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
     if (!resume)
         first = prefill_unit(base.summary().prompt_tokens, transaction.reuse_frontier);
     else if (!own_snapshot) {
-        first                  = {.kind = ExecutionUnitKind::Replay,
-                                  .main_frontier =
-                                      std::min(transaction.reuse_frontier + prefill_chunk, resume->frontier())};
+        first = {.kind = ExecutionUnitKind::Replay,
+                 .main_frontier =
+                     std::min(transaction.reuse_frontier + prefill_chunk, resume->frontier())};
         first.backend_frontier = speculative_backend == SpeculativeBackend::Mtp
                                      ? (first.main_frontier ? first.main_frontier - 1U : 0)
                                      : (has_backend_pool() ? first.main_frontier : 0);
@@ -247,10 +247,10 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
         prepared.publish_continuation = base.summary().publish_continuation;
         prepared.sampling_host        = base.impl_->sampling;
         prepared.speculative_stats    = {
-               .backend               = speculative_backend,
-               .enabled               = speculative_backend != SpeculativeBackend::None,
-               .draft_window          = draft_window,
-               .accepted_per_position = std::vector<std::uint64_t>(draft_window, 0),
+            .backend               = speculative_backend,
+            .enabled               = speculative_backend != SpeculativeBackend::None,
+            .draft_window          = draft_window,
+            .accepted_per_position = std::vector<std::uint64_t>(draft_window, 0),
         };
     }
     prepared.lifecycle = Lifecycle::Binding;
@@ -291,28 +291,28 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
         // Page in spilled coverage before the bindings reserve their restores: the spill-in
         // actions run first in this transaction, so the Host replicas the restore copies read
         // are filled in order.
-        const auto page_in_spilled = [&](const context::HistoryPrefix* source_prefix,
-                                         std::uint32_t frontier, context::HistoryDirectory& histories,
-                                         context::PageDirectory& pages) {
-            if (!source_prefix || !host_kv_extents) { return; }
-            const auto count = std::min<std::uint32_t>(
-                histories.mapped_pages(source_prefix->history()),
-                context::kv_pages_for_frontier(frontier));
-            for (std::uint32_t position = 0; position < count; ++position) {
-                const auto page = histories.logical_page(source_prefix->history(), position);
-                if (!pages.spill_resident(page)) { continue; }
-                const auto spill = pages.spill_extent(page);
-                auto reservation = host_kv_extents->prepare_page_in(pages, std::span(&page, 1));
-                if (!reservation || !spill) {
-                    throw std::logic_error("spilled page-in lost its Host extent");
+        const auto page_in_spilled =
+            [&](const context::HistoryPrefix* source_prefix, std::uint32_t frontier,
+                context::HistoryDirectory& histories, context::PageDirectory& pages) {
+                if (!source_prefix || !host_kv_extents) { return; }
+                const auto count =
+                    std::min<std::uint32_t>(histories.mapped_pages(source_prefix->history()),
+                                            context::kv_pages_for_frontier(frontier));
+                for (std::uint32_t position = 0; position < count; ++position) {
+                    const auto page = histories.logical_page(source_prefix->history(), position);
+                    if (!pages.spill_resident(page)) { continue; }
+                    const auto spill = pages.spill_extent(page);
+                    auto reservation = host_kv_extents->prepare_page_in(pages, std::span(&page, 1));
+                    if (!reservation || !spill) {
+                        throw std::logic_error("spilled page-in lost its Host extent");
+                    }
+                    const auto host = host_kv_extents->writable_view(*reservation).extent;
+                    migration.use_spill_store(*state_spill);
+                    migration.add_spill_in(*spill, host);
+                    host_kv_extents->publish_page_in(std::move(*reservation));
+                    tx.consumed_page_spill.emplace_back(page, *spill);
                 }
-                const auto host = host_kv_extents->writable_view(*reservation).extent;
-                migration.use_spill_store(*state_spill);
-                migration.add_spill_in(*spill, host);
-                host_kv_extents->publish_page_in(std::move(*reservation));
-                tx.consumed_page_spill.emplace_back(page, *spill);
-            }
-        };
+            };
         page_in_spilled(main_source, tx.reuse_frontier, *text_kv_histories, *text_kv_pages);
         if (backend_kv_histories && backend_source) {
             page_in_spilled(backend_source, tx.backend_frontier, *backend_kv_histories,
@@ -330,8 +330,8 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
         const auto source_image =
             source ? checkpoint(*source).continuation().image : context::StateId{};
         if (tx.state_action != StateBindingAction::Move) {
-            const bool device = tx.state_action == StateBindingAction::Root ||
-                                tx.state_action == StateBindingAction::Fork;
+            const bool device      = tx.state_action == StateBindingAction::Root ||
+                                     tx.state_action == StateBindingAction::Fork;
             const auto destination = device ? state_store->reserve_destination()
                                             : state_store->reserve_logical_destination();
             if (!destination) throw std::logic_error("binding lost its reserved State slot");
@@ -370,7 +370,7 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
                 }
                 tx.consumed_spill.push_back(*extent);
             }
-            auto transfer          = state_store->reserve_host_to_device(source_image, destination);
+            auto transfer = state_store->reserve_host_to_device(source_image, destination);
             if (!transfer) throw std::logic_error("Host State restore reservation failed");
             migration.add_state_copy(std::move(*transfer), true);
             break;

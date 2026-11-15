@@ -559,8 +559,8 @@ int run_q4_q5_case(DevicePackedWeight& query_key, DevicePackedWeight& value_z_we
     history.copy_back();
     const std::vector<std::uint16_t> state_after = state.bits();
     const std::string suffix                     = " Q4/Q5 A16 T=" + std::to_string(tokens) +
-                               " initial=" + std::to_string(initial_slot) +
-                               " base=" + std::to_string(kSnapshotBaseSlot);
+                                                   " initial=" + std::to_string(initial_slot) +
+                                                   " base=" + std::to_string(kSnapshotBaseSlot);
     int failures = verify_snapshot_outputs(suffix, query, key, value, kValueRows, tokens, oracle,
                                            kGdnInputProjConvSnapshotA16Tolerance, full_reference);
     failures += compare(

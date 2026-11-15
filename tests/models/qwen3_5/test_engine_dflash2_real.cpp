@@ -23,6 +23,7 @@ bool artifact_is_moe(const char* artifact) {
     ninfer::artifact::Reader reader(artifact);
     return reader.directory().component("text").config.contains("num_experts");
 }
+
 void require(bool condition, const char* message) {
     if (!condition) { throw std::runtime_error(message); }
 }
@@ -85,20 +86,22 @@ ninfer::PromptInput media_prompt(ninfer::MediaKind kind) {
 int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set "
+                     "it to a .ninfer file\n";
         return 77;
     }
     if (!artifact_has_component(artifact, "dflash2")) {
-        std::cerr << "SKIP: this artifact carries no dflash2 component; the test did not run. Supply a .ninfer artifact that carries one via NINFER_TEST_ARTIFACT\n";
+        std::cerr << "SKIP: this artifact carries no dflash2 component; the test did not run. "
+                     "Supply a .ninfer artifact that carries one via NINFER_TEST_ARTIFACT\n";
         return 77;
     }
     try {
-        const auto k         = argc > 1 ? static_cast<unsigned>(std::stoul(argv[1])) : 15U;
-        const bool graph     = argc > 2 ? std::stoi(argv[2]) != 0 : true;
+        const auto k     = argc > 1 ? static_cast<unsigned>(std::stoul(argv[1])) : 15U;
+        const bool graph = argc > 2 ? std::stoi(argv[2]) != 0 : true;
         const bool optimized =
             argc > 3 ? std::stoi(argv[3]) != 0
                      : artifact_proposal_head(artifact) == ninfer::ProposalHead::Optimized;
-        const auto batch     = argc > 4 ? static_cast<unsigned>(std::stoul(argv[4])) : 8U;
+        const auto batch = argc > 4 ? static_cast<unsigned>(std::stoul(argv[4])) : 8U;
         ninfer::EngineOptions options;
         options.artifact_path   = artifact;
         options.max_context     = 2304;

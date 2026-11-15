@@ -11,7 +11,6 @@
 namespace ninfer::flashnext_runtime {
 using namespace ninfer::runtime;
 
-
 template <class Clock = std::chrono::steady_clock>
 [[nodiscard]] std::uint64_t planning_now_ns() noexcept {
     return static_cast<std::uint64_t>(

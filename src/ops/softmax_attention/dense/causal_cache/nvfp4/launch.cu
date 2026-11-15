@@ -147,7 +147,7 @@ void nvfp4_kv_cached_attention(const Tensor& q, const Tensor& positions, float s
     const cudaStream_t stream = execution.stream();
     const auto plan           = select_nvfp4_kv_causal_plan(q.ne[1], q.ne[2], 1, envelope,
                                                             execution.multiprocessor_count());
-    const auto view = single_row_paged_kv_batch_view(cache);
+    const auto view           = single_row_paged_kv_batch_view(cache);
     if (plan.family == Nvfp4KvFamily::Tiled)
         nvfp4_kv_tiled_attention(
             make_causal_operands(q, positions, out, scale, envelope.max_visible_keys),

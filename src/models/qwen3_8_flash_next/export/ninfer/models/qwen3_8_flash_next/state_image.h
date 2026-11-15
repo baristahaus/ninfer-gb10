@@ -83,9 +83,16 @@ struct StateImageDeviceLayout {
 //
 // | field | 125B | at width 2 | why |
 // |---|---|---|---|
-// | `linear.value_heads` | 48 | **24** | the GDN recurrent state is one matrix per value head: `{key_head_dim, value_head_dim, value_heads}`. The placement table splits `in_proj_z` rows, `in_proj_a`/`in_proj_b` rows, `A_log` and `dt_bias` by the 48 value heads, and `out_proj` columns by the 6144 value dims. |
-// | `linear.conv_channels` | 10240 | **5120** | the GDN convolution state is `{conv_channels, conv_width}` and `conv_channels = 2 * key_dim + value_dim` (`config.h:29-31`). `conv1d.weight` is split by columns over those 10240 Q\|K\|V channels, so a rank's conv state covers its own channel slice. |
-// | `dflash_local.kv_heads` | per drafter | **/ width** | the drafter's local cyclic KV is per KV head, exactly like the text KV cache. `DFlashConfig::kv_heads` must divide by the width for the same reason `DecoderStateSpec::kv_heads` must. |
+// | `linear.value_heads` | 48 | **24** | the GDN recurrent state is one matrix per value head:
+// `{key_head_dim, value_head_dim, value_heads}`. The placement table splits `in_proj_z` rows,
+// `in_proj_a`/`in_proj_b` rows, `A_log` and `dt_bias` by the 48 value heads, and `out_proj` columns
+// by the 6144 value dims. | | `linear.conv_channels` | 10240 | **5120** | the GDN convolution state
+// is `{conv_channels, conv_width}` and `conv_channels = 2 * key_dim + value_dim`
+// (`config.h:29-31`). `conv1d.weight` is split by columns over those 10240 Q\|K\|V channels, so a
+// rank's conv state covers its own channel slice. | | `dflash_local.kv_heads` | per drafter | **/
+// width** | the drafter's local cyclic KV is per KV head, exactly like the text KV cache.
+// `DFlashConfig::kv_heads` must divide by the width for the same reason
+// `DecoderStateSpec::kv_heads` must. |
 //
 // Everything else is deliberately whole on every rank:
 //   * `linear.layers` and `dflash_local.layers`: both ranks carry every layer; the shard is inside
@@ -111,7 +118,8 @@ struct StateImageDeviceLayout {
 // construction. Throws std::invalid_argument for a width below 1, a rank outside `[0, width)`, a
 // non-positive `value_heads`/`conv_channels`, a `conv_channels` that is not `2 * key_dim +
 // value_dim` for the spec's own value dims, or an extent that does not divide by the width.
-[[nodiscard]] StateImageSpec shard_state_image_spec(const StateImageSpec& spec, int width, int rank);
+[[nodiscard]] StateImageSpec shard_state_image_spec(const StateImageSpec& spec, int width,
+                                                    int rank);
 
 struct HostStateImageView {
     std::byte* data                    = nullptr;

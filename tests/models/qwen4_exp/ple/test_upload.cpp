@@ -140,7 +140,8 @@ int main() {
         // readers to ignore the suite.
         if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
             status == cudaErrorStubLibrary || (status == cudaSuccess && !count)) {
-            std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+            std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                         "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
             return 77;
         }
         CUDA_CHECK(status);

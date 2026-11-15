@@ -18,14 +18,22 @@ namespace ninfer::models::qwen3_5::detail {
 // printed so a mismatch between the name and the enum is visible.
 const char* compute_stage_name(ComputeStage stage) {
     switch (stage) {
-    case ComputeStage::Inputs: return "inputs";
-    case ComputeStage::Forward: return "forward";
-    case ComputeStage::History: return "history";
-    case ComputeStage::AwaitDecision: return "await-decision";
-    case ComputeStage::Readback: return "readback";
-    case ComputeStage::AwaitCommit: return "await-commit";
-    case ComputeStage::Commit: return "commit";
-    case ComputeStage::Retiring: return "retiring";
+    case ComputeStage::Inputs:
+        return "inputs";
+    case ComputeStage::Forward:
+        return "forward";
+    case ComputeStage::History:
+        return "history";
+    case ComputeStage::AwaitDecision:
+        return "await-decision";
+    case ComputeStage::Readback:
+        return "readback";
+    case ComputeStage::AwaitCommit:
+        return "await-commit";
+    case ComputeStage::Commit:
+        return "commit";
+    case ComputeStage::Retiring:
+        return "retiring";
     }
     return "unknown";
 }
@@ -50,9 +58,9 @@ RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const Sequ
         throw std::invalid_argument("Qwen3.5 rank parameters differ from the prepared plan");
     // The per-rank view of the group's collective. The mailbox and the partial pair are owned by
     // whoever builds both ranks — one mailbox for the whole group, because two would never
-    // rendezvous — and this Program only derives its own rank from them. The 27B plan does not carry
-    // the group width yet, so "width 2 without the bundle" cannot be detected here; the executor
-    // that owns the group is the place that must always hand it over.
+    // rendezvous — and this Program only derives its own rank from them. The 27B plan does not
+    // carry the group width yet, so "width 2 without the bundle" cannot be detected here; the
+    // executor that owns the group is the place that must always hand it over.
     if (sharded_ != nullptr) {
         if (sharded_->execution == nullptr || sharded_->mailbox == nullptr) {
             throw std::invalid_argument(
@@ -148,28 +156,27 @@ void RankProgramImpl::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& re
     // DIAGNOSTIC (NINFER_ROUND_TRACE=1): `rank` is the Program's rank in the group and `dev` is
     // the CUDA device index. This is the first statement in start_frame, so a refusal or an early
     // throw is still visible as a start that WAS called.
-    const bool trace             = runtime::round_trace_enabled();
-    const int rank               = collective_ ? collective_->rank : device.device().index();
-    const int dev                = device.device().index();
-    const auto trace_ticket      = request.ticket;
-    const auto trace_command     = request.command;
+    const bool trace         = runtime::round_trace_enabled();
+    const int rank           = collective_ ? collective_->rank : device.device().index();
+    const int dev            = device.device().index();
+    const auto trace_ticket  = request.ticket;
+    const auto trace_command = request.command;
     const std::size_t trace_reduces_before = collective_ ? collective_->reduce_index : 0;
     if (trace) {
         runtime::round_trace(
             "start.enter rank=%d dev=%d ticket=%llu kind=%s frame=%u gen=%llu command=%llu "
             "compute-slot=%s context-slot=%s reduces=%zu",
             rank, dev, static_cast<unsigned long long>(trace_ticket.id),
-            runtime::round_trace_frame_kind_name(trace_ticket.frame.kind),
-            trace_ticket.frame.index,
+            runtime::round_trace_frame_kind_name(trace_ticket.frame.kind), trace_ticket.frame.index,
             static_cast<unsigned long long>(trace_ticket.frame.generation),
-            static_cast<unsigned long long>(trace_command.value),
-            compute ? "occupied" : "free", context_operation ? "occupied" : "free",
-            trace_reduces_before);
+            static_cast<unsigned long long>(trace_command.value), compute ? "occupied" : "free",
+            context_operation ? "occupied" : "free", trace_reduces_before);
     }
-    // The sharded lane is validated: a width-2 round on two GPUs produces the same 32 tokens, in the
-    // same order, as the width-1 round on one GPU with the same artifact and prompt (df3495c6). The
-    // refusal that stood here until that comparison passed has been removed with its escape, because
-    // a validated path guarded by a variable that must be set is a path that is off by default.
+    // The sharded lane is validated: a width-2 round on two GPUs produces the same 32 tokens, in
+    // the same order, as the width-1 round on one GPU with the same artifact and prompt (df3495c6).
+    // The refusal that stood here until that comparison passed has been removed with its escape,
+    // because a validated path guarded by a variable that must be set is a path that is off by
+    // default.
     if (request.ticket.frame.kind == runtime::FrameKind::Context) {
         if (context_operation) throw std::logic_error("Qwen3.5 context frame is occupied");
         context_operation =
@@ -179,12 +186,11 @@ void RankProgramImpl::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& re
         install_residencies(std::get<ContextWork>(context_operation->request.work.operation));
         context_ready.record(device.transfer_stream());
         if (trace) {
-            runtime::round_trace(
-                "start.context.enqueued rank=%d dev=%d ticket=%llu actions=%zu "
-                "transfer-stream=%p",
-                rank, dev, static_cast<unsigned long long>(trace_ticket.id),
-                context_operation->request.work.context.operations.size(),
-                static_cast<const void*>(device.transfer_stream()));
+            runtime::round_trace("start.context.enqueued rank=%d dev=%d ticket=%llu actions=%zu "
+                                 "transfer-stream=%p",
+                                 rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+                                 context_operation->request.work.context.operations.size(),
+                                 static_cast<const void*>(device.transfer_stream()));
         }
     } else {
         if (compute) throw std::logic_error("Qwen3.5 compute frame is occupied");
@@ -241,11 +247,11 @@ void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request)
     progress();
     const std::size_t trace_reduces_after = collective_ ? collective_->reduce_index : 0;
     if (trace) {
-        runtime::round_trace("start.progress.end rank=%d dev=%d ticket=%llu reduces=%zu->%zu",
-                             rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+        runtime::round_trace("start.progress.end rank=%d dev=%d ticket=%llu reduces=%zu->%zu", rank,
+                             dev, static_cast<unsigned long long>(trace_ticket.id),
                              trace_reduces_before, trace_reduces_after);
-        const auto elapsed_us =
-            static_cast<unsigned long long>((runtime::round_trace_now_ns() - trace_began) / 1000ULL);
+        const auto elapsed_us = static_cast<unsigned long long>(
+            (runtime::round_trace_now_ns() - trace_began) / 1000ULL);
         if (compute) {
             runtime::round_trace(
                 "start.return rank=%d dev=%d ticket=%llu kind=%s elapsed-us=%llu compute=present "
@@ -253,9 +259,8 @@ void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request)
                 rank, dev, static_cast<unsigned long long>(trace_ticket.id),
                 runtime::round_trace_frame_kind_name(trace_ticket.frame.kind), elapsed_us,
                 compute_stage_name(compute->stage), static_cast<int>(compute->stage),
-                compute->width, compute->batch, compute->rows.size(),
-                compute->text ? "yes" : "no", compute->graph_started ? "yes" : "no",
-                trace_reduces_before, trace_reduces_after);
+                compute->width, compute->batch, compute->rows.size(), compute->text ? "yes" : "no",
+                compute->graph_started ? "yes" : "no", trace_reduces_before, trace_reduces_after);
         } else {
             runtime::round_trace(
                 "start.return rank=%d dev=%d ticket=%llu kind=%s elapsed-us=%llu compute=absent "
@@ -327,11 +332,11 @@ void RankProgramImpl::drain() {
             throw std::runtime_error(std::string("Qwen3.5 stream drain: ") +
                                      cudaGetErrorString(status));
     };
-    // THE FIRST POINT THAT WAITS FOR THE GPU. Every host-side bracket in this investigation measured
-    // microseconds because the host is not doing the work: the 1 s is the GPU executing rank 1's
-    // queued traversal, and it surfaces here, at the first cudaStreamSynchronize. The brackets could
-    // not see it because they measure host time between enqueues and the GPU is asynchronous -- the
-    // instruments were measuring the wrong side of an asynchronous boundary.
+    // THE FIRST POINT THAT WAITS FOR THE GPU. Every host-side bracket in this investigation
+    // measured microseconds because the host is not doing the work: the 1 s is the GPU executing
+    // rank 1's queued traversal, and it surfaces here, at the first cudaStreamSynchronize. The
+    // brackets could not see it because they measure host time between enqueues and the GPU is
+    // asynchronous -- the instruments were measuring the wrong side of an asynchronous boundary.
     const auto sync_stamp = [&](const char* where) {
         if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
         std::timespec ts{};
@@ -387,11 +392,11 @@ void attach_rank_mirrors(RankProgram& origin, RankProgram& peer, DeviceContext& 
     origin.impl_->peer_text_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
         *origin.impl_->peer_text_kv, origin_tables.table_origin(), peer_tables.table_origin());
     // ONE-WAY BY CONSTRUCTION, AND THEREFORE ONE-SIDED. The mirror object is owned by the ORIGIN
-    // rank and targets the PEER's device: it addresses rank 0's pages by index and replays them onto
-    // rank 1. Rank 1 is the mirror's TARGET, not its owner, so it correctly carries no mirror object
-    // of its own. This is why `peer_text_kv` is non-null on exactly one rank -- and why the round
-    // entry's refusal (which reads that pointer) fires on that rank only. That asymmetry is the
-    // design, not a divergence: a refusal on one rank stops the round for the group.
+    // rank and targets the PEER's device: it addresses rank 0's pages by index and replays them
+    // onto rank 1. Rank 1 is the mirror's TARGET, not its owner, so it correctly carries no mirror
+    // object of its own. This is why `peer_text_kv` is non-null on exactly one rank -- and why the
+    // round entry's refusal (which reads that pointer) fires on that rank only. That asymmetry is
+    // the design, not a divergence: a refusal on one rank stops the round for the group.
     origin_pages.attach_mirror(*origin.impl_->peer_text_kv);
     origin_tables.attach_mirror(*origin.impl_->peer_text_kv_tables);
     // The row leases live on the control side, so the same mirror is attached to the session's

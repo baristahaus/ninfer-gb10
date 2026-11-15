@@ -28,19 +28,22 @@ bool stamp_due(int rank, const char* where, int round) {
     std::timespec ts{};
     (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
     const long long now = static_cast<long long>(ts.tv_sec) * 1000000000LL + (long long)ts.tv_nsec;
+
     // THE KEY INCLUDES THE RANK. With the site alone, two ranks alternating on the same site each
     // saw the other's entry as 'a different value' and both printed every time -- the throttle was
     // defeated exactly when it was needed, and one stalled run wrote 89.7 GB.
     struct Last {
-        int rank   = -1;
-        int round  = 0;
+        int rank     = -1;
+        int round    = 0;
         long long ns = 0;
     };
+
     static std::mutex mutex;
     static std::map<std::pair<int, const char*>, Last> last;
     std::lock_guard<std::mutex> lock(mutex);
     Last& slot = last[std::make_pair(rank, where)];
-    if (slot.rank == rank && slot.round == round && slot.ns != 0 && now - slot.ns < kStampPeriodNs) {
+    if (slot.rank == rank && slot.round == round && slot.ns != 0 &&
+        now - slot.ns < kStampPeriodNs) {
         return false;
     }
     slot = Last{rank, round, now};
@@ -69,10 +72,10 @@ void lane_stamp(int rank, const char* where, int round) {
 
 // THE STAGE IS WHAT DISTINGUISHES 'WAITING' FROM 'BLOCKED'. The entry stamp used to say only that
 // progress() had been entered, so a rank spinning in Readback and a rank spinning in AwaitDecision
-// produced identical lines, and a rank blocked INSIDE progress() produced none at all -- which reads
-// exactly like a rank that is never polled. Naming the stage makes the three cases distinguishable
-// from the log alone, which is what the width-2 lane needs: its stalls have been read as 'rank 1 is
-// never polled' and as 'rank 1 is blocked' and those want different fixes.
+// produced identical lines, and a rank blocked INSIDE progress() produced none at all -- which
+// reads exactly like a rank that is never polled. Naming the stage makes the three cases
+// distinguishable from the log alone, which is what the width-2 lane needs: its stalls have been
+// read as 'rank 1 is never polled' and as 'rank 1 is blocked' and those want different fixes.
 void stage_entry_stamp(int rank, const char* stage) {
     if (!stamp_due(rank, stage, 0)) { return; }
     std::timespec ts{};
@@ -83,10 +86,9 @@ void stage_entry_stamp(int rank, const char* stage) {
     std::fflush(stderr);
 }
 
-
 std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
-    if (!has_peer_mirrors) { return {}; }  // the single-device lane
-    if (forward_wired) { return {}; }      // sharded lane, forward wired: run it
+    if (!has_peer_mirrors) { return {}; } // the single-device lane
+    if (forward_wired) { return {}; }     // sharded lane, forward wired: run it
     return "qwen3.5 sharded lane: this rank carries the peer's KV mirrors, which is the flag that "
            "the sharded forward is not wired; a round would project sharded weights through the "
            "unsharded path and produce wrong numbers. Refusing the round. See "
@@ -98,23 +100,23 @@ std::size_t RankProgramImpl::collective_count() const noexcept {
     // The collective is the only thing that makes one rank's progress depend on another's, so its
     // counter is the rank's position in the group's rendezvous order. `reduce_index` is advanced by
     // ShardedCollective::reduce at ENQUEUE time (execution/sharded.h), which is what the executor
-    // needs: the question is what this rank has asked its peer for, not what the device has finished.
+    // needs: the question is what this rank has asked its peer for, not what the device has
+    // finished.
     return collective_ ? collective_->reduce_index : 0;
 }
 
 void RankProgramImpl::progress() {
     const int rank = collective_ ? collective_->rank : 0;
     stage_entry_stamp(rank, compute ? compute_stage_name(compute->stage) : "no-compute");
-    lane_stamp(rank, "round_entry",
-               static_cast<int>(collective_ ? collective_->reduce_index : 0));
+    lane_stamp(rank, "round_entry", static_cast<int>(collective_ ? collective_->reduce_index : 0));
     // THE REFUSAL THE DECLARATION PROMISES. internal.h:190-194 says the peer mirrors' presence is
-    // the sharded-lane flag the round entry refuses on, because the sharded forward is not wired and
-    // a round would project sharded weights through the unsharded path and produce wrong numbers.
-    // The flag was documented and never checked: the mirrors are attached to the ORIGIN rank only
-    // (lifecycle.cpp:370-376), so one rank ran the unsharded path while the other did not, and the
-    // mailbox reported the divergence as a give-up rather than as the unwired lane it is.
-    if (const auto refusal = sharded_forward_refusal(peer_text_kv != nullptr,
-                                                   kShardedForwardWired);
+    // the sharded-lane flag the round entry refuses on, because the sharded forward is not wired
+    // and a round would project sharded weights through the unsharded path and produce wrong
+    // numbers. The flag was documented and never checked: the mirrors are attached to the ORIGIN
+    // rank only (lifecycle.cpp:370-376), so one rank ran the unsharded path while the other did
+    // not, and the mailbox reported the divergence as a give-up rather than as the unwired lane it
+    // is.
+    if (const auto refusal = sharded_forward_refusal(peer_text_kv != nullptr, kShardedForwardWired);
         !refusal.empty()) {
         throw std::logic_error(refusal);
     }

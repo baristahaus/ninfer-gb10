@@ -10,12 +10,12 @@ namespace {
 template <class Base>
 struct Bf16VisionQkvSchedule : Base {};
 template <class Base>
-using Qkv     = Bf16VisionQkvSchedule<Bf16ScheduleInstance<Base, 1152>>;
-using Tiny    = Qkv<Bf16A16SlicedKMmaSchedule<16, 8, 6, 64, 2>>;
-using Small   = Qkv<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
-                                       Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>>;
-using Hot     = Qkv<Bf16A16TmaMmaSchedule<64, 32, 64, 16, 16, 3, 2>>;
-using Wide96  = Qkv<Bf16A16TmaMmaSchedule<96, 128, 64, 32, 32, 3, 1>>;
+using Qkv    = Bf16VisionQkvSchedule<Bf16ScheduleInstance<Base, 1152>>;
+using Tiny   = Qkv<Bf16A16SlicedKMmaSchedule<16, 8, 6, 64, 2>>;
+using Small  = Qkv<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
+                                      Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>>;
+using Hot    = Qkv<Bf16A16TmaMmaSchedule<64, 32, 64, 16, 16, 3, 2>>;
+using Wide96 = Qkv<Bf16A16TmaMmaSchedule<96, 128, 64, 32, 32, 3, 1>>;
 using Wide144 = Qkv<Bf16A16TmaMmaSchedule<144, 128, 64, 48, 32, 2, 1>>;
 using Wide192 = Qkv<Bf16A16TmaMmaSchedule<192, 128, 64, 64, 32, 2, 1>>;
 using Large   = Qkv<Bf16A16TmaMmaSchedule<192, 128, 64, 64, 32, 2, 1, Bf16MmaRaster::RowFast>>;

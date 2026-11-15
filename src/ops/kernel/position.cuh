@@ -10,8 +10,7 @@ __global__ void fill_i32_positions_kernel(std::int32_t* positions, std::int32_t 
     if (i < count) { positions[i] = start + i; }
 }
 
-__global__ void fill_i32_kernel(std::int32_t* destination, std::int32_t count,
-                                std::int32_t value) {
+__global__ void fill_i32_kernel(std::int32_t* destination, std::int32_t count, std::int32_t value) {
     const std::int32_t i = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
     if (i < count) { destination[i] = value; }
 }

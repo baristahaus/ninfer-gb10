@@ -69,11 +69,10 @@ void argmax(const Tensor& logits, Tensor& out, std::int32_t valid_rows, cudaStre
 }
 
 void shortlist_exact_argmax(const Tensor& hidden, const Tensor& approximate_logits,
-                            std::int32_t valid_rows,
-                            const Weight& exact_head, const std::int32_t* id_map,
-                            Tensor& candidate_ids, Tensor& candidate_scores, Tensor& out,
-                            cudaStream_t stream) {
-    constexpr int kTile = 512;
+                            std::int32_t valid_rows, const Weight& exact_head,
+                            const std::int32_t* id_map, Tensor& candidate_ids,
+                            Tensor& candidate_scores, Tensor& out, cudaStream_t stream) {
+    constexpr int kTile    = 512;
     constexpr int kPerTile = 2;
     if (hidden.dtype != DType::BF16 || approximate_logits.dtype != DType::BF16 ||
         candidate_ids.dtype != DType::I32 || candidate_scores.dtype != DType::FP32 ||
@@ -85,15 +84,14 @@ void shortlist_exact_argmax(const Tensor& hidden, const Tensor& approximate_logi
         !out.is_contiguous()) {
         throw std::invalid_argument("shortlist_exact_argmax: tensors must be contiguous");
     }
-    const int tokens = hidden.ne[1];
+    const int tokens         = hidden.ne[1];
     const int shortlist_rows = valid_rows;
     const int candidate_rows = ((shortlist_rows + kTile - 1) / kTile) * kPerTile;
     if (tokens <= 0 || hidden.ne[0] <= 0 || hidden.ne[2] != 1 || hidden.ne[3] != 1 ||
         shortlist_rows < 2 || shortlist_rows > approximate_logits.ne[0] ||
-        approximate_logits.ne[1] != tokens ||
-        approximate_logits.ne[2] != 1 || approximate_logits.ne[3] != 1 ||
-        candidate_ids.ne[0] != candidate_rows || candidate_ids.ne[1] != tokens ||
-        candidate_ids.ne[2] != 1 || candidate_ids.ne[3] != 1 ||
+        approximate_logits.ne[1] != tokens || approximate_logits.ne[2] != 1 ||
+        approximate_logits.ne[3] != 1 || candidate_ids.ne[0] != candidate_rows ||
+        candidate_ids.ne[1] != tokens || candidate_ids.ne[2] != 1 || candidate_ids.ne[3] != 1 ||
         candidate_scores.ne[0] != candidate_rows || candidate_scores.ne[1] != tokens ||
         candidate_scores.ne[2] != 1 || candidate_scores.ne[3] != 1 || out.ne[0] != tokens ||
         out.ne[1] != 1 || out.ne[2] != 1 || out.ne[3] != 1) {
@@ -105,13 +103,13 @@ void shortlist_exact_argmax(const Tensor& hidden, const Tensor& approximate_logi
                           exact_head.layout == QuantLayout::RowScale &&
                           exact_head.scales != nullptr;
     if ((!bf16_head && !fp8_head) || exact_head.k != hidden.ne[0] || exact_head.n <= 0 ||
-        exact_head.qdata == nullptr ||
-        id_map == nullptr || hidden.data == nullptr || approximate_logits.data == nullptr ||
-        candidate_ids.data == nullptr || candidate_scores.data == nullptr || out.data == nullptr) {
+        exact_head.qdata == nullptr || id_map == nullptr || hidden.data == nullptr ||
+        approximate_logits.data == nullptr || candidate_ids.data == nullptr ||
+        candidate_scores.data == nullptr || out.data == nullptr) {
         throw std::invalid_argument("shortlist_exact_argmax: invalid exact head or storage");
     }
-    detail::shortlist_exact_argmax_launch(hidden, approximate_logits, valid_rows, exact_head, id_map,
-                                          candidate_ids, candidate_scores, out, stream);
+    detail::shortlist_exact_argmax_launch(hidden, approximate_logits, valid_rows, exact_head,
+                                          id_map, candidate_ids, candidate_scores, out, stream);
 }
 
 } // namespace ninfer::ops

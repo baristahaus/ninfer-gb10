@@ -326,11 +326,11 @@ public:
         // Env-gated admission trace. It reads host catalog metadata and Program occupancy counters
         // only; no device memory is touched, so no stream ordering applies. The hit count reported
         // to the caller is printed at selection below.
-        constexpr int trace_rank = 0; // Flash-Next runs one Program per rank.
+        constexpr int trace_rank                = 0; // Flash-Next runs one Program per rank.
         const RequestPlanSummary& trace_summary = base.summary();
         const auto& trace_cache                 = base.context_cache();
-        const auto trace_usage                 = program.physical_usage();
-        std::uint32_t trace_private_catalogued = 0;
+        const auto trace_usage                  = program.physical_usage();
+        std::uint32_t trace_private_catalogued  = 0;
         for (const CatalogEntry& entry : catalog_) {
             if (entry.state == CatalogState::Catalogued && entry.handle) {
                 ++trace_private_catalogued;
@@ -394,25 +394,23 @@ public:
         for (const PrefixIndexEntry& index : prefix_index_) {
             if (!index.occupied) { continue; }
             const std::uint32_t frontier = index.key.frontier;
-            reuse_trace_line(
-                trace_rank,
-                "checkpoint candidate: shared=%d slot=%u owner_id=%llu revision=%llu "
-                "ref(kind=%d frontier=%u ordinal=%u) key(frontier=%u tag=0x%08x "
-                "digests=%016llx/%016llx)",
-                index.shared ? 1 : 0, index.slot,
-                static_cast<unsigned long long>(index.owner_id),
-                static_cast<unsigned long long>(index.revision),
-                static_cast<int>(index.checkpoint.kind), index.checkpoint.frontier,
-                index.checkpoint.ordinal, frontier, index.key.identity_tag,
-                static_cast<unsigned long long>(index.key.digests[0]),
-                static_cast<unsigned long long>(index.key.digests[1]));
+            reuse_trace_line(trace_rank,
+                             "checkpoint candidate: shared=%d slot=%u owner_id=%llu revision=%llu "
+                             "ref(kind=%d frontier=%u ordinal=%u) key(frontier=%u tag=0x%08x "
+                             "digests=%016llx/%016llx)",
+                             index.shared ? 1 : 0, index.slot,
+                             static_cast<unsigned long long>(index.owner_id),
+                             static_cast<unsigned long long>(index.revision),
+                             static_cast<int>(index.checkpoint.kind), index.checkpoint.frontier,
+                             index.checkpoint.ordinal, frontier, index.key.identity_tag,
+                             static_cast<unsigned long long>(index.key.digests[0]),
+                             static_cast<unsigned long long>(index.key.digests[1]));
             if (!valid_prefix_index_entry(index)) {
                 reuse_trace_line(trace_rank,
                                  "checkpoint candidate check: REJECT stale-index-entry");
                 continue;
             }
-            const std::optional<PrefixShortlistKey> incoming =
-                base.prefix_shortlist_key(frontier);
+            const std::optional<PrefixShortlistKey> incoming = base.prefix_shortlist_key(frontier);
             if (!incoming) {
                 reuse_trace_line(
                     trace_rank,
@@ -421,15 +419,14 @@ public:
                     frontier, trace_summary.prompt_tokens);
                 continue;
             }
-            reuse_trace_line(
-                trace_rank,
-                "checkpoint candidate check: incoming(frontier=%u tag=0x%08x "
-                "digests=%016llx/%016llx) tag_match=%d digest_match=%d",
-                incoming->frontier, incoming->identity_tag,
-                static_cast<unsigned long long>(incoming->digests[0]),
-                static_cast<unsigned long long>(incoming->digests[1]),
-                incoming->identity_tag == index.key.identity_tag ? 1 : 0,
-                incoming->digests == index.key.digests ? 1 : 0);
+            reuse_trace_line(trace_rank,
+                             "checkpoint candidate check: incoming(frontier=%u tag=0x%08x "
+                             "digests=%016llx/%016llx) tag_match=%d digest_match=%d",
+                             incoming->frontier, incoming->identity_tag,
+                             static_cast<unsigned long long>(incoming->digests[0]),
+                             static_cast<unsigned long long>(incoming->digests[1]),
+                             incoming->identity_tag == index.key.identity_tag ? 1 : 0,
+                             incoming->digests == index.key.digests ? 1 : 0);
             if (incoming->identity_tag != index.key.identity_tag) {
                 reuse_trace_line(trace_rank,
                                  "checkpoint candidate check: REJECT identity-tag-mismatch");
@@ -569,8 +566,7 @@ public:
             }
         }
 
-        reuse_trace_line(trace_rank,
-                         "candidate summary: %zu total (1 root + %zu cache candidates)",
+        reuse_trace_line(trace_rank, "candidate summary: %zu total (1 root + %zu cache candidates)",
                          candidates.size(), candidates.size() - 1U);
         for (std::size_t candidate_index = 0; candidate_index < candidates.size();
              ++candidate_index) {
@@ -588,9 +584,8 @@ public:
                 "source_mode=%d private_source=%d shared_source=%d",
                 candidate_index, plan_summary.reusable_prompt_tokens,
                 static_cast<int>(plan_summary.prefix_reuse_path),
-                static_cast<int>(identity.physical_status),
-                static_cast<int>(identity.source_mode), candidate.private_source ? 1 : 0,
-                candidate.shared_source ? 1 : 0);
+                static_cast<int>(identity.physical_status), static_cast<int>(identity.source_mode),
+                candidate.private_source ? 1 : 0, candidate.shared_source ? 1 : 0);
         }
 
         std::optional<Choice> selected =
@@ -769,14 +764,14 @@ public:
                     ++trace_shared_catalogued;
                 }
             }
-            reuse_trace_line(
-                0,
-                "capture offer: frontier=%u publishes_private=%d publishes_shared=%d "
-                "evidence=0x%02x exact_shared=%d | shared slots capacity=%u vacant=%u catalogued=%u",
-                candidate.frontier, candidate.publishes_private ? 1 : 0,
-                candidate.publishes_shared ? 1 : 0,
-                static_cast<unsigned>(candidate.shared_evidence), exact_shared ? 1 : 0,
-                shared_catalog_count_, trace_shared_vacant, trace_shared_catalogued);
+            reuse_trace_line(0,
+                             "capture offer: frontier=%u publishes_private=%d publishes_shared=%d "
+                             "evidence=0x%02x exact_shared=%d | shared slots capacity=%u vacant=%u "
+                             "catalogued=%u",
+                             candidate.frontier, candidate.publishes_private ? 1 : 0,
+                             candidate.publishes_shared ? 1 : 0,
+                             static_cast<unsigned>(candidate.shared_evidence), exact_shared ? 1 : 0,
+                             shared_catalog_count_, trace_shared_vacant, trace_shared_catalogued);
         }
         if (exact_shared != nullptr) {
             if (!private_baseline.publishes_private || !private_baseline.physically_feasible) {
@@ -1210,7 +1205,7 @@ public:
             release_active_references(lane);
             clear_catalog_entry(publication);
             reset_active_entry(active);
-            lanes_[lane.value] = LogicalLaneState::Free;
+            lanes_[lane.value]                     = LogicalLaneState::Free;
             std::uint32_t trace_private_catalogued = 0;
             for (const CatalogEntry& entry : catalog_) {
                 if (entry.state == CatalogState::Catalogued && entry.handle) {
@@ -1724,7 +1719,7 @@ private:
         const auto append       = [&](const PrefixDemandRecord& demand) {
             if (!demand_matches(demand, key) ||
                 std::find(domains.begin(), domains.begin() + static_cast<std::ptrdiff_t>(count),
-                                demand.domain) != domains.begin() + static_cast<std::ptrdiff_t>(count)) {
+                          demand.domain) != domains.begin() + static_cast<std::ptrdiff_t>(count)) {
                 return;
             }
             domains[count++] = demand.domain;
@@ -1897,18 +1892,18 @@ private:
         for (PrefixIndexEntry& entry : prefix_index_) { entry = {}; }
         std::size_t cursor = 0;
         const auto append  = [&](bool shared, std::uint32_t slot, std::uint64_t owner_id,
-                                std::uint64_t revision, const auto& checkpoint) {
+                                 std::uint64_t revision, const auto& checkpoint) {
             if (cursor >= prefix_index_.size()) {
                 throw std::logic_error("prefix index exceeded fixed capacity");
             }
             prefix_index_[cursor++] = PrefixIndexEntry{
-                 .occupied   = true,
-                 .shared     = shared,
-                 .key        = checkpoint.shortlist_key,
-                 .slot       = slot,
-                 .owner_id   = owner_id,
-                 .revision   = revision,
-                 .checkpoint = checkpoint.ref,
+                .occupied   = true,
+                .shared     = shared,
+                .key        = checkpoint.shortlist_key,
+                .slot       = slot,
+                .owner_id   = owner_id,
+                .revision   = revision,
+                .checkpoint = checkpoint.ref,
             };
         };
         for (std::uint32_t slot = 0; slot < catalog_count_; ++slot) {
@@ -2538,7 +2533,7 @@ private:
             }
         }
         const CatalogEntry& publication = catalog_[choice.publication_slot_];
-        const bool source_cell          = choice.private_source_ &&
+        const bool source_cell = choice.private_source_ &&
                                  choice.publication_slot_ == choice.private_source_->slot &&
                                  choice.source_mode_ == PrivateSourceMode::ConsumeToActive;
         const auto victim =
@@ -3405,8 +3400,7 @@ private:
                     0,
                     "capture published: private slot=%u owner_id=%llu revision=%llu "
                     "endpoint_frontier=%u endpoint_key_frontier=%u rewrite=%d long_anchors=%zu",
-                    active.publication_slot,
-                    static_cast<unsigned long long>(publication.id),
+                    active.publication_slot, static_cast<unsigned long long>(publication.id),
                     static_cast<unsigned long long>(publication.revision), endpoint.ref.frontier,
                     endpoint.shortlist_key.frontier,
                     result.active_summary.rewrite.has_value() ? 1 : 0,

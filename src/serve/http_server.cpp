@@ -366,8 +366,7 @@ void HttpServer::register_routes() {
         // a page the user happens to have open reading the local server. It runs before the
         // no-key early return, because the guard matters most when no key is set.
         if (refuse_loopback_foreign_request(options_.host, req.get_header_value("Host"),
-                                            req.get_header_value("Origin"),
-                                            options_.enable_cors)) {
+                                            req.get_header_value("Origin"), options_.enable_cors)) {
             ApiError error;
             error.status  = 403;
             error.type    = "invalid_request_error";

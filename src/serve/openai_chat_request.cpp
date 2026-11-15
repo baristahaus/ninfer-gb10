@@ -759,7 +759,7 @@ TemplateOptions parse_template_options(const Json& body) {
         const std::optional<bool> nested = get_optional_bool(kwargs, key);
         if (top_level && nested && *top_level != *nested) {
             bad_request(std::string("conflicting ") + key + " values", key,
-                                "conflicting_template_option");
+                        "conflicting_template_option");
         }
         if (nested) { top_level = nested; }
     };

@@ -54,7 +54,7 @@ bf16_mma_compute_stage(const __nv_bfloat16* As, const __nv_bfloat16* Bs,
     const int a_row_offset = a_inner_row + ((a_matrix & 1) << 3);
     const int a_col_offset = (a_matrix >> 1) << 3;
     const int b_inner_row = lane & 7, b_k_offset = ((lane >> 3) & 1) << 3;
-    auto load_fragments = [&](int k_step, unsigned(&a_frag)[MT][4], unsigned(&b_frag)[NT][2]) {
+    auto load_fragments = [&](int k_step, unsigned (&a_frag)[MT][4], unsigned (&b_frag)[NT][2]) {
 #pragma unroll
         for (int mi = 0; mi < MT; ++mi) {
             const int row = wm * WM + mi * 16 + a_row_offset;

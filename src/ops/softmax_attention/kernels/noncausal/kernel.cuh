@@ -164,8 +164,8 @@ __launch_bounds__(Br * 2, MinBlocks) __global__ void noncausal_flash_kernel(
     const unsigned k_r         = static_cast<unsigned>((PaddedD == 96 ? b_rin >> 1 : b_rin) << 4);
     const unsigned v_lane_base = v_sbase + static_cast<unsigned>(((lane >> 3) & 1) * 8 * RowBytes) +
                                  static_cast<unsigned>(b_rin * RowBytes);
-    const unsigned v_as = static_cast<unsigned>((lane >> 4) << 4);
-    const unsigned v_r  = static_cast<unsigned>((PaddedD == 96 ? b_rin >> 1 : b_rin) << 4);
+    const unsigned v_as        = static_cast<unsigned>((lane >> 4) << 4);
+    const unsigned v_r         = static_cast<unsigned>((PaddedD == 96 ? b_rin >> 1 : b_rin) << 4);
 
     noncausal_stage_q<Br, Threads, PaddedD>(q_s, q, tile.q0, tile.end, head, tid, q_stride_d,
                                             q_stride_h, q_stride_t);

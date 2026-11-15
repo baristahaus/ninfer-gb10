@@ -143,7 +143,8 @@ void choice_and_regex(ninfer::Engine& engine, unsigned concurrency, bool specula
 int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set "
+                     "it to a .ninfer file\n";
         return 77;
     }
     if (ninfer::test::skip_without_host_tier("test_engine_grammar_real")) { return 77; }
@@ -301,9 +302,9 @@ int main(int argc, char** argv) {
         auto json_request       = literal("unused", 0.8f);
         json_request.constraint = ninfer::OutputConstraint::json_schema(schema.dump());
         const auto record       = [&](const nlohmann::ordered_json& spec,
-                                const ninfer::GenerationResult& value) {
+                                      const ninfer::GenerationResult& value) {
             require(value.finish_reason == ninfer::FinishReason::StopToken,
-                          "JSON generation was truncated");
+                    "JSON generation was truncated");
             require(nlohmann::json::accept(value.content), "JSON output is not parseable");
             if (const char* report = std::getenv("NINFER_TEST_SCHEMA_REPORT")) {
                 std::ofstream file(report, std::ios::app);

@@ -299,9 +299,9 @@ int main(int argc, char** argv) {
             try {
                 const auto input = Json::parse(line);
                 result["text"]   = JinjaTemplate(input.at("source"), "reference-case")
-                                     .render(input.at("context"))
-                                     .text;
-                result["ok"] = true;
+                                       .render(input.at("context"))
+                                       .text;
+                result["ok"]     = true;
             } catch (const std::exception& error) {
                 result["ok"]    = false;
                 result["error"] = error.what();

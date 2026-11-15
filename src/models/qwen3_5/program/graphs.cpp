@@ -85,7 +85,7 @@ public:
         const auto destination = frame.input_view(call.width, call.batch);
         const auto upload      = [&](const Tensor& source, const Tensor& target) {
             CUDA_CHECK(cudaMemcpyAsync(target.data, source.data, source.bytes(),
-                                            cudaMemcpyHostToDevice, cuda.stream()));
+                                       cudaMemcpyHostToDevice, cuda.stream()));
         };
         upload(input.ids, destination.ids);
         upload(input.cache_positions, destination.cache_positions);

@@ -178,7 +178,8 @@ public:
                       {kStateDim, kStateDim, profile_.value_heads, batch_});
         Tensor valid = valid_tensor();
         Tensor initial(record_initial_.span(), DType::I32, {batch_});
-        Tensor key_record(key_record_.span(), DType::BF16, {kStateDim, profile_.qk_heads, width_, batch_});
+        Tensor key_record(key_record_.span(), DType::BF16,
+                          {kStateDim, profile_.qk_heads, width_, batch_});
         Tensor value_record(value_record_.span(), DType::BF16,
                             {kStateDim, profile_.value_heads, width_, batch_});
         Tensor gate_record(gate_record_.span(), DType::FP32,

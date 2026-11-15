@@ -53,10 +53,10 @@ bool uses_a8(std::int32_t, std::int32_t max_tokens) { return max_tokens >= 17; }
 std::size_t partial_capacity_bytes(std::int32_t max_tokens) {
     // The boundary is the dispatch's, not a tile-count estimate: `launch_a8` selects Bulk from 289
     // tokens, and a capacity that reports 0 over 289..384 refuses the split-K launch it was planned
-    // for the moment the schedule stops leaving a full wave without a split. No token in that window
-    // splits today — 168 CTAs at 289..384 leaves a tail above the 85-CTA threshold — which is why
-    // this was latent rather than live; it is still the same defect the six failing shapes had, and a
-    // schedule change would make it fire.
+    // for the moment the schedule stops leaving a full wave without a split. No token in that
+    // window splits today — 168 CTAs at 289..384 leaves a tail above the 85-CTA threshold — which
+    // is why this was latent rather than live; it is still the same defect the six failing shapes
+    // had, and a schedule change would make it fire.
     return max_tokens > 288 ? Bulk::kPartialBytes : 0;
 }
 } // namespace

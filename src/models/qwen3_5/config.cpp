@@ -358,12 +358,12 @@ Config parse_config(const artifact::Directory& directory, const LoadOptions& opt
 
 ModelSamplingDefaults default_sampling(Architecture architecture) {
     ModelSamplingDefaults sampling;
-    sampling.thinking     = {.temperature      = 1.0F,
-                             .top_k            = 20,
-                             .top_p            = 0.95F,
-                             .min_p            = 0.0F,
-                             .presence_penalty = architecture == Architecture::Qwen3_5Moe ? 1.5F : 0.0F,
-                             .frequency_penalty = 0.0F};
+    sampling.thinking = {.temperature      = 1.0F,
+                         .top_k            = 20,
+                         .top_p            = 0.95F,
+                         .min_p            = 0.0F,
+                         .presence_penalty = architecture == Architecture::Qwen3_5Moe ? 1.5F : 0.0F,
+                         .frequency_penalty = 0.0F};
     sampling.non_thinking = {.temperature       = 0.7F,
                              .top_k             = 20,
                              .top_p             = 0.80F,

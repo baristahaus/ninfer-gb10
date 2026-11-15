@@ -171,7 +171,7 @@ void run_dflash(int tokens, bool profile, measurement::LogicalBenchmark& benchma
     const double bytes = 2.0 *
                          static_cast<double>((kDflashQHeads + kDflashKHeads) * kDflashRotaryDim) *
                          tokens * sizeof(__nv_bfloat16);
-    const auto launch = [&](CudaExecutionView cuda) {
+    const auto launch  = [&](CudaExecutionView cuda) {
         ops::rope(tpos, kDflashRotaryDim, kTextTheta, tq, tk, cuda);
     };
     if (profile) {

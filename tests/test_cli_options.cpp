@@ -161,9 +161,8 @@ void test_yarn_window() {
     require(short_window.find("below engine.max_context") != std::string::npos,
             "a window shorter than the context was refused for the wrong reason");
     // A rejection names the field's own flag: the Field enum and kFields must stay aligned.
-    const auto bad_factor = rejection([&] {
-        parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-yarn-factor", "9"});
-    });
+    const auto bad_factor = rejection(
+        [&] { parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-yarn-factor", "9"}); });
     require(bad_factor.find("--rope-yarn-factor") != std::string::npos,
             "a bad rope factor was reported under another flag");
 }

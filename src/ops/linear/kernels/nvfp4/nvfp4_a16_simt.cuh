@@ -114,9 +114,9 @@ compute_nvfp4_simt_rows(const __nv_bfloat16* __restrict__ x, const std::uint8_t*
             for (int local_token = 0; local_token < Schedule::kBlockTokens; ++local_token) {
                 const int token = token0 + local_token;
                 if (token < ActiveTokens) {
-                    const int value_begin = phase * kValuesPerPhase +
-                                            warp_in_row * kValuesPerWarpPhase +
-                                            lane * Schedule::kValuesPerLane;
+                    const int value_begin   = phase * kValuesPerPhase +
+                                              warp_in_row * kValuesPerWarpPhase +
+                                              lane * Schedule::kValuesPerLane;
                     activation[local_token] = load_nvfp4_activation_pack<Schedule::kValuesPerLane>(
                         x +
                         static_cast<std::int64_t>(min(token, live_tokens - 1)) *

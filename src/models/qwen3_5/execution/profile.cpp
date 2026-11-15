@@ -29,7 +29,8 @@ public:
         if (ops::projection_region_count(inputs) > 1) {
             std::array<ops::LinearProfile, 2> role_profiles{
                 ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data(), 1)),
-                ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 1, 1))};
+                ops::describe_linear_weight(
+                    std::span<const ops::WeightInput>(inputs.data() + 1, 1))};
             return {{}, linear(w.down), std::move(role_profiles)};
         }
         return {ops::describe_linear_weight(inputs), linear(w.down)};
@@ -66,12 +67,15 @@ public:
                 dimension(inputs[2].weight.shape[0]), dimension(inputs[3].weight.shape[0])};
             if (ops::projection_region_count(inputs) > 2) {
                 std::array<ops::LinearProfile, 4> role_profiles{
-                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data(), 1)),
-                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 1, 1)),
-                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 2, 1)),
-                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
-                out.mixer = AttentionProfile{{}, rows, linear(a->output),
-                                             std::move(role_profiles)};
+                    ops::describe_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data(), 1)),
+                    ops::describe_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data() + 1, 1)),
+                    ops::describe_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data() + 2, 1)),
+                    ops::describe_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
+                out.mixer = AttentionProfile{{}, rows, linear(a->output), std::move(role_profiles)};
             } else {
                 out.mixer = AttentionProfile{ops::describe_projection_weights(inputs), rows,
                                              linear(a->output)};
@@ -86,10 +90,15 @@ public:
             const std::array control{plan_.input(g.a_projection), plan_.input(g.b_projection)};
             if (ops::projection_region_count(inputs) > 1) {
                 std::array<ops::LinearProfile, 2> role_profiles{
-                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data(), 3)),
-                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
-                out.mixer = GdnProfile{{}, ops::describe_projection_weights(control), rows,
-                                       linear(g.output), std::move(role_profiles)};
+                    ops::describe_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data(), 3)),
+                    ops::describe_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
+                out.mixer = GdnProfile{{},
+                                       ops::describe_projection_weights(control),
+                                       rows,
+                                       linear(g.output),
+                                       std::move(role_profiles)};
             } else {
                 out.mixer =
                     GdnProfile{ops::describe_projection_weights(inputs),

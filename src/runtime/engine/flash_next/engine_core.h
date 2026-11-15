@@ -293,18 +293,18 @@ public:
 
     [[nodiscard]] EngineSnapshot snapshot() const {
         EngineSnapshot out;
-        out.media    = instance_.frontend.media_cache_summary();
-        out.stamp    = SnapshotStamp{0, static_cast<std::uint64_t>(
-                                           std::chrono::steady_clock::now().time_since_epoch()
-                                               .count())};
-        out.runtime  = runtime_stats();
+        out.media = instance_.frontend.media_cache_summary();
+        out.stamp =
+            SnapshotStamp{0, static_cast<std::uint64_t>(
+                                 std::chrono::steady_clock::now().time_since_epoch().count())};
+        out.runtime = runtime_stats();
         // This route has no rank workers; report the resident device as rank 0 so the snapshot
         // describes the allocation instead of leaving it empty.
         ninfer::RankSnapshot rank;
-        rank.rank     = 0;
-        rank.node     = 0;
-        rank.stamp    = out.stamp;
-        rank.memory   = rank_memory_usage(instance_.program->memory_summary());
+        rank.rank   = 0;
+        rank.node   = 0;
+        rank.stamp  = out.stamp;
+        rank.memory = rank_memory_usage(instance_.program->memory_summary());
         out.ranks.push_back(std::move(rank));
         return out;
     }
@@ -322,7 +322,7 @@ public:
     }
 
 private:
-    static constexpr int kTierPolicyExperts = 512;
+    static constexpr int kTierPolicyExperts               = 512;
     static constexpr std::size_t kTierPolicyCacheCapacity = 64;
 
     // The tier policy is on by default; NINFER_TIER_POLICY=0 disables it entirely
@@ -410,13 +410,12 @@ private:
             active += slots_[lane] != nullptr ? 1 : 0;
         }
         if (active > 1) {
-            std::vector<std::uint32_t> discarded(
-                static_cast<std::size_t>(kTierPolicyExperts), 0);
+            std::vector<std::uint32_t> discarded(static_cast<std::size_t>(kTierPolicyExperts), 0);
             for (int layer = 0; layer < tier_banks_; ++layer) {
                 const auto* bank = instance_.model->tier_gate_up_bank(layer);
                 if (bank == nullptr || bank->expert_activations == nullptr) { continue; }
-                ops::read_and_reset_expert_activations_into(
-                    *bank, discarded, device_.execution_view());
+                ops::read_and_reset_expert_activations_into(*bank, discarded,
+                                                            device_.execution_view());
             }
             CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
             return;
@@ -424,26 +423,25 @@ private:
         const auto observe_start = std::chrono::steady_clock::now();
         // The batched readback: every bank's copy enqueues on the stream, then one
         // synchronization covers all of them - the 48 per-bank syncs here cost ~0.65ms.
-        std::vector<std::uint32_t> all_counts(
-            static_cast<std::size_t>(tier_banks_) * static_cast<std::size_t>(kTierPolicyExperts),
-            0);
+        std::vector<std::uint32_t> all_counts(static_cast<std::size_t>(tier_banks_) *
+                                                  static_cast<std::size_t>(kTierPolicyExperts),
+                                              0);
         std::vector<int> enqueued_layers;
         enqueued_layers.reserve(static_cast<std::size_t>(tier_banks_));
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
             if (bank == nullptr || bank->expert_activations == nullptr) { continue; }
-            const auto offset =
-                static_cast<std::size_t>(enqueued_layers.size()) *
-                static_cast<std::size_t>(kTierPolicyExperts);
+            const auto offset = static_cast<std::size_t>(enqueued_layers.size()) *
+                                static_cast<std::size_t>(kTierPolicyExperts);
             ops::read_and_reset_expert_activations_into(
                 *bank, std::span{all_counts}.subspan(offset), device_.execution_view());
             enqueued_layers.push_back(layer);
         }
         CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
-        const auto split = tier_split_threshold();
+        const auto split     = tier_split_threshold();
         int divergent_layers = 0;
         for (std::size_t i = 0; i < enqueued_layers.size(); ++i) {
-            const auto offset = i * static_cast<std::size_t>(kTierPolicyExperts);
+            const auto offset       = i * static_cast<std::size_t>(kTierPolicyExperts);
             const auto layer_counts = std::span{all_counts}.subspan(offset);
             // Exactly one session record per layer. The divergence split marks atypical
             // requests but stores nothing: the fingerprint entries were never prefetched
@@ -457,15 +455,14 @@ private:
         if (divergent_layers > 0) {
             std::fprintf(stderr, "[tierprof] split layers=%d\n", divergent_layers);
         }
-        const auto stats = tier_policy_.stats();
+        const auto stats      = tier_policy_.stats();
         const auto observe_us = std::chrono::duration_cast<std::chrono::microseconds>(
                                     std::chrono::steady_clock::now() - observe_start)
                                     .count();
         std::fprintf(stderr, "[tierprof] observed requests=%zu cache_hits=%zu observe_us=%lld\n",
                      stats.requests, stats.cache_hits, static_cast<long long>(observe_us));
         tier_policy_.age_if_due(stats.requests, tier_age_every());
-        if (tier_pin_topk() > 0 && tier_pin_every() > 0 &&
-            stats.requests % tier_pin_every() == 0) {
+        if (tier_pin_topk() > 0 && tier_pin_every() > 0 && stats.requests % tier_pin_every() == 0) {
             tier_pin_top_experts();
         }
     }
@@ -477,8 +474,7 @@ private:
     void tier_enqueue_residency_read(const ops::FlashNextExpertBank& bank,
                                      std::span<std::uint32_t> out) const {
         CUDA_CHECK(cudaMemcpyAsync(out.data(), bank.expert_residency,
-                                   out.size() * sizeof(std::uint32_t),
-                                   cudaMemcpyDeviceToHost,
+                                   out.size() * sizeof(std::uint32_t), cudaMemcpyDeviceToHost,
                                    device_.execution_view().stream()));
     }
 
@@ -499,7 +495,7 @@ private:
             layer, static_cast<int>(std::min(promote.size(), count)), hot, protect);
         for (std::size_t i = 0; i < demote.size() && i < promote.size(); ++i) {
             const auto promote_entry = residency[static_cast<std::size_t>(promote[i])];
-            const auto demote_entry = residency[static_cast<std::size_t>(demote[i])];
+            const auto demote_entry  = residency[static_cast<std::size_t>(demote[i])];
             ops::swap_expert_tier_with_residency(bank, promote[i], demote[i], promote_entry,
                                                  demote_entry, device_.execution_view());
             ops::swap_expert_tier_with_residency(down, promote[i], demote[i], promote_entry,
@@ -516,15 +512,14 @@ private:
         if (instance_.model == nullptr || tier_banks_ == 0) { return; }
         if (session.empty() || !tier_policy_.cached(session)) { return; }
         if (!tier_policy_enabled()) { return; }
-        const auto burst = tier_burst_requests() > 0 &&
-                           tier_policy_.class_requests(session) <
-                               static_cast<std::size_t>(tier_burst_requests());
-        const auto budget = static_cast<std::size_t>(
-            burst ? tier_burst_budget() : tier_swaps_per_layer());
+        const auto burst =
+            tier_burst_requests() > 0 &&
+            tier_policy_.class_requests(session) < static_cast<std::size_t>(tier_burst_requests());
+        const auto budget =
+            static_cast<std::size_t>(burst ? tier_burst_budget() : tier_swaps_per_layer());
         const auto prefetch_start = std::chrono::steady_clock::now();
         // Pass 1: enqueue every layer's residency copy, then one synchronization.
-        std::vector<std::vector<std::uint32_t>> residencies(
-            static_cast<std::size_t>(tier_banks_));
+        std::vector<std::vector<std::uint32_t>> residencies(static_cast<std::size_t>(tier_banks_));
         std::vector<int> read_layers;
         read_layers.reserve(static_cast<std::size_t>(tier_banks_));
         for (int layer = 0; layer < tier_banks_; ++layer) {
@@ -541,24 +536,23 @@ private:
                                   .count();
         // Pass 2: the host-side selection and the swaps.
         for (const int layer : read_layers) {
-            const auto mask = tier_policy_.cached_mask(session, layer);
+            const auto mask  = tier_policy_.cached_mask(session, layer);
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
             const auto* down = instance_.model->tier_down_bank(layer);
             if (mask.empty() || bank == nullptr || down == nullptr) { continue; }
             const auto& residency = residencies[static_cast<std::size_t>(layer)];
-            const auto experts = residency.size();
+            const auto experts    = residency.size();
             std::vector<std::uint8_t> hot(experts, 0);
             std::vector<int> warm;
             for (std::size_t e = 0; e < experts; ++e) {
                 const bool is_warm = (residency[e] & 0x80000000u) != 0;
-                hot[e] = is_warm ? 0 : 1;
+                hot[e]             = is_warm ? 0 : 1;
                 if (is_warm && mask[e] != 0) { warm.push_back(static_cast<int>(e)); }
             }
             if (warm.empty()) { continue; }
             // The burst budget makes the order matter: the class's most-exercised warm
             // experts go first, not the arbitrary id order.
-            auto ranked = tier_policy_.class_top(session, layer,
-                                                 static_cast<int>(warm.size()));
+            auto ranked = tier_policy_.class_top(session, layer, static_cast<int>(warm.size()));
             std::vector<int> ordered;
             ordered.reserve(warm.size());
             for (const int e : ranked) {
@@ -569,8 +563,7 @@ private:
             // promoted experts and the next pass of that class re-promotes them.
             std::vector<std::uint8_t> protect = tier_policy_.all_sessions_mask(layer);
             tier_append_global_protect(layer, protect);
-            tier_apply_layer_swaps(layer, *bank, *down, ordered, hot, protect, budget,
-                                   residency);
+            tier_apply_layer_swaps(layer, *bank, *down, ordered, hot, protect, budget, residency);
         }
         // PER-RANK, ONCE PER REQUEST: the swap count and the drain time, because the asymmetric
         // wait this instrument exists to measure is HOST-SIDE WAITING BETWEEN ENQUEUES, which no
@@ -587,8 +580,7 @@ private:
         std::fprintf(stderr, "[tierprof] rank=%d swaps=%zu prefetch_us=%lld pass1_us=%lld\n",
                      device_.device().index(), tier_swaps_last_,
                      static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                                std::chrono::steady_clock::now() -
-                                                prefetch_start)
+                                                std::chrono::steady_clock::now() - prefetch_start)
                                                 .count()),
                      static_cast<long long>(pass1_us));
         tier_swaps_last_ = 0;
@@ -604,8 +596,7 @@ private:
         if (topk <= 0) { return; }
         const auto budget = static_cast<std::size_t>(tier_swaps_per_layer());
         // Pass 1: enqueue every layer's residency copy, then one synchronization.
-        std::vector<std::vector<std::uint32_t>> residencies(
-            static_cast<std::size_t>(tier_banks_));
+        std::vector<std::vector<std::uint32_t>> residencies(static_cast<std::size_t>(tier_banks_));
         std::vector<int> read_layers;
         read_layers.reserve(static_cast<std::size_t>(tier_banks_));
         for (int layer = 0; layer < tier_banks_; ++layer) {
@@ -623,12 +614,12 @@ private:
             const auto* down = instance_.model->tier_down_bank(layer);
             if (bank == nullptr || down == nullptr) { continue; }
             const auto& residency = residencies[static_cast<std::size_t>(layer)];
-            const auto experts = residency.size();
+            const auto experts    = residency.size();
             std::vector<std::uint8_t> hot(experts, 0);
             std::vector<int> warm_top;
             for (std::size_t e = 0; e < experts; ++e) {
                 const bool is_warm = (residency[e] & 0x80000000u) != 0;
-                hot[e] = is_warm ? 0 : 1;
+                hot[e]             = is_warm ? 0 : 1;
             }
             for (const int e : tier_policy_.top_experts(layer, topk)) {
                 if (hot[static_cast<std::size_t>(e)] == 0) { warm_top.push_back(e); }
@@ -805,8 +796,8 @@ private:
         record_program_timing(timing, measurement.exposed);
     }
 
-    void record_detail(std::uint64_t RuntimeHostWorkStats::*elapsed_member,
-                       std::uint64_t RuntimeHostWorkStats::*invocation_member,
+    void record_detail(std::uint64_t RuntimeHostWorkStats::* elapsed_member,
+                       std::uint64_t RuntimeHostWorkStats::* invocation_member,
                        Clock::time_point started) noexcept {
         RuntimeHostWorkStats& stats = cumulative_stats_.host_work;
         stats.*elapsed_member += elapsed_ns(started, Clock::now());
@@ -815,8 +806,8 @@ private:
 
     class DetailScope {
     public:
-        DetailScope(EngineCore& owner, std::uint64_t RuntimeHostWorkStats::*elapsed_member,
-                    std::uint64_t RuntimeHostWorkStats::*invocation_member,
+        DetailScope(EngineCore& owner, std::uint64_t RuntimeHostWorkStats::* elapsed_member,
+                    std::uint64_t RuntimeHostWorkStats::* invocation_member,
                     nvtx::Name range_name) noexcept
             : owner_(owner), elapsed_member_(elapsed_member), invocation_member_(invocation_member),
               started_(Clock::now()) {
@@ -833,8 +824,8 @@ private:
 
     private:
         EngineCore& owner_;
-        std::uint64_t RuntimeHostWorkStats::*elapsed_member_;
-        std::uint64_t RuntimeHostWorkStats::*invocation_member_;
+        std::uint64_t RuntimeHostWorkStats::* elapsed_member_;
+        std::uint64_t RuntimeHostWorkStats::* invocation_member_;
         Clock::time_point started_;
         std::optional<nvtx::ScopedRange> range_;
     };
@@ -1253,13 +1244,27 @@ private:
     // guarded so a throw on one step does not skip the rest.
     void force_complete_error(const std::shared_ptr<Request>& request,
                               const std::exception_ptr& error) noexcept {
-        try { request->prompt = {}; } catch (...) {}
-        try { request->base_plan.reset(); } catch (...) {}
-        try { request->model_state = EngineRequestState::ModelFinished; } catch (...) {}
-        try { request->sequence.reset(); } catch (...) {}
-        try { request->lane.reset(); } catch (...) {}
-        try { request->budget.reset(); } catch (...) {}
-        try { request->terminal_reason.reset(); } catch (...) {}
+        try {
+            request->prompt = {};
+        } catch (...) {}
+        try {
+            request->base_plan.reset();
+        } catch (...) {}
+        try {
+            request->model_state = EngineRequestState::ModelFinished;
+        } catch (...) {}
+        try {
+            request->sequence.reset();
+        } catch (...) {}
+        try {
+            request->lane.reset();
+        } catch (...) {}
+        try {
+            request->budget.reset();
+        } catch (...) {}
+        try {
+            request->terminal_reason.reset();
+        } catch (...) {}
         bool release_capacity = false;
         try {
             std::lock_guard lock(request->mutex);
@@ -1269,11 +1274,17 @@ private:
             }
             if (request->consumer_released && !request->capacity_released) {
                 request->capacity_released = true;
-                release_capacity            = true;
+                release_capacity           = true;
             }
         } catch (...) {}
-        if (release_capacity) { try { release_reserved_capacity(); } catch (...) {} }
-        try { request->cv.notify_one(); } catch (...) {}
+        if (release_capacity) {
+            try {
+                release_reserved_capacity();
+            } catch (...) {}
+        }
+        try {
+            request->cv.notify_one();
+        } catch (...) {}
     }
 
     void complete_success(const std::shared_ptr<Request>& request, FinishReason reason) {
@@ -1298,16 +1309,16 @@ private:
             request->queue_wait_recorded       = true;
         }
         GenerationResult result;
-        result.prompt                  = request->prompt_summary;
-        result.generated_token_ids     = std::move(request->generated);
-        result.token_logprobs          = std::move(request->token_logprobs);
-        result.content                 = std::move(request->content);
-        result.reasoning               = std::move(request->reasoning);
-        result.tool_calls              = request->output.take_tool_calls();
-        result.tool_call_parse         = request->output.tool_call_parse_diagnostics();
-        result.reasoning_tokens        = request->output.reasoning_tokens();
-        result.finish_reason           = reason;
-        result.matched_stop_string     = request->output.matched_stop_string();
+        result.prompt              = request->prompt_summary;
+        result.generated_token_ids = std::move(request->generated);
+        result.token_logprobs      = std::move(request->token_logprobs);
+        result.content             = std::move(request->content);
+        result.reasoning           = std::move(request->reasoning);
+        result.tool_calls          = request->output.take_tool_calls();
+        result.tool_call_parse     = request->output.tool_call_parse_diagnostics();
+        result.reasoning_tokens    = request->output.reasoning_tokens();
+        result.finish_reason       = reason;
+        result.matched_stop_string = request->output.matched_stop_string();
         if (request->begin) {
             result.reused_prompt_tokens = request->begin->reused_prompt_tokens;
             result.prefix_reuse_path    = request->begin->prefix_reuse_path;
@@ -1332,11 +1343,11 @@ private:
         request->budget.reset();
         request->terminal_reason.reset();
         finish_engine_phase(completion, EngineHostPhase::CommitOutput);
-        result.stats.engine_timing = request->host_timing.public_snapshot();
-        result.stats.reused_prompt_tokens = result.reused_prompt_tokens;
-        result.stats.prefix_reuse_path    = result.prefix_reuse_path;
+        result.stats.engine_timing           = request->host_timing.public_snapshot();
+        result.stats.reused_prompt_tokens    = result.reused_prompt_tokens;
+        result.stats.prefix_reuse_path       = result.prefix_reuse_path;
         result.stats.computed_prefill_tokens = request->computed_prompt_tokens;
-        result.stats.speculative          = result.speculative;
+        result.stats.speculative             = result.speculative;
         {
             std::lock_guard lock(request->mutex);
             if (request->response_done) { return; }
@@ -1540,8 +1551,8 @@ private:
                 const auto& request = slots_[lane_indices[row]];
                 if (request != nullptr && request->generated.size() >= generated_sizes[row]) {
                     request->generated.resize(generated_sizes[row]);
-                    // Reports grow with the tokens they describe, so a rolled-back round has to drop
-                    // both halves or the two vectors stop being index-aligned.
+                    // Reports grow with the tokens they describe, so a rolled-back round has to
+                    // drop both halves or the two vectors stop being index-aligned.
                     request->token_logprobs.resize(logprob_sizes[row]);
                 }
             }
@@ -1563,10 +1574,10 @@ private:
                     throw std::logic_error("pending row has an invalid licensed extent");
                 }
                 const std::uint32_t count = static_cast<std::uint32_t>(raw_count);
-                const auto row_tokens     = pending.tokens().subspan(row * pending.row_stride(),
-                                                                     static_cast<std::size_t>(count));
-                generated_sizes[row]      = request->generated.size();
-                logprob_sizes[row]        = request->token_logprobs.size();
+                const auto row_tokens = pending.tokens().subspan(row * pending.row_stride(),
+                                                                 static_cast<std::size_t>(count));
+                generated_sizes[row]  = request->generated.size();
+                logprob_sizes[row]    = request->token_logprobs.size();
                 if (cancelled[row]) {
                     (void)request->output.preview_terminal(FinishReason::Cancelled);
                     decisions[row] = CommitDecision{
@@ -1612,8 +1623,9 @@ private:
                 if (reports_token_logprobs_) {
                     // These spans view the Program's pinned egress and stop being valid once the
                     // round commits or aborts, so this is where they become owned data.
-                    const auto reports       = pending.scores();
-                    const std::size_t column0 = row * static_cast<std::size_t>(pending.row_stride());
+                    const auto reports = pending.scores();
+                    const std::size_t column0 =
+                        row * static_cast<std::size_t>(pending.row_stride());
                     if (reports.ranks < 1 ||
                         reports.chosen.size() < column0 + static_cast<std::size_t>(accepted) ||
                         reports.top_ids.size() != reports.top_logprobs.size() ||
@@ -1629,8 +1641,7 @@ private:
                         report.logprob = reports.chosen[column];
                         for (std::int32_t rank = 0; rank < reports.ranks; ++rank) {
                             const std::size_t at = static_cast<std::size_t>(rank) +
-                                                   column *
-                                                       static_cast<std::size_t>(reports.ranks);
+                                                   column * static_cast<std::size_t>(reports.ranks);
                             // Ranks past the vocabulary hold the defined negative sentinel and end
                             // the list; everything before them is already in descending order.
                             if (reports.top_ids[at] < 0) { break; }
@@ -1696,8 +1707,8 @@ private:
             [](const CommitDecision& decision) { return decision.terminal; });
 
         for (std::size_t row = 0; row < row_count; ++row) {
-            const auto& request = slots_[lane_indices[row]];
-            auto& observed      = request->speculative_stats;
+            const auto& request  = slots_[lane_indices[row]];
+            auto& observed       = request->speculative_stats;
             const auto& counters = committed.rows[row].speculative;
             cumulative_stats_.speculative_rounds += counters.rounds - observed.rounds;
             cumulative_stats_.speculative_draft_tokens +=
@@ -2183,7 +2194,9 @@ private:
             }
             on_waiting_removed(request);
             force_complete_error(request, oom_fallback_error_);
-            try { publish_runtime_stats(); } catch (...) {}
+            try {
+                publish_runtime_stats();
+            } catch (...) {}
             request_admission_check();
             return AdmissionProgress::ControlProgress;
         }
@@ -2254,8 +2267,7 @@ private:
     [[nodiscard]] std::optional<AdmissionProgress>
     try_backfill(const FifoSnapshot& queued, const std::shared_ptr<Request>& head,
                  PlanningAllowance allowance, bool short_only, bool& control_progress) {
-        const ActiveAdmissionSet active =
-            scheduler_.active_admission_set(slots_, max_concurrency_);
+        const ActiveAdmissionSet active = scheduler_.active_admission_set(slots_, max_concurrency_);
         if (active.size == 0 ||
             !scheduler_.protect_blocked_head(head->id, active.span(),
                                              instance_.program->resource_revision())) {
@@ -2344,7 +2356,7 @@ private:
     // parked one resumes. Behind a deferred long head, ready short requests backfill.
     AdmissionProgress try_admit_one() {
         const bool yield_admission = scheduler_.prefill_lane().has_value();
-        const auto other_runnable = static_cast<std::uint32_t>(
+        const auto other_runnable  = static_cast<std::uint32_t>(
             std::count_if(slots_.begin(), slots_.end(), [](const auto& request) {
                 return request && !request->capture_pending &&
                        (request->is_decode_ready() || request->is_prefilling());
@@ -2412,8 +2424,8 @@ private:
                 } else if (defer_long_prefill(head, other_runnable,
                                               head_inspection.choice->summary())) {
                     ++cumulative_stats_.admission_deferred_long_prefill;
-                    if (auto backfilled = try_backfill(queued, head, allowance, true,
-                                                       control_progress)) {
+                    if (auto backfilled =
+                            try_backfill(queued, head, allowance, true, control_progress)) {
                         return *backfilled;
                     }
                     return control_progress ? AdmissionProgress::ControlProgress
@@ -2524,7 +2536,8 @@ private:
                 request->generated.insert(request->generated.end(), tokens.begin(), tokens.end());
                 if (reports_token_logprobs_) {
                     // Engine-forced control spans, not draws: the target model's logits for these
-                    // positions were never consumed, so each report says so rather than inventing one.
+                    // positions were never consumed, so each report says so rather than inventing
+                    // one.
                     for (const TokenId forced : tokens) {
                         request->token_logprobs.push_back(
                             GeneratedTokenLogprob{.token = forced, .injected = true});
@@ -2575,7 +2588,6 @@ public:
     }
 #endif
 private:
-
     // Recover from any std::bad_alloc in the work loop by clearing active state and
     // continuing.  The most common trigger is device-KV reservation failure, but host
     // allocations can also trigger it.  Errors active and materializing requests, resets
@@ -2588,16 +2600,23 @@ private:
     // state (contract 7.4).
     bool recover_from_oom_locked(std::exception_ptr error) noexcept {
         if (!error) { error = oom_fallback_error_; }
-        try { scheduler_.reset(); } catch (...) {}
+        try {
+            scheduler_.reset();
+        } catch (...) {}
         const std::shared_ptr<Request> materializing_request =
             materializing_ ? materializing_->request : nullptr;
-        try { materializing_.reset(); } catch (...) {}
-        try { instance_.program->fail_all_cleanup(); } catch (...) {}
-        try { resources_.clear_after_program_cleanup(); } catch (...) {}
+        try {
+            materializing_.reset();
+        } catch (...) {}
+        try {
+            instance_.program->fail_all_cleanup();
+        } catch (...) {}
+        try {
+            resources_.clear_after_program_cleanup();
+        } catch (...) {}
         if (!instance_.program->quiescent_after_fail_all_cleanup()) {
-            std::fprintf(stderr,
-                         "[engine] WORKER OOM: cleanup left the Program unquiesced — "
-                         "failing all\n");
+            std::fprintf(stderr, "[engine] WORKER OOM: cleanup left the Program unquiesced — "
+                                 "failing all\n");
             return false;
         }
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
@@ -2610,7 +2629,9 @@ private:
         if (materializing_request != nullptr) {
             force_complete_error(materializing_request, error);
         }
-        try { publish_runtime_stats(); } catch (...) {}
+        try {
+            publish_runtime_stats();
+        } catch (...) {}
         return true;
     }
 
@@ -2623,12 +2644,20 @@ private:
             failed_ = true;
             pending.swap(pending_);
         }
-        try { scheduler_.reset(); } catch (...) {}
+        try {
+            scheduler_.reset();
+        } catch (...) {}
         const std::shared_ptr<Request> materializing_request =
             materializing_ ? materializing_->request : nullptr;
-        try { materializing_.reset(); } catch (...) {}
-        try { instance_.program->fail_all_cleanup(); } catch (...) {}
-        try { resources_.clear_after_program_cleanup(); } catch (...) {}
+        try {
+            materializing_.reset();
+        } catch (...) {}
+        try {
+            instance_.program->fail_all_cleanup();
+        } catch (...) {}
+        try {
+            resources_.clear_after_program_cleanup();
+        } catch (...) {}
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
             if (slots_[lane] != nullptr) {
                 auto slot_request = std::move(slots_[lane]);
@@ -2640,7 +2669,9 @@ private:
             force_complete_error(materializing_request, error);
         }
         for (const auto& request : pending) { force_complete_error(request, error); }
-        try { publish_runtime_stats(); } catch (...) {}
+        try {
+            publish_runtime_stats();
+        } catch (...) {}
     }
 
     void worker_loop() noexcept {
@@ -2729,7 +2760,7 @@ private:
                     finish_engine_phase(boundary, EngineHostPhase::Boundary);
                     run_control_batch(control_membership);
                     previous_unit_was_decode = true;
-                    oom_recovery_count_ = 0;
+                    oom_recovery_count_      = 0;
                     continue;
                 }
                 membership = scheduler_.build_round_membership(slots_, max_concurrency_);
@@ -2755,7 +2786,7 @@ private:
                     run_prefill_step(cancelled_at_unit_start);
                     scheduler_.record_prefill_unit(elapsed_ns(unit_started, Clock::now()));
                     previous_unit_was_decode = false;
-                    oom_recovery_count_ = 0;
+                    oom_recovery_count_      = 0;
                     continue;
                 }
                 if (action == ExecutionAction::Decode) {
@@ -2765,7 +2796,7 @@ private:
                     run_decode_round(membership, cancelled_at_unit_start);
                     scheduler_.record_decode_unit(elapsed_ns(unit_started, Clock::now()));
                     previous_unit_was_decode = true;
-                    oom_recovery_count_ = 0;
+                    oom_recovery_count_      = 0;
                     continue;
                 }
                 set_host_work_class(HostWorkClass::Control);
@@ -2778,9 +2809,12 @@ private:
                 {
                     char buf[256];
                     buf[0] = '\0';
-                    int n = std::snprintf(buf, sizeof(buf),
-                                          "[engine] WORKER OOM: %s - recovering", oom.what());
-                    if (n < 0) { n = 0; buf[0] = '\0'; }
+                    int n  = std::snprintf(buf, sizeof(buf), "[engine] WORKER OOM: %s - recovering",
+                                           oom.what());
+                    if (n < 0) {
+                        n      = 0;
+                        buf[0] = '\0';
+                    }
                     if (materializing_ && (size_t)n < sizeof(buf)) {
                         n += std::snprintf(buf + n, sizeof(buf) - n, " mat=%llu",
                                            (unsigned long long)materializing_->request->id);
@@ -2806,7 +2840,7 @@ private:
                 // Surface the typed retryable error, not the raw allocation exception:
                 // the consumer's error contract is RequestError.
                 HostPhaseMeasurement cleanup = begin_host_phase();
-                const bool recovered = recover_from_oom_locked(oom_fallback_error_);
+                const bool recovered         = recover_from_oom_locked(oom_fallback_error_);
                 finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
                 if (!recovered) {
                     fail_all_locked(oom_fallback_error_);
@@ -2886,7 +2920,7 @@ private:
     std::atomic<bool> admission_check_pending_{false};
     // The FIFO head was blocked by an unsettled StateImage fork. The fork settles in its lane's
     // next prefill or decode round, which does not otherwise re-arm admission.
-    bool admission_waits_on_state_fork_        = false;
+    bool admission_waits_on_state_fork_ = false;
     // When a deferred long-prefill head reaches its wait limit; the worker re-arms admission then.
     std::optional<Clock::time_point> long_prefill_release_;
     std::uint64_t worker_accounted_elapsed_ns_ = 0;
@@ -2895,12 +2929,12 @@ private:
     std::size_t current_decode_lane_count_ = 0;
     RuntimeStats cumulative_stats_;
     RuntimeStats published_stats_;
-    bool stopping_ = false;
-    bool failed_   = false;
+    bool stopping_                                       = false;
+    bool failed_                                         = false;
     static constexpr std::uint32_t kOomBackoffIterations = 4;
-    static constexpr std::uint32_t kOomMaxRecoveries = 8;  // before failing all pending
-    std::uint32_t oom_backoff_                    = 0;  // iterations to skip admission after OOM
-    std::uint32_t oom_recovery_count_ = 0;  // consecutive OOMs without a successful work unit
+    static constexpr std::uint32_t kOomMaxRecoveries     = 8; // before failing all pending
+    std::uint32_t oom_backoff_        = 0; // iterations to skip admission after OOM
+    std::uint32_t oom_recovery_count_ = 0; // consecutive OOMs without a successful work unit
 #if defined(NINFER_ENGINE_FAULT_INJECTION)
     std::mutex fault_mutex_;
     std::deque<std::exception_ptr> worker_faults_;

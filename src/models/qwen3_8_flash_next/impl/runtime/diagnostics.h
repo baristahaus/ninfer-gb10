@@ -102,8 +102,8 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
     const bool frontier_selected = std::strcmp(phase, "commit") == 0;
     bool wanted                  = !frontier_selected;
     for (std::string_view rest(selected); !rest.empty() && !wanted;) {
-        const auto comma              = rest.find(',');
-        const std::string_view token  = rest.substr(0, comma);
+        const auto comma             = rest.find(',');
+        const std::string_view token = rest.substr(0, comma);
         try {
             if (!token.empty() && frontier == std::stoul(std::string(token))) { wanted = true; }
         } catch (const std::exception&) {
@@ -124,14 +124,13 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
                             {"execution_frontier", frontier},
                             {"ledger", std::vector<std::int32_t>(ledger.begin(), ledger.end())}};
     std::vector<std::string> components;
-    const auto dump = [&](const Tensor& tensor, const std::string& suffix,
-                          const char* component) {
+    const auto dump = [&](const Tensor& tensor, const std::string& suffix, const char* component) {
         if (tensor.data == nullptr || tensor.bytes() == 0) {
             throw std::logic_error("Flash-Next state capture got an empty component");
         }
         std::vector<std::byte> bytes(tensor.bytes());
-        CUDA_CHECK(cudaMemcpyAsync(bytes.data(), tensor.data, bytes.size(),
-                                   cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(bytes.data(), tensor.data, bytes.size(), cudaMemcpyDeviceToHost,
+                                   stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
         std::ofstream file(stem.string() + suffix, std::ios::binary);
         file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -157,10 +156,10 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
         for (std::uint32_t layer = 0; layer < dflash_layers; ++layer) {
             const CyclicKVCacheLayerView view = local->layer_view(layer);
             // The slot is the cyclic cache's own axis, exactly as copy_to_host addresses it.
-            dump(view.k.slice(3, slot, 1),
-                 ".dflash_local_k." + std::to_string(layer) + ".bf16", "dflash_local_k");
-            dump(view.v.slice(3, slot, 1),
-                 ".dflash_local_v." + std::to_string(layer) + ".bf16", "dflash_local_v");
+            dump(view.k.slice(3, slot, 1), ".dflash_local_k." + std::to_string(layer) + ".bf16",
+                 "dflash_local_k");
+            dump(view.v.slice(3, slot, 1), ".dflash_local_v." + std::to_string(layer) + ".bf16",
+                 "dflash_local_v");
         }
     }
     metadata["layers"]              = pool.layer_count();
@@ -244,12 +243,12 @@ struct KVPlaneClassification {
     // elements differ slightly) from a localised defect (a few elements differ a lot), and those
     // two have opposite implications. The ULP distance is measured against the larger side's own
     // bf16 spacing at that element, so it is comparable across magnitudes.
-    std::size_t over_one_ulp              = 0;
-    std::size_t over_four_ulp             = 0;
-    std::size_t over_sixteen_ulp          = 0;
-    std::uint32_t max_ulp                 = 0;
-    std::size_t worst_column             = 0;
-    double relative_l2                   = 0.0;
+    std::size_t over_one_ulp     = 0;
+    std::size_t over_four_ulp    = 0;
+    std::size_t over_sixteen_ulp = 0;
+    std::uint32_t max_ulp        = 0;
+    std::size_t worst_column     = 0;
+    double relative_l2           = 0.0;
 
     [[nodiscard]] double mean_abs_current_diff() const {
         return finite_diffs == 0 ? std::numeric_limits<double>::quiet_NaN()
@@ -471,18 +470,18 @@ classify_kv_plane_range(const HostKVPageLayout& layout, std::size_t plane_index,
                     // tail is comparable across magnitudes. bf16 spacing is 2^-8 relative, so a
                     // one-ULP reorder is 1 here and a 5% difference is about 13.
                     {
-                        const double scale = std::max(std::fabs(current_value),
-                                                      std::fabs(previous_value));
+                        const double scale =
+                            std::max(std::fabs(current_value), std::fabs(previous_value));
                         if (scale > 0.0) {
                             const double ulp =
                                 std::fabs(current_value - previous_value) / (scale / 256.0);
-                            const auto ulp_count = static_cast<std::uint32_t>(
-                                std::min(ulp, 65535.0));
+                            const auto ulp_count =
+                                static_cast<std::uint32_t>(std::min(ulp, 65535.0));
                             out.over_one_ulp += ulp_count >= 1 ? 1U : 0U;
                             out.over_four_ulp += ulp_count >= 4 ? 1U : 0U;
                             out.over_sixteen_ulp += ulp_count >= 16 ? 1U : 0U;
                             if (ulp_count > out.max_ulp) {
-                                out.max_ulp     = ulp_count;
+                                out.max_ulp      = ulp_count;
                                 out.worst_column = column;
                             }
                         }
@@ -528,7 +527,8 @@ inline void probe_kv_table_binding(const char* phase, const Tensor& table_matrix
     }
     if (table_matrix.data == nullptr || table_matrix.dtype != DType::I32 ||
         table_matrix.ne[0] <= 0 || table_matrix.ne[1] <= 0 || row < 0 ||
-        row >= table_matrix.ne[1] || logical_page >= static_cast<std::uint32_t>(table_matrix.ne[0])) {
+        row >= table_matrix.ne[1] ||
+        logical_page >= static_cast<std::uint32_t>(table_matrix.ne[0])) {
         throw std::logic_error("Flash-Next KV write probe got an invalid execution-table row");
     }
     std::int32_t device_physical = -1;
@@ -598,13 +598,11 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
     const int serial = serial_by_rank[rank_index]++;
     // The phase is part of the file name, so one run's prefill snapshot and its decode dump never
     // collide even at the same frontier and logical page.
-    const std::string phase_prefix =
-        phase == nullptr ? std::string() : std::string(phase) + ".";
-    const std::string stem =
-        (std::filesystem::path(directory) /
-         (std::to_string(serial) + "." + phase_prefix + std::to_string(frontier) + "." +
-          std::to_string(logical_page)))
-            .string();
+    const std::string phase_prefix = phase == nullptr ? std::string() : std::string(phase) + ".";
+    const std::string stem = (std::filesystem::path(directory) /
+                              (std::to_string(serial) + "." + phase_prefix +
+                               std::to_string(frontier) + "." + std::to_string(logical_page)))
+                                 .string();
     {
         std::ofstream binary(stem + ".bin", std::ios::binary);
         binary.write(reinterpret_cast<const char*>(view.data()),
@@ -649,11 +647,10 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
                 for (std::size_t plane_index = 0; plane_index < layout.planes.size();
                      ++plane_index) {
                     const HostKVPlaneLayout& host_plane = layout.planes[plane_index];
-                    const KVPlaneGeometry& plane         = layout.geometry.planes[plane_index];
+                    const KVPlaneGeometry& plane        = layout.geometry.planes[plane_index];
                     const std::size_t element_bytes =
                         static_cast<std::size_t>(plane.leading_extent) * dtype_size(plane.dtype);
-                    const std::uint32_t rows =
-                        layout.geometry.page_tokens / plane.tokens_per_row;
+                    const std::uint32_t rows = layout.geometry.page_tokens / plane.tokens_per_row;
                     for (std::uint32_t row = 0; row < rows; ++row) {
                         const std::uint32_t column = row * plane.tokens_per_row;
                         if (column >= comparison.first_column) { break; }

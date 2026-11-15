@@ -58,8 +58,8 @@ void rmsnorm_dynamic_grouped_conv_prepare(const Tensor& residual, const Tensor& 
 
 /**
  * Returns the transient capacity required by linear_dynamic_grouped_conv_add for every width/batch
- * pair in the inclusive intervals. input_rows is 4096, 7680 or 17408 (H 5120 or 2560), widths lie in [2,16], and batch
- * sizes in [1,8]. Capacity follows every shape-selected production route.
+ * pair in the inclusive intervals. input_rows is 4096, 7680 or 17408 (H 5120 or 2560), widths lie
+ * in [2,16], and batch sizes in [1,8]. Capacity follows every shape-selected production route.
  */
 [[nodiscard]] std::size_t linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
     std::int32_t input_rows, std::int32_t min_width, std::int32_t max_width,

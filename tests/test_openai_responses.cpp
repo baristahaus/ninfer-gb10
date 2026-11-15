@@ -607,9 +607,9 @@ int test_tools_and_effective_subset() {
         {"input", "time"},
         {"tools", Json::array({weather, clock})},
         {"tool_choice",
-            Json{{"type", "allowed_tools"},
-                 {"mode", "auto"},
-                 {"tools", Json::array({Json{{"type", "function"}, {"name", "clock"}}})}}}};
+         Json{{"type", "allowed_tools"},
+              {"mode", "auto"},
+              {"tools", Json::array({Json{{"type", "function"}, {"name", "clock"}}})}}}};
     const OpenAIResponsesCreateRequest request =
         parse_openai_responses_create_request(body, limits());
     int failures = 0;
@@ -836,17 +836,15 @@ int test_explicit_rejections() {
     // Codex CLI sends include: ["reasoning.encrypted_content"] on every request. The Engine
     // returns no encrypted reasoning, so the value is accepted and dropped; any other include
     // value still has no available representation and is rejected.
-    value            = base;
-    value["include"] = Json::array({"reasoning.encrypted_content"});
+    value                       = base;
+    value["include"]            = Json::array({"reasoning.encrypted_content"});
     bool codex_include_accepted = false;
     try {
         const OpenAIResponsesCreateRequest accepted =
             parse_openai_responses_create_request(value, limits());
         codex_include_accepted = accepted.prompt.input_turns.size() == 1 &&
                                  accepted.prompt.input_turns[0].content[0].text == "hello";
-    } catch (const std::exception&) {
-        codex_include_accepted = false;
-    }
+    } catch (const std::exception&) { codex_include_accepted = false; }
     failures += check(codex_include_accepted,
                       "reasoning.encrypted_content include is accepted and dropped");
 
@@ -858,8 +856,7 @@ int test_explicit_rejections() {
                       "an unrepresented include value is still rejected");
 
     value            = base;
-    value["include"] =
-        Json::array({"reasoning.encrypted_content", "message.output_text.logprobs"});
+    value["include"] = Json::array({"reasoning.encrypted_content", "message.output_text.logprobs"});
     failures += check(api_code([&] {
                           (void)parse_openai_responses_create_request(value, limits());
                       }) == "include_not_supported",

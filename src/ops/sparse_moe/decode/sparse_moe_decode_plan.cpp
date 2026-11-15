@@ -39,7 +39,7 @@ SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up, QType r
 
     SparseMoeDecodePlan plan;
     plan.workspace_bytes = exl3_profile ? sparse_moe_exl3_decode_workspace_bytes(shape)
-                                       : sparse_moe_decode_workspace_bytes();
+                                        : sparse_moe_decode_workspace_bytes();
     if (hints.next_weight_prefetch != nullptr) {
         plan.next_weight_prefetch = hints.next_weight_prefetch;
         plan.next_weight_prefetch_bytes =

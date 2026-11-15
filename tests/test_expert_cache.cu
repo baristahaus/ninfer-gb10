@@ -40,7 +40,7 @@ struct Matrix {
         const auto shape = nv || fp8 ? std::vector<std::uint64_t>{count, n, k}
                                      : std::vector<std::uint64_t>{count * n, k};
         const auto g     = weight_geometry(format,
-                                       nv    ? QuantLayout::BatchedBlockScaleK16M128x4
+                                           nv    ? QuantLayout::BatchedBlockScaleK16M128x4
                                            : fp8 ? QuantLayout::BlockScaleM128K128
                                                  : QuantLayout::RowSplit,
                                            shape);
@@ -116,9 +116,9 @@ __global__ void gather(ExpertBankDeviceView bank, unsigned expert, Sizes sizes,
                                          : matrix.scale_stride;
         if (i >= start && i < start + sizes.bytes[p]) {
             const auto offset = matrix.offsets ? matrix.offsets[expert] : expert * stride;
-            out[i]            = offset == UINT64_MAX
-                                    ? 255
-                                    : reinterpret_cast<const unsigned char*>(base)[offset + i - start];
+            out[i] = offset == UINT64_MAX
+                         ? 255
+                         : reinterpret_cast<const unsigned char*>(base)[offset + i - start];
         }
         start += sizes.bytes[p];
     }
@@ -569,8 +569,9 @@ int main() {
         const auto status = cudaGetDeviceCount(&count);
         if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
             status == cudaErrorStubLibrary || (status == cudaSuccess && !count)) {
-            std::cerr << "SKIP: no usable CUDA device; the expert cache test did not run; supply one "
-                         "with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+            std::cerr
+                << "SKIP: no usable CUDA device; the expert cache test did not run; supply one "
+                   "with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
             return 77;
         }
     }

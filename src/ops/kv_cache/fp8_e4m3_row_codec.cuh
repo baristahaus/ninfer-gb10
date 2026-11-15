@@ -82,7 +82,7 @@ __device__ __forceinline__ __half2 kv_cache_fp8_dequant_code2_to_half2(std::uint
 }
 
 __device__ __forceinline__ float kv_cache_fp8_dequant_code_to_float(std::uint8_t storage,
-                                                                     __half scale) {
+                                                                    __half scale) {
     __nv_fp8_e4m3 value;
     value.__x = storage;
     return static_cast<float>(value) * __half2float(scale);

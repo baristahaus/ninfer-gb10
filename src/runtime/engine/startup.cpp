@@ -110,9 +110,9 @@ namespace {
 // kTieToleranceNats), so a row's evidence is a two-rank round whose disagreements were adjudicated
 // within that tolerance -- not a round that happened to produce identical tokens.
 //
-// The sharded path's own checks ("the collective requires exactly two ranks") guard the collective's
-// SHAPE; they say nothing about whether an option's semantics were ever compared at width 2. That is
-// the gap this table closes.
+// The sharded path's own checks ("the collective requires exactly two ranks") guard the
+// collective's SHAPE; they say nothing about whether an option's semantics were ever compared at
+// width 2. That is the gap this table closes.
 struct WidthTwoOption {
     std::string_view option;
     bool (*requested)(const EngineOptions&);
@@ -125,13 +125,15 @@ struct WidthTwoOption {
 
 constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
-     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
-     false, "",
+     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; }, false,
+     "",
      "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno. "
      "The proposal path's missing logits gather is fixed (the MTP and DFlash proposal heads gather "
      "the rank's rows into the group's full-vocabulary pair and sample the tight view; the MTP "
-     "proposal buffer is reconciled to the frame's own extent), and the width-2 round now gets PAST "
-     "that argmax: on hephaestus (arm 2, nvfp4.v3) it throws 'Qwen3.5 compute frame is occupied' on "
+     "proposal buffer is reconciled to the frame's own extent), and the width-2 round now gets "
+     "PAST "
+     "that argmax: on hephaestus (arm 2, nvfp4.v3) it throws 'Qwen3.5 compute frame is occupied' "
+     "on "
      "the second decode round -- rank 0's first round retires, rank 1's compute frame does not, so "
      "the next round starts with rank 1's slot occupied. That is a frame/collective sequencing "
      "defect behind the gather, not a missing gather: the gather is enqueued on both ranks and the "
@@ -139,15 +141,12 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      "round whose disagreements are adjudicated inside the 1.0-nat tie tolerance"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
-     false, "",
-     "the DFlash drafter has no two-rank round compared against width 1"},
+     false, "", "the DFlash drafter has no two-rank round compared against width 1"},
     {"--spec dflash2",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash2; },
-     false, "",
-     "the DFlash2 drafter has no two-rank round compared against width 1"},
+     false, "", "the DFlash2 drafter has no two-rank round compared against width 1"},
     {"--causal-scoring",
-     [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; },
-     false, "",
+     [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; }, false, "",
      "the width-2 scoring residual is SEQUENCE-DEPENDENT and no single-sequence calibration covers "
      "it. The gather's chunk-offset corruption (436.744 nats) is fixed; what remains is the "
      "numerical divergence between the width-1 full head (N=248320) and the width-2 rank half "
@@ -169,10 +168,10 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      "NINFER_SCORE_TOLERANCE); the gather regression is tests/test_sharded_logits_gather.cpp at "
      "3, 43, 84, 85 and 128 columns"},
 
-    {"prefix reuse / context cache",
-     [](const EngineOptions& o) { return o.context_cache.enabled; },
+    {"prefix reuse / context cache", [](const EngineOptions& o) { return o.context_cache.enabled; },
      false, "",
-     "the context cache's slot ownership and reuse accounting are per Program and no two-rank round "
+     "the context cache's slot ownership and reuse accounting are per Program and no two-rank "
+     "round "
      "has compared them"},
     {"--kv-dtype (any quantized KV)",
      [](const EngineOptions& o) {
@@ -182,16 +181,13 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      false, "",
      "the sharded KV mirror has only been exercised with bf16; no two-rank round has compared a "
      "quantized pool against width 1"},
-    {"--vision",
-     [](const EngineOptions& o) { return o.enable_vision; },
-     false, "",
+    {"--vision", [](const EngineOptions& o) { return o.enable_vision; }, false, "",
      "the Vision tower is not sharded and no two-rank round has run a vision request"},
 };
 
 [[noreturn]] void refuse_unvalidated_width_two(const WidthTwoOption& row) {
     throw std::invalid_argument(
-        std::string(row.option) +
-        " has no validated two-rank round: " + std::string(row.reason) +
+        std::string(row.option) + " has no validated two-rank round: " + std::string(row.reason) +
         ". The refusal is removed by a two-rank round compared against width 1 by the tie-tolerant "
         "margin criterion -- a sharded round is not bit-identical, so token equality is not the "
         "criterion; until then pass a single device with --device");
@@ -220,7 +216,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         throw std::invalid_argument("Engine max_concurrency must be in [1,8]");
     }
 
-    ContextCacheOptions& cache      = options.context_cache;
+    ContextCacheOptions& cache = options.context_cache;
 
     // Tensor parallelism has no Host tier. A rank-1 KV replica is replayed on rank 1's stream, and
     // the Program's host-tier spill and restore call the physical pool directly rather than the
@@ -229,12 +225,13 @@ EngineOptions normalize_engine_options(EngineOptions options) {
     // Host tiers are zero at tp 2. Refusing the request is better than silently zeroing it, because
     // the caller asked for memory the lane cannot keep coherent.
     if (options.devices.size() > 1) {
-        const bool host_tier_requested =
-            cache.host_capacity_bytes.value_or(0) != 0 || cache.host_state_slots != 0 ||
-            cache.host_kv_capacity_bytes != 0;
+        const bool host_tier_requested = cache.host_capacity_bytes.value_or(0) != 0 ||
+                                         cache.host_state_slots != 0 ||
+                                         cache.host_kv_capacity_bytes != 0;
         if (host_tier_requested) {
             throw std::invalid_argument(
-                "tensor parallelism has no Host KV or state tier: the rank-1 replica is replayed on "
+                "tensor parallelism has no Host KV or state tier: the rank-1 replica is replayed "
+                "on "
                 "rank 1's stream and a host transfer would leave it stale. Clear the Host tier "
                 "options (--host-kv-mib, --host-state-slots, host context-cache capacity)");
         }
@@ -289,9 +286,10 @@ ConstructedModel construct_model(EngineOptions& options) {
 
     // `EngineOptions::token_logprobs` says a request asking for probabilities against an engine
     // loaded without the capability is *rejected* rather than answered with placeholders. Only the
-    // Flash-Next family implements the egress; the others silently returned empty score spans, which
-    // is the placeholder the contract forbids. Rejecting at load is the right place: the capability
-    // is fixed for the engine's lifetime, so a per-request check would only move the surprise later.
+    // Flash-Next family implements the egress; the others silently returned empty score spans,
+    // which is the placeholder the contract forbids. Rejecting at load is the right place: the
+    // capability is fixed for the engine's lifetime, so a per-request check would only move the
+    // surprise later.
     if (options.token_logprobs && architecture != models::Architecture::Qwen3_8FlashNext) {
         throw std::invalid_argument(
             "this architecture does not report token log-probabilities; load it without "
@@ -305,8 +303,8 @@ ConstructedModel construct_model(EngineOptions& options) {
             auto built = detail::build_distributed_model<models::qwen4_exp::ParallelStartup>(
                 reader, options, start);
             ConstructedModel constructed;
-            constructed.instance    = std::move(built.instance);
-            constructed.load        = std::move(built.load);
+            constructed.instance     = std::move(built.instance);
+            constructed.load         = std::move(built.load);
             constructed.context_cost = std::move(built.context_cost);
             return constructed;
         }
@@ -324,14 +322,14 @@ ConstructedModel construct_model(EngineOptions& options) {
     case models::Architecture::Qwen3_5Moe: {
         auto built = detail::build_local_model<models::qwen3_5::Startup>(reader, options, start);
         ConstructedModel constructed;
-        constructed.execution    = std::move(built.execution);
+        constructed.execution = std::move(built.execution);
         // The owner must cross this boundary. `built` is a local, so leaving `sharded` in it frees
         // the mailbox and the partial pair here — during startup — while both Programs keep raw
         // pointers into the group.
-        constructed.sharded      = std::move(built.sharded);
-        constructed.instance     = std::move(built.instance);
-        constructed.load         = std::move(built.load);
-        constructed.context_cost = std::move(built.context_cost);
+        constructed.sharded       = std::move(built.sharded);
+        constructed.instance      = std::move(built.instance);
+        constructed.load          = std::move(built.load);
+        constructed.context_cost  = std::move(built.context_cost);
         constructed.qwen3_5_peers = std::move(built.peers);
         return constructed;
     }

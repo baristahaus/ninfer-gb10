@@ -80,9 +80,9 @@ void speculative_accept_sparse_drafts(const Tensor& target_tokens, const Tensor&
         throw std::invalid_argument("speculative_accept_sparse_drafts: configs must be non-null");
     }
 
-    auto scratch_scope       = workspace.scope();
-    const auto plan          = sparse_drafts_detail::select_plan(token_domain, k + 1,
-                                                                 envelope.all_rows_greedy_without_penalties);
+    auto scratch_scope = workspace.scope();
+    const auto plan = sparse_drafts_detail::select_plan(token_domain, k + 1,
+                                                        envelope.all_rows_greedy_without_penalties);
     const std::size_t bytes  = plan.workspace.bytes * static_cast<std::size_t>(batch);
     const MemorySpan scratch = bytes == 0 ? MemorySpan{} : workspace.alloc_bytes(bytes);
     sparse_drafts_detail::launch(target_tokens, logits, drafts, candidate_ids, proposal_q,

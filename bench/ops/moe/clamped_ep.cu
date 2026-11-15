@@ -103,7 +103,7 @@ void run(const Options& o) {
                                         4ULL * (ep::K * t + selected.hits) +
                                         4ULL * route_experts.size() +
                                         unique * (o.format == "fp8" ? 16 : 24);
-            const double flops = 6.0 * ep::H * ep::I * selected.hits;
+            const double flops        = 6.0 * ep::H * ep::I * selected.hits;
             const double peak =
                 o.format == "nvfp4" ? kRoofline.nvfp4_f32_tflops : kRoofline.fp8_f32_tflops;
             measurement::Row row;

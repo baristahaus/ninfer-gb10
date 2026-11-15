@@ -75,12 +75,12 @@ struct IndexerFixture {
         counts     = make_zeros(std::size_t(tokens) * B * 4);
         query      = Tensor(query_data.span(), DType::BF16, {128, 4, tokens, B});
         Tensor keys(key_data.span().subspan(leading * 2), DType::BF16, {128, 16, 1, pages});
-        keys.nb[1]      = row_stride * 2;
-        keys.nb[2]      = 16 * keys.nb[1];
-        keys.nb[3]      = page_stride * 2;
-        cache           = {keys, Tensor(tables.span(), DType::I32, {logical, B})};
-        batch           = {Tensor(positions.span(), DType::I32, {tokens, B}),
-                           Tensor(valid.span(), DType::I32, {B}), Tensor(table_rows.span(), DType::I32, {B})};
+        keys.nb[1] = row_stride * 2;
+        keys.nb[2] = 16 * keys.nb[1];
+        keys.nb[3] = page_stride * 2;
+        cache      = {keys, Tensor(tables.span(), DType::I32, {logical, B})};
+        batch = {Tensor(positions.span(), DType::I32, {tokens, B}),
+                 Tensor(valid.span(), DType::I32, {B}), Tensor(table_rows.span(), DType::I32, {B})};
         selected        = {Tensor(ids.span(), DType::I32, {512, tokens, B}),
                            Tensor(counts.span(), DType::I32, {tokens, B})};
         workspace_bytes = ops::qsa_indexer_workspace_capacity_bytes(tokens, tokens, B, envelope);

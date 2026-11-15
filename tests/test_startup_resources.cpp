@@ -22,20 +22,20 @@ int check(bool condition, const char* message) {
 
 ninfer::MemorySummary populated_summary() {
     ninfer::MemorySummary summary;
-    summary.device                    = 0;
-    summary.kv_capacity               = 4096;
-    summary.kv_capacity_page_groups   = 64;
-    summary.weights.capacity_bytes    = 70ULL << 30U;
-    summary.weights.used_bytes        = 70ULL << 30U;
-    summary.sequence.capacity_bytes   = 512ULL << 20U;
-    summary.workspace.capacity_bytes  = 1ULL << 30U;
-    summary.workspace.used_bytes      = 128ULL << 20U;
-    summary.workspace.peak_used_bytes = 256ULL << 20U;
-    summary.workspace_logical_peak_bytes = 300ULL << 20U;
-    summary.kv_payload_bytes             = 2ULL << 30U;
-    summary.host_kv_capacity_bytes       = 1ULL << 30U;
-    summary.host_state_capacity_slots    = 4;
-    summary.runtime_reservation_bytes    = 3ULL << 30U;
+    summary.device                            = 0;
+    summary.kv_capacity                       = 4096;
+    summary.kv_capacity_page_groups           = 64;
+    summary.weights.capacity_bytes            = 70ULL << 30U;
+    summary.weights.used_bytes                = 70ULL << 30U;
+    summary.sequence.capacity_bytes           = 512ULL << 20U;
+    summary.workspace.capacity_bytes          = 1ULL << 30U;
+    summary.workspace.used_bytes              = 128ULL << 20U;
+    summary.workspace.peak_used_bytes         = 256ULL << 20U;
+    summary.workspace_logical_peak_bytes      = 300ULL << 20U;
+    summary.kv_payload_bytes                  = 2ULL << 30U;
+    summary.host_kv_capacity_bytes            = 1ULL << 30U;
+    summary.host_state_capacity_slots         = 4;
+    summary.runtime_reservation_bytes         = 3ULL << 30U;
     summary.minimum_runtime_reservation_bytes = 2ULL << 30U;
     summary.kv_capacity_increment_bytes       = 8ULL << 20U;
     summary.available_after_weights_bytes     = 20ULL << 30U;
@@ -89,25 +89,26 @@ int main() {
         rank.memory = ninfer::flashnext_runtime::rank_memory_usage(populated_summary());
         snapshot.ranks.push_back(std::move(rank));
 
-        const Json resources = ninfer::product::startup_resources_json(description, startup, snapshot);
-        failures += check(resources.at("ranks").size() == 1,
-                          "the startup record describes no rank");
-        failures += check(resources.at("total_allocations").at("device_weights_bytes") ==
-                              (70ULL << 30U),
-                          "the startup record reports no device weights");
+        const Json resources =
+            ninfer::product::startup_resources_json(description, startup, snapshot);
+        failures +=
+            check(resources.at("ranks").size() == 1, "the startup record describes no rank");
+        failures +=
+            check(resources.at("total_allocations").at("device_weights_bytes") == (70ULL << 30U),
+                  "the startup record reports no device weights");
         failures += check(resources.at("total_allocations").at("device_bytes") != 0,
                           "the startup record reports a zero device allocation");
-        failures += check(resources.at("ranks").at(0).at("budget").at("headroom_bytes") ==
-                              (12ULL << 30U),
-                          "the startup record lost the rank budget");
+        failures +=
+            check(resources.at("ranks").at(0).at("budget").at("headroom_bytes") == (12ULL << 30U),
+                  "the startup record lost the rank budget");
 
         // The shape the Flash-Next route produced before the fix: no ranks at all. The record must
         // still not claim an allocation, and this is the case the fix makes unreachable.
         ninfer::EngineDescription empty_description;
         ninfer::StartupReport empty_startup;
         ninfer::EngineSnapshot empty_snapshot;
-        const Json empty =
-            ninfer::product::startup_resources_json(empty_description, empty_startup, empty_snapshot);
+        const Json empty = ninfer::product::startup_resources_json(empty_description, empty_startup,
+                                                                   empty_snapshot);
         failures += check(empty.at("ranks").empty() &&
                               empty.at("total_allocations").at("device_bytes") == 0,
                           "an undescribed route invented an allocation");

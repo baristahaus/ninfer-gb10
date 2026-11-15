@@ -97,7 +97,8 @@ OrdinaryDecodeState::OrdinaryDecodeState(MemorySpan backing,
     egress                    = layout.egress.bind(backing);
     const auto count          = static_cast<std::int32_t>(batch_capacity);
     const auto ingress_tensor = [&](std::size_t offset, DType dtype) {
-        return Tensor(static_cast<unsigned char*>(ingress.data) + offset, ingress.device, dtype, {count});
+        return Tensor(static_cast<unsigned char*>(ingress.data) + offset, ingress.device, dtype,
+                      {count});
     };
     tokens          = ingress_tensor(offsetof(OrdinaryDecodeIngress, tokens), DType::I32);
     cache_positions = ingress_tensor(offsetof(OrdinaryDecodeIngress, cache_positions), DType::I32);
@@ -117,16 +118,14 @@ OrdinaryDecodeState::OrdinaryDecodeState(MemorySpan backing,
     token_logprobs = Tensor(static_cast<unsigned char*>(egress.data) +
                                 offsetof(OrdinaryDecodeEgress, token_logprobs),
                             egress.device, DType::FP32, {count});
-    top_ids        = Tensor(static_cast<unsigned char*>(egress.data) +
-                            offsetof(OrdinaryDecodeEgress, top_ids),
-                            egress.device, DType::I32,
-                            {ops::kMaxReportedLogprobRanks, count});
-    top_logprobs   = Tensor(static_cast<unsigned char*>(egress.data) +
-                            offsetof(OrdinaryDecodeEgress, top_logprobs),
-                            egress.device, DType::FP32,
-                            {ops::kMaxReportedLogprobRanks, count});
-    logits         = layout.logits.bind(backing);
-    hidden         = layout.hidden.bind(backing);
+    top_ids =
+        Tensor(static_cast<unsigned char*>(egress.data) + offsetof(OrdinaryDecodeEgress, top_ids),
+               egress.device, DType::I32, {ops::kMaxReportedLogprobRanks, count});
+    top_logprobs = Tensor(static_cast<unsigned char*>(egress.data) +
+                              offsetof(OrdinaryDecodeEgress, top_logprobs),
+                          egress.device, DType::FP32, {ops::kMaxReportedLogprobRanks, count});
+    logits       = layout.logits.bind(backing);
+    hidden       = layout.hidden.bind(backing);
 }
 
 void complete_round_state_layout(LayoutBuilder& builder, RoundStateLayout& layout) {
@@ -288,15 +287,17 @@ MtpDecodeState::MtpDecodeState(MemorySpan backing, const MtpDecodeStateLayout& l
     egress                    = layout.egress.bind(backing);
     const auto ingress_tensor = [&](std::size_t offset, DType dtype,
                                     std::initializer_list<std::int32_t> shape) {
-        return Tensor(static_cast<unsigned char*>(ingress.data) + offset, ingress.device, dtype, shape);
+        return Tensor(static_cast<unsigned char*>(ingress.data) + offset, ingress.device, dtype,
+                      shape);
     };
     const auto egress_tensor = [&](std::size_t offset, DType dtype,
                                    std::initializer_list<std::int32_t> shape) {
-        return Tensor(static_cast<unsigned char*>(egress.data) + offset, egress.device, dtype, shape);
+        return Tensor(static_cast<unsigned char*>(egress.data) + offset, egress.device, dtype,
+                      shape);
     };
     pending_folds = ingress_tensor(offsetof(MtpDecodeIngress, pending_folds), DType::I32,
                                    {4, static_cast<std::int32_t>(kMaximumConcurrency)});
-    anchors = ingress_tensor(offsetof(MtpDecodeIngress, anchors), DType::I32, {batch});
+    anchors       = ingress_tensor(offsetof(MtpDecodeIngress, anchors), DType::I32, {batch});
     base_frontiers =
         ingress_tensor(offsetof(MtpDecodeIngress, base_frontiers), DType::I32, {batch});
     remaining_budgets =
@@ -330,18 +331,18 @@ MtpDecodeState::MtpDecodeState(MemorySpan backing, const MtpDecodeStateLayout& l
         egress_tensor(offsetof(MtpDecodeEgress, accepted_drafts), DType::I32, {batch});
     next_drafts =
         egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, drafts});
-    next_extents     = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
+    next_extents = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
     token_logprobs =
         egress_tensor(offsetof(MtpDecodeEgress, token_logprobs), DType::FP32, {batch * width});
-    top_ids        = egress_tensor(offsetof(MtpDecodeEgress, top_ids), DType::I32,
-                            {ops::kMaxReportedLogprobRanks, batch * width});
-    top_logprobs   = egress_tensor(offsetof(MtpDecodeEgress, top_logprobs), DType::FP32,
-                            {ops::kMaxReportedLogprobRanks, batch * width});
-    verify_ids       = layout.verify_ids.bind(backing);
-    target_positions = layout.target_positions.bind(backing);
-    target_argmax    = layout.target_argmax.bind(backing);
-    target_logits    = layout.target_logits.bind(backing);
-    target_hidden    = layout.target_hidden.bind(backing);
+    top_ids                    = egress_tensor(offsetof(MtpDecodeEgress, top_ids), DType::I32,
+                                               {ops::kMaxReportedLogprobRanks, batch * width});
+    top_logprobs               = egress_tensor(offsetof(MtpDecodeEgress, top_logprobs), DType::FP32,
+                                               {ops::kMaxReportedLogprobRanks, batch * width});
+    verify_ids                 = layout.verify_ids.bind(backing);
+    target_positions           = layout.target_positions.bind(backing);
+    target_argmax              = layout.target_argmax.bind(backing);
+    target_logits              = layout.target_logits.bind(backing);
+    target_hidden              = layout.target_hidden.bind(backing);
     target_continuation_hidden = layout.target_continuation_hidden.bind(backing);
     if (layout.target_mtp_hidden) {
         target_mtp_hidden.emplace(layout.target_mtp_hidden->bind(backing));
@@ -386,11 +387,13 @@ DFlashDecodeState::DFlashDecodeState(MemorySpan backing, const DFlashDecodeState
     egress                    = layout.egress.bind(backing);
     const auto ingress_tensor = [&](std::size_t offset, DType dtype,
                                     std::initializer_list<std::int32_t> shape) {
-        return Tensor(static_cast<unsigned char*>(ingress.data) + offset, ingress.device, dtype, shape);
+        return Tensor(static_cast<unsigned char*>(ingress.data) + offset, ingress.device, dtype,
+                      shape);
     };
     const auto egress_tensor = [&](std::size_t offset, DType dtype,
                                    std::initializer_list<std::int32_t> shape) {
-        return Tensor(static_cast<unsigned char*>(egress.data) + offset, egress.device, dtype, shape);
+        return Tensor(static_cast<unsigned char*>(egress.data) + offset, egress.device, dtype,
+                      shape);
     };
     anchors = ingress_tensor(offsetof(DFlashDecodeIngress, anchors), DType::I32, {batch});
     ple_history =
@@ -448,18 +451,16 @@ RoundState::RoundState(MemorySpan backing, const RoundStateLayout& layout) {
     text_kv_table_row    = layout.text_kv_table_row.bind(backing);
     backend_kv_table_row = layout.backend_kv_table_row.bind(backing);
     static_assert(std::is_standard_layout_v<PrefillRoundReport>);
-    report = layout.report.bind(backing);
+    report         = layout.report.bind(backing);
     report_logprob = Tensor(static_cast<unsigned char*>(report.data) +
                                 offsetof(PrefillRoundReport, token_logprob),
                             report.device, DType::FP32, {1});
-    report_top_ids = Tensor(static_cast<unsigned char*>(report.data) +
-                                offsetof(PrefillRoundReport, top_ids),
-                            report.device, DType::I32,
-                            {ops::kMaxReportedLogprobRanks, 1});
-    report_top_logprobs =
-        Tensor(static_cast<unsigned char*>(report.data) +
-                   offsetof(PrefillRoundReport, top_logprobs),
-               report.device, DType::FP32, {ops::kMaxReportedLogprobRanks, 1});
+    report_top_ids =
+        Tensor(static_cast<unsigned char*>(report.data) + offsetof(PrefillRoundReport, top_ids),
+               report.device, DType::I32, {ops::kMaxReportedLogprobRanks, 1});
+    report_top_logprobs = Tensor(static_cast<unsigned char*>(report.data) +
+                                     offsetof(PrefillRoundReport, top_logprobs),
+                                 report.device, DType::FP32, {ops::kMaxReportedLogprobRanks, 1});
     if (layout.mtp) { mtp.emplace(backing, *layout.mtp); }
     if (layout.dflash_prefill) { dflash_prefill.emplace(backing, *layout.dflash_prefill); }
     if (layout.mtp_decode) {

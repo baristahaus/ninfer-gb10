@@ -85,9 +85,7 @@ int main(int argc, char** argv) try {
             return 2;
         }
     }
-    if (tokens.empty()) {
-        tokens = {8, 256, 4096, 49152, 65536};
-    }
+    if (tokens.empty()) { tokens = {8, 256, 4096, 49152, 65536}; }
     for (const int tokens_value : tokens) { run(d, tokens_value, benchmark); }
     return 0;
 } catch (const std::exception& error) {

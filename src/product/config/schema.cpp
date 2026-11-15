@@ -26,8 +26,8 @@ constexpr FieldSpec kFields[] = {
      "Shared Main KV capacity; context follows --max-context."},
     {Field::PrefillChunk, "engine.prefill_chunk", "--prefill-chunk", "", "N|default",
      "Positive multiple of 128; default is resolved by the model."},
-    {Field::PrefillDecodeShare, "engine.prefill_decode_share", "--prefill-decode-share", "",
-     "PCT", "Decode time owed to running requests per prefill chunk, in percent (0..1000)."},
+    {Field::PrefillDecodeShare, "engine.prefill_decode_share", "--prefill-decode-share", "", "PCT",
+     "Decode time owed to running requests per prefill chunk, in percent (0..1000)."},
     {Field::LongPrefillWait, "engine.long_prefill_wait", "--long-prefill-wait-ms", "", "N",
      "How long a decode-ready request waits behind a long prefill before it is served."},
     {Field::RopeYarnFactor, "engine.rope_yarn_factor", "--rope-yarn-factor", "", "F|default",
@@ -90,8 +90,8 @@ constexpr FieldSpec kFields[] = {
      "Thinking override; also accepts =model."},
     {Field::PreserveThinking, "generation.preserve_thinking", "--preserve-thinking",
      "--no-preserve-thinking", "", "Retain closed-turn reasoning; also accepts =model."},
-    {Field::TokenLogprobs, "generation.token_logprobs", "--token-logprobs",
-     "--no-token-logprobs", "",
+    {Field::TokenLogprobs, "generation.token_logprobs", "--token-logprobs", "--no-token-logprobs",
+     "",
      "Report per-token log-probabilities of sampled tokens; requests that ask for them are "
      "rejected otherwise."},
     {Field::ThinkingBudget, "generation.thinking_budget", "--thinking-budget", "", "N|none",
@@ -120,8 +120,7 @@ constexpr FieldSpec kFields[] = {
     {Field::Cors, "server.cors", "--cors", "--no-cors", "", "Permissive CORS headers.",
      Scope::Serve},
     {Field::IgnoreEos, "server.ignore_eos", "--ignore-eos", "--no-ignore-eos", "",
-     "Suppress model end-of-sequence stop tokens on this instance; benchmark knob.",
-     Scope::Serve},
+     "Suppress model end-of-sequence stop tokens on this instance; benchmark knob.", Scope::Serve},
     {Field::MaxRequestSize, "server.max_request_size", "--max-request-size", "", "SIZE",
      "HTTP body limit before JSON parsing (384MiB).", Scope::Serve, ConfigurationUnit::Bytes},
     {Field::ResponseRecords, "server.responses.max_records", "--response-store-max-records", "",
@@ -140,8 +139,8 @@ constexpr FieldSpec kFields[] = {
      Scope::Serve},
     {Field::PrefillMissMinTokens, "server.prefill_miss.min_tokens", "--prefill-miss-min-tokens", "",
      "N", "Recomputed prompt tokens a dump requires (10000).", Scope::Serve},
-    {Field::PrefillMissMinMatch, "server.prefill_miss.min_match", "--prefill-miss-min-match", "", "F",
-     "Share of the prompt that must match a recent context, in [0,1] (0.5).", Scope::Serve},
+    {Field::PrefillMissMinMatch, "server.prefill_miss.min_match", "--prefill-miss-min-match", "",
+     "F", "Share of the prompt that must match a recent context, in [0,1] (0.5).", Scope::Serve},
     {Field::ReasoningCloseRetry, "server.reasoning_close_retry", "--reasoning-close-retry",
      "--no-reasoning-close-retry", "",
      "Close a reply that stopped while thinking was open and continue it once.", Scope::Serve},
@@ -150,8 +149,8 @@ constexpr FieldSpec kFields[] = {
      "Record per-step accepted draft lengths on request_done; needs --request-log-jsonl.",
      Scope::Serve},
     {Field::SpeculationDetailMaxSteps, "logging.speculation_detail_max_steps",
-     "--log-speculation-detail-max-steps", "", "N",
-     "Decode steps recorded per request (4096).", Scope::Serve},
+     "--log-speculation-detail-max-steps", "", "N", "Decode steps recorded per request (4096).",
+     Scope::Serve},
     {Field::Prompt, "cli.prompt", "--prompt", "", "TEXT",
      "Prompt text, mutually exclusive with --messages.", Scope::Cli},
     {Field::Messages, "cli.messages", "--messages", "", "FILE",
@@ -393,7 +392,8 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
             const std::string piece =
                 raw.substr(begin, comma == std::string::npos ? std::string::npos : comma - begin);
             result.push_back(static_cast<std::uint32_t>(
-                integer(RawValue{piece}, true, 0, static_cast<std::uint64_t>(std::numeric_limits<int>::max()))));
+                integer(RawValue{piece}, true, 0,
+                        static_cast<std::uint64_t>(std::numeric_limits<int>::max()))));
             if (comma == std::string::npos) { break; }
             begin = comma + 1;
         }

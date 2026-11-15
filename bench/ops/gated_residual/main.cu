@@ -74,9 +74,9 @@ int main(int argc, char** argv) {
                     row.workspace_bytes = f.workspace_capacity();
                     row.workspace_peak  = f.workspace_peak();
                     auto extra          = std::string(options.in_place ? "inplace," : "disjoint,") +
-                                 std::to_string(options.condition_us);
-                    const int m      = hc::columns(tokens, options.batch);
-                    const auto bytes = logical_bytes(options.op, m);
+                                          std::to_string(options.condition_us);
+                    const int m         = hc::columns(tokens, options.batch);
+                    const auto bytes    = logical_bytes(options.op, m);
                     extra += ',' + std::to_string(bytes) + ',' +
                              format_metric(bytes / (result.gpu.median_us * 1000.0), 3, "") + ',' +
                              format_metric(bytes / (kRoofline.memory_gbs * 1000.0), 3, "");

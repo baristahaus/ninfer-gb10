@@ -33,7 +33,7 @@ using S7 = Bf16MtpQsaSplitSchedule<
 using S8 = Bf16MtpQsaSplitSchedule<Bf16A16TmaMmaSchedule<64, 64, 64, 32, 32, 3, 2>>;
 
 using Wide      = Bf16MtpQsaSplitSchedule<Bf16ScheduleInstance<
-         Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::TokenFast, 1, 3>, 2560>>;
+    Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::TokenFast, 1, 3>, 2560>>;
 using WarpLarge = Bf16MtpQsaSplitSchedule<Bf16ScheduleInstance<
     Bf16A16TmaMmaSchedule<128, 256, 64, 64, 64, 2, 1, Bf16MmaRaster::Grouped, 8, 2>, 2560>>;
 

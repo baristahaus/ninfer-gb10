@@ -14,7 +14,7 @@ using Small =
                               Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>>;
 using Medium = Bf16N4096K128Schedule<Static<Bf16A16TmaMmaSchedule<128, 64, 64, 32, 32, 2, 2>>>;
 using Bulk   = Bf16N4096K128Schedule<
-      Static<Bf16A16TmaMmaSchedule<64, 128, 64, 32, 32, 2, 2, Bf16MmaRaster::Grouped, 8, 3>>>;
+    Static<Bf16A16TmaMmaSchedule<64, 128, 64, 32, 32, 2, 2, Bf16MmaRaster::Grouped, 8, 3>>>;
 
 template <class Schedule>
 void vector_store(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {

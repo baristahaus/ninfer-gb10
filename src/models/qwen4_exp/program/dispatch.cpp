@@ -243,8 +243,8 @@ void RankProgramImpl::commit(runtime::ExecutionTicket ticket, runtime::CommandSe
         if (work.sample != SampleKind::None)
             for (std::size_t b = 0; b < commit.rows.size(); ++b) {
                 if (!commit.rows[b].accepted) continue;
-                auto id = packed_tensor(*io.sampled_ids, {static_cast<int>(commit.rows.size())})
-                              .slice(0, b, 1);
+                auto id     = packed_tensor(*io.sampled_ids, {static_cast<int>(commit.rows.size())})
+                                  .slice(0, b, 1);
                 auto counts = device_tensor(*io.token_counts)
                                   .slice(1, commit.rows[b].member.residency.lane.value, 1);
                 ops::increment_token_counts(id, counts, cuda);

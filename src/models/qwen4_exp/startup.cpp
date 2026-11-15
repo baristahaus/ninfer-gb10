@@ -26,26 +26,23 @@ Startup::Startup(const artifact::Reader& definition_source, const artifact::Read
 }
 
 runtime::SequenceCapacityCurve Startup::capacity_curve(DeviceContext& device,
-                                                        const EngineOptions& options,
-                                                        WeightPlacement placement) const {
+                                                       const EngineOptions& options,
+                                                       WeightPlacement placement) const {
     if (placement == WeightPlacement::HostExperts) {
         throw std::invalid_argument("a host-expert placement has no standalone capacity curve");
     }
     return describe_execution_capacity(profile, options, device);
 }
 
-std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
-                                                    const EngineOptions& options,
-                                                    WeightPlacement placement,
-                                                    std::size_t available,
-                                                    std::optional<std::uint32_t>
-                                                        published_tokens) const {
+std::optional<Startup::ExecutionPlan>
+Startup::plan(DeviceContext& device, const EngineOptions& options, WeightPlacement placement,
+              std::size_t available, std::optional<std::uint32_t> published_tokens) const {
     const bool host = placement == WeightPlacement::HostExperts;
     if (host && !offload_) return {};
     // A published capacity is the group's decision; resolving here would be a second one.
     auto effective = options;
     if (published_tokens) {
-        effective.kv_capacity                  = KvCapacityPolicy::explicit_capacity(*published_tokens);
+        effective.kv_capacity = KvCapacityPolicy::explicit_capacity(*published_tokens);
         effective.kv_capacity.automatic_headroom_bytes = 0;
     }
     auto planned = plan_execution(profile, table_->geometry(), effective, device, available,
@@ -55,7 +52,11 @@ std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
     if (published_tokens) { capacity.mode = options.kv_capacity.mode; }
     const auto chunk = planned->shape.prefill_chunk;
     const auto moe   = planned->moe;
-    return ExecutionPlan{std::move(*planned), capacity, placement, chunk, {moe},
+    return ExecutionPlan{std::move(*planned),
+                         capacity,
+                         placement,
+                         chunk,
+                         {moe},
                          describe_execution_capacity(profile, options, device)};
 }
 

@@ -32,8 +32,8 @@ off_t position(std::uint64_t value) {
 
 // The magic numbers are the kernel's superblock types, not guesses: NFS_SUPER_MAGIC (NFSv3 and
 // NFSv4 both), CIFS_MAGIC_NUMBER, SMB2_MAGIC_NUMBER (SMB2 and SMB3), FUSE_SUPER_MAGIC and
-// V9FS_MAGIC. A filesystem not listed here is not known to be unable to serve direct reads, so it is
-// accepted; refusing an unknown type would break local filesystems the engine has never seen.
+// V9FS_MAGIC. A filesystem not listed here is not known to be unable to serve direct reads, so it
+// is accepted; refusing an unknown type would break local filesystems the engine has never seen.
 constexpr std::uint64_t kNfsSuperMagic  = 0x6969;
 constexpr std::uint64_t kCifsMagic      = 0xFF534D42;
 constexpr std::uint64_t kSmb2Magic      = 0xFE534D42;
@@ -44,17 +44,23 @@ constexpr std::uint64_t kV9fsMagic      = 0x01021997;
 
 const char* unsupported_direct_io_filesystem(std::uint64_t f_type) noexcept {
     switch (f_type) {
-    case kNfsSuperMagic: return "NFS";
-    case kCifsMagic: return "CIFS";
-    case kSmb2Magic: return "SMB";
-    case kFuseSuperMagic: return "FUSE";
-    case kV9fsMagic: return "9P";
-    default: return nullptr;
+    case kNfsSuperMagic:
+        return "NFS";
+    case kCifsMagic:
+        return "CIFS";
+    case kSmb2Magic:
+        return "SMB";
+    case kFuseSuperMagic:
+        return "FUSE";
+    case kV9fsMagic:
+        return "9P";
+    default:
+        return nullptr;
     }
 }
 
 std::uint64_t filesystem_type(const std::filesystem::path& path) {
-    struct statfs status {};
+    struct statfs status{};
     if (::statfs(path.c_str(), &status)) fail(path, "statfs");
     return static_cast<std::uint64_t>(status.f_type);
 }
@@ -67,14 +73,14 @@ ReadOnlyFile::ReadOnlyFile(const std::filesystem::path& path, ReadMode mode) : p
     if (view_.descriptor < 0) fail(path, "open");
     view_.mode = mode;
     try {
-        struct stat status {};
+        struct stat status{};
 
         if (::fstat(view_.descriptor, &status)) fail(path, "fstat");
         if (status.st_size < 0 || !S_ISREG(status.st_mode))
             fail(path, "expected regular file", EINVAL);
         view_.bytes = static_cast<std::uint64_t>(status.st_size);
         if (mode == ReadMode::Direct) {
-            struct statx alignment {};
+            struct statx alignment{};
 
             const bool reported = ::statx(view_.descriptor, "", AT_EMPTY_PATH | AT_STATX_DONT_SYNC,
                                           STATX_DIOALIGN, &alignment) == 0 &&
@@ -173,7 +179,6 @@ DirectReadWindow direct_read_window(FileView file, std::uint64_t offset, std::si
     return {offset - prefix, count, prefix, required};
 }
 
-
 std::shared_ptr<const std::byte> ReadOnlyFile::map(std::uint64_t offset,
                                                    std::uint64_t bytes) const {
     if (bytes == 0 || offset > view_.bytes || bytes > view_.bytes - offset) {
@@ -183,7 +188,8 @@ std::shared_ptr<const std::byte> ReadOnlyFile::map(std::uint64_t offset,
     const auto start  = offset / page * page;
     const auto delta  = offset - start;
     const auto length = bytes + delta;
-    void* ptr         = ::mmap(nullptr, length, PROT_READ, MAP_PRIVATE, view_.descriptor, static_cast<off_t>(start));
+    void* ptr         = ::mmap(nullptr, length, PROT_READ, MAP_PRIVATE, view_.descriptor,
+                               static_cast<off_t>(start));
     if (ptr == MAP_FAILED) {
         throw std::system_error(errno, std::generic_category(), "map artifact range");
     }

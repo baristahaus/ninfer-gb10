@@ -141,7 +141,7 @@ struct DecoderStateLayout {
 // Throws std::invalid_argument for a width below 1, a rank outside `[0, width)`, a non-positive
 // `kv_heads`, or a `kv_heads` that does not divide by `width`.
 [[nodiscard]] DecoderStateSpec shard_decoder_state_spec(const DecoderStateSpec& spec, int width,
-                                                       int rank);
+                                                        int rank);
 
 struct DecoderState {
     PagedKVCache text_kv;

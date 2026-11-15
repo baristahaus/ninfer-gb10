@@ -106,10 +106,10 @@ Parameters::Parameters(const ModelShard& model, std::shared_ptr<const ModelProfi
     for (std::size_t i = 0; i < w.text.layers.size(); ++i)
         text.layers.push_back(p.block(w.text.layers[i], this->profile->text.layers.at(i), false));
     const auto& ple = w.text.ple;
-    text.ple        = {p.linear({ple.key, ple.value}),
-                       {p.hc_norm(ple.norm_key), p.hc_norm(ple.norm_query), p.hc_norm(ple.norm_conv),
-                        this->profile->config.text.norm_epsilon},
-                       p.tensor(ple.convolution)};
+    text.ple = {p.linear({ple.key, ple.value}),
+                {p.hc_norm(ple.norm_key), p.hc_norm(ple.norm_query), p.hc_norm(ple.norm_conv),
+                 this->profile->config.text.norm_epsilon},
+                p.tensor(ple.convolution)};
     if (w.mtp) {
         const auto& m = *w.mtp;
         mtp           = {native_weight(model.weight(m.embedding).view),

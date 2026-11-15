@@ -172,16 +172,16 @@ void test_vision_control() {
     prompt.prepare.vision_tokens = 3;
     prompt.vision_items          = {
         ninfer::models::qwen::VisionItem{.modality    = ninfer::models::qwen::Modality::Image,
-                                                  .grid        = {.temporal = 1, .height = 2, .width = 2},
-                                                  .patch_begin = 0,
-                                                  .patch_count = 4,
-                                                  .token_spans = {{.begin = 1, .count = 1}}},
+                                         .grid        = {.temporal = 1, .height = 2, .width = 2},
+                                         .patch_begin = 0,
+                                         .patch_count = 4,
+                                         .token_spans = {{.begin = 1, .count = 1}}},
         ninfer::models::qwen::VisionItem{
-                     .modality    = ninfer::models::qwen::Modality::Video,
-                     .grid        = {.temporal = 2, .height = 2, .width = 2},
-                     .patch_begin = 4,
-                     .patch_count = 8,
-                     .token_spans = {{.begin = 3, .count = 1}, {.begin = 5, .count = 1}}},
+            .modality    = ninfer::models::qwen::Modality::Video,
+            .grid        = {.temporal = 2, .height = 2, .width = 2},
+            .patch_begin = 4,
+            .patch_count = 8,
+            .token_spans = {{.begin = 3, .count = 1}, {.begin = 5, .count = 1}}},
     };
 
     const ninfer::models::qwen::VisionControlPlan plan = ninfer::models::qwen::plan_vision_control(

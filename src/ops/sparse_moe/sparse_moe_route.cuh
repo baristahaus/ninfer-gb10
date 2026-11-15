@@ -60,16 +60,16 @@ sparse_moe_merge_ranked_runs(SparseMoeRankedValue (&run)[kSparseMoeTopK]) {
 // SP-4 phase 2b: the per-expert residency entry. Bit 31 marks the warm tier; the low 31
 // bits are the expert's compacted rank in its bank. A null table selects the untiered
 // direct path: the expert reads the device bank at its own rank.
-__device__ __forceinline__ void sparse_moe_residency(const unsigned* __restrict__ table,
-                                                     int expert, bool& warm, int& rank) {
+__device__ __forceinline__ void sparse_moe_residency(const unsigned* __restrict__ table, int expert,
+                                                     bool& warm, int& rank) {
     if (table == nullptr) {
         warm = false;
         rank = expert;
         return;
     }
     const unsigned entry = table[expert];
-    warm = (entry & 0x80000000u) != 0u;
-    rank = static_cast<int>(entry & 0x7fffffffu);
+    warm                 = (entry & 0x80000000u) != 0u;
+    rank                 = static_cast<int>(entry & 0x7fffffffu);
 }
 
 __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores, int* ids,
@@ -124,10 +124,9 @@ __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores,
 // Ranking is a total order over distinct expert ids, so the selected set and its order are the
 // same as the ones any other correct selection produces.
 template <int Experts, int TopK>
-__device__ __forceinline__ void sparse_moe_select_topk_warp(const float* scores, int* ids,
-                                                            float* alpha, float* shared_scale,
-                                                            float* selected_logits,
-                                                            std::uint32_t* expert_activations) {
+__device__ __forceinline__ void
+sparse_moe_select_topk_warp(const float* scores, int* ids, float* alpha, float* shared_scale,
+                            float* selected_logits, std::uint32_t* expert_activations) {
     constexpr int kPerLane = Experts / 32;
     static_assert(kPerLane >= TopK, "top-k selection needs Experts/32 >= TopK");
     const int lane = static_cast<int>(threadIdx.x) & 31;
@@ -161,8 +160,8 @@ __device__ __forceinline__ void sparse_moe_select_topk_warp(const float* scores,
         SparseMoeRankedValue merged[2 * TopK];
 #pragma unroll
         for (int rank = 0; rank < TopK; ++rank) {
-            merged[rank]         = run[rank];
-            merged[TopK + rank]  = other[rank];
+            merged[rank]        = run[rank];
+            merged[TopK + rank] = other[rank];
         }
         // Full register-local insertion sort over the two runs' union; the better TopK stay.
 #pragma unroll

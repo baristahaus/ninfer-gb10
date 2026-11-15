@@ -109,8 +109,8 @@ std::vector<ExpertBankSource> bind_banks(std::span<const BankDescription> banks,
         const auto device = devices[i];
         const auto bind   = [&](const MatrixSource& source) {
             const auto& parent = device.type() == DeviceType::CPU
-                                       ? backing.host_parent(source.object)
-                                       : backing.device_parent(source.object);
+                                     ? backing.host_parent(source.object)
+                                     : backing.device_parent(source.object);
             if (parent.device != device) {
                 throw artifact::ArtifactError("expert source device differs");
             }

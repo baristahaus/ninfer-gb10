@@ -7,17 +7,17 @@ namespace {
 Plan select_plan(int tokens, int shared_intermediate, ExpertSubsetKind) {
     Plan plan;
     plan.implementation = kernel::ExpertImplementation::BlockScaled;
-    plan.block_scaled   = {.format                  = QType::NVFP4,
-                           .gate_columns            = 8,
-                           .down_columns            = 8,
-                           .vector                  = tokens == 1,
-                           .atomic_output           = tokens >= 128,
-                           .single_block_grouping   = tokens <= 64,
-                           .column_major_down       = tokens >= 1024,
-                           .preserve_balanced_down  = true,
-                           .shared_algorithm        = tokens < 8
-                                                          ? kernel::block_scaled::SharedAlgorithm::Vector
-                                                          : kernel::block_scaled::SharedAlgorithm::Mma,
+    plan.block_scaled   = {.format                 = QType::NVFP4,
+                           .gate_columns           = 8,
+                           .down_columns           = 8,
+                           .vector                 = tokens == 1,
+                           .atomic_output          = tokens >= 128,
+                           .single_block_grouping  = tokens <= 64,
+                           .column_major_down      = tokens >= 1024,
+                           .preserve_balanced_down = true,
+                           .shared_algorithm = tokens < 8
+                                                   ? kernel::block_scaled::SharedAlgorithm::Vector
+                                                   : kernel::block_scaled::SharedAlgorithm::Mma,
                            .shared_split_activation = shared_intermediate != 320 || tokens < 128,
                            .network_topk            = true,
                            .shared_columns          = tokens >= 512 ? 64 : 32,

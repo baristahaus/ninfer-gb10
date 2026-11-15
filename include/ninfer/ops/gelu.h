@@ -3,7 +3,6 @@
 #include "core/device.h"
 #include "core/tensor.h"
 
-
 namespace ninfer::ops {
 
 enum class GeluMode {

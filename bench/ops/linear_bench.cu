@@ -617,7 +617,7 @@ Result make_result(const BenchPoint& point, const LinearBenchWeight& weight,
         checked_add(weight.model_weight_bytes(), x_bytes, "model bytes"), out_bytes, "model bytes");
     const double useful_flops = 2.0 * static_cast<double>(point.n) * static_cast<double>(point.k) *
                                 static_cast<double>(point.t);
-    const double seconds = timing.median_us * 1.0e-6;
+    const double seconds      = timing.median_us * 1.0e-6;
     const double memory_floor_us =
         static_cast<double>(model_bytes) / (bench::kRoofline.memory_gbs * 1.0e9) * 1.0e6;
 

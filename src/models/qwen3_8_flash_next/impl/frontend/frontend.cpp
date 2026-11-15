@@ -33,10 +33,10 @@
 namespace ninfer::models::qwen3_8_flash_next {
 namespace {
 
-using Json   = nlohmann::json;
-using Clock  = std::chrono::steady_clock;
-namespace fi = frontend_internal;
-namespace qf = ninfer::models::qwen::frontend;
+using Json              = nlohmann::json;
+using Clock             = std::chrono::steady_clock;
+namespace fi            = frontend_internal;
+namespace qf            = ninfer::models::qwen::frontend;
 using FrontendProcessor = qf::Processor<fi::FlashNextProcessorFamily>;
 using MediaCache        = qf::MediaCache<fi::FlashNextMediaCacheFamily>;
 
@@ -365,7 +365,8 @@ VisionItem convert_vision_item(fi::VisionItem item) {
     VisionItem result;
     result.modality =
         item.modality == fi::Modality::Image ? PromptModality::Image : PromptModality::Video;
-    result.grid = VisionGrid{.temporal = item.grid.temporal, .height = item.grid.height, .width = item.grid.width};
+    result.grid = VisionGrid{
+        .temporal = item.grid.temporal, .height = item.grid.height, .width = item.grid.width};
     result.patch_begin    = item.patch_begin;
     result.patch_count    = item.patch_count;
     result.content_digest = item.content_digest;
@@ -931,8 +932,7 @@ public:
                                      .tokenizer_config_json  = resources.tokenizer_config_json,
                                      .generation_config_json = resources.generation_config_json})),
           processor(options.vision_enabled ? processor_options(resources) : qf::ProcessorOptions{}),
-          vision_enabled(options.vision_enabled),
-          max_context(options.max_context) {
+          vision_enabled(options.vision_enabled), max_context(options.max_context) {
         if (options.max_context == 0) {
             throw std::invalid_argument("frontend max_context must be nonzero");
         }
@@ -1070,26 +1070,26 @@ std::string_view PreparedPrompt::tier_session_key() const noexcept {
     // their regions, prose spreads over others. The hash lives in the data's own storage
     // so the returned view stays valid with the prompt.
     if (!data_->tier_session_hash_valid) {
-        auto hash = std::uint64_t{0xcbf29ce484222325ULL};
+        auto hash                             = std::uint64_t{0xcbf29ce484222325ULL};
         constexpr std::uint64_t kVocabRegions = 16;
-        constexpr std::uint64_t kVocabSize = 248320;
+        constexpr std::uint64_t kVocabSize    = 248320;
         std::array<std::uint32_t, kVocabRegions> counts{};
         for (const auto token : data_->token_ids) {
             if (token < 0 || static_cast<std::uint64_t>(token) >= kVocabSize) { continue; }
             counts[static_cast<std::uint64_t>(token) * kVocabRegions / kVocabSize] += 1;
         }
         std::array<std::uint32_t, kVocabRegions> order{};
-        for (std::size_t i = 0; i < kVocabRegions; ++i) { order[i] = static_cast<std::uint32_t>(i); }
-        std::partial_sort(order.begin(), order.begin() + 2, order.end(),
-                          [&counts](std::uint32_t a, std::uint32_t b) {
-                              return counts[a] > counts[b];
-                          });
+        for (std::size_t i = 0; i < kVocabRegions; ++i) {
+            order[i] = static_cast<std::uint32_t>(i);
+        }
+        std::partial_sort(
+            order.begin(), order.begin() + 2, order.end(),
+            [&counts](std::uint32_t a, std::uint32_t b) { return counts[a] > counts[b]; });
         const auto dominant = (std::uint64_t{order[0]} << 4) | std::uint64_t{order[1]};
         hash ^= dominant;
         hash *= 0x100000001b3ULL;
         // Length bucket: the working-set size scales with the prompt length.
-        const auto length_bucket = std::min<std::uint64_t>(
-            15, data_->token_ids.size() / 1024);
+        const auto length_bucket = std::min<std::uint64_t>(15, data_->token_ids.size() / 1024);
         hash ^= length_bucket << 8;
         hash *= 0x100000001b3ULL;
         for (const auto& item : data_->vision_items) {
@@ -1108,8 +1108,8 @@ std::string_view PreparedPrompt::tier_session_key() const noexcept {
 PromptSummary PreparedPrompt::summary() const {
     if (data_ == nullptr) { throw std::logic_error("prepared prompt is empty"); }
     return PromptSummary{.starts_in_reasoning = data_->starts_in_reasoning,
-                         .prompt_tokens = checked_token_count(data_->token_ids.size()),
-                         .has_media     = data_->has_media()};
+                         .prompt_tokens       = checked_token_count(data_->token_ids.size()),
+                         .has_media           = data_->has_media()};
 }
 
 std::span<const TokenId> PreparedPrompt::token_ids() const {
@@ -1533,7 +1533,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
     if (has_media) {
         FrontendProcessor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                                impl_->media_cache);
+                                    impl_->media_cache);
         fi::ProcessedInput processed;
         try {
             processed =
@@ -1595,10 +1595,9 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         std::move(cache_hints), message_count, message_boundaries, rendered_markers,
         cache_boundaries, result.vision_items, engine_tool_marker_index, leading_boundary,
         checked_token_count(result.token_ids.size()));
-    result.starts_in_reasoning =
-        options.continuation == PromptContinuationMode::NewAssistantTurn &&
-        options.enable_thinking.value_or(true);
-    result.prepare.seconds = std::chrono::duration<double>(Clock::now() - start).count();
+    result.starts_in_reasoning = options.continuation == PromptContinuationMode::NewAssistantTurn &&
+                                 options.enable_thinking.value_or(true);
+    result.prepare.seconds     = std::chrono::duration<double>(Clock::now() - start).count();
     return PreparedPrompt(std::move(prepared));
 }
 
@@ -1622,14 +1621,12 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
     }
 
     FrontendProcessor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                            impl_->media_cache);
+                                impl_->media_cache);
     try {
         return checked_token_count(
             processor.count_tokens(std::move(messages), render_options(options), control));
     } catch (const qf::ProcessorError& error) { throw_processor_error(error); }
 }
-
-
 
 MediaCacheSummary Frontend::media_cache_summary() const {
     if (impl_ == nullptr || !impl_->media_cache) { return {}; }

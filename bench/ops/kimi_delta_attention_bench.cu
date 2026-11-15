@@ -189,7 +189,7 @@ void run(Profile p, int t, int b, const Options& o, DeviceContext& ctx,
         const auto s = cuda.stream();
         if (o.batch_update)
             CUDA_CHECK(cudaMemcpyAsync(f.final.data(), f.initial.data(), f.initial.size(),
-                                          cudaMemcpyDeviceToDevice, s));
+                                       cudaMemcpyDeviceToDevice, s));
     };
     auto measure = [&](auto&& body) {
         reset(ex);

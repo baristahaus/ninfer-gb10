@@ -12,11 +12,12 @@
 // "<think>\n", or after some reasoning. The reply then has blank content and no tool call, and an
 // agent harness stops. The remedy is to close the thinking with the canonical "\n</think>\n\n" and
 // let the model continue once from the reply so far. A reply that stops right after "</think>" with
-// blank content is resumed once from the same point with a different seed. A reply that does not end
-// this way is untouched.
+// blank content is resumed once from the same point with a different seed. A reply that does not
+// end this way is untouched.
 //
 // Adaptations against capy:
-//  - `ReasoningGuardTokens` lives here instead of in `include/ninfer/types.h`: our public Engine has
+//  - `ReasoningGuardTokens` lives here instead of in `include/ninfer/types.h`: our public Engine
+//  has
 //    no `reasoning_guard_tokens()` accessor yet (capy's does), so the token ids are supplied by the
 //    caller. The struct is engine-owned data in capy; this is the seam where that accessor belongs.
 //  - The membership test of the last generated token in `stop_token_ids` is dropped. The planner
@@ -40,7 +41,7 @@ namespace ninfer::serve {
 // Keep in step with kCanonicalReasoningCloseSerialization in
 // src/models/common/qwen/frontend/chat_template.h (model-side, not visible to serve).
 inline constexpr std::string_view kReasoningCloseSerialization = "\n</think>\n\n";
-inline constexpr std::string_view kReasoningThinkClose        = "</think>";
+inline constexpr std::string_view kReasoningThinkClose         = "</think>";
 
 enum class ReasoningRetryTrigger : std::uint8_t {
     None,

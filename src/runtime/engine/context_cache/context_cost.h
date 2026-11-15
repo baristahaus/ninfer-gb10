@@ -130,10 +130,10 @@ resolve_context_machine_cost(const ContextCostIdentity& identity,
                              const std::filesystem::path& external_preset_path = {});
 
 // Calibration updates one independently measurable component and preserves every other component.
-void upsert_context_transfer_cost_atomic(const std::filesystem::path& path,
-                                         std::string_view hardware_class,
-                                         const std::array<ContextTransferCost, kContextTransferDirectionCount>& transfer,
-                                         std::string_view provenance_json);
+void upsert_context_transfer_cost_atomic(
+    const std::filesystem::path& path, std::string_view hardware_class,
+    const std::array<ContextTransferCost, kContextTransferDirectionCount>& transfer,
+    std::string_view provenance_json);
 void upsert_context_prefill_cost_atomic(const std::filesystem::path& path,
                                         const ContextCostIdentity& identity,
                                         const ContextPrefillCost& prefill,

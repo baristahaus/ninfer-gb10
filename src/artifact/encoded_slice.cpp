@@ -94,12 +94,12 @@ EncodedTensor slice_tensor(const Reader& reader, std::span<const std::uint64_t> 
             throw ArtifactError("encoded selection splits a scale block");
         const auto groups = full_columns ? g.padded_columns / group : s.columns / group;
         const auto plane  = [&](std::uint64_t source_base, std::uint64_t destination_base,
-                               std::uint64_t source_row, std::uint64_t destination_row) {
+                                std::uint64_t source_row, std::uint64_t destination_row) {
             const auto word = source_row / (g.padded_columns / group);
             copy(source_base + s.row * source_row + s.column / group * word,
-                  destination_base + s.destination_row * destination_row +
-                      s.destination_column / group * word,
-                  groups * word, s.rows, source_row, destination_row);
+                 destination_base + s.destination_row * destination_row +
+                     s.destination_column / group * word,
+                 groups * word, s.rows, source_row, destination_row);
         };
         plane(0, 0, g.code_bytes_per_row, d.code_bytes_per_row);
         if (g.high_bytes)

@@ -343,9 +343,9 @@ PagedKVLayerView make_cache_view(DeviceBuffer& k, DeviceBuffer& v, DeviceBuffer&
         .k_pages = Tensor(
             k.span(), layout.key.data_dtype,
             {layout.key.data_leading_extent, kPagedKVPageSize, geometry.kv_heads, physical_pages}),
-        .v_pages       = Tensor(v.span(), layout.value.data_dtype,
-                                {layout.value.data_leading_extent, kPagedKVPageSize, geometry.kv_heads,
-                                 physical_pages}),
+        .v_pages = Tensor(v.span(), layout.value.data_dtype,
+                          {layout.value.data_leading_extent, kPagedKVPageSize, geometry.kv_heads,
+                           physical_pages}),
         .k_scale_pages = layout.key.has_scale()
                              ? Tensor(k_scale.span(), layout.key.scale_dtype,
                                       {layout.key.scale_leading_extent, kPagedKVPageSize,

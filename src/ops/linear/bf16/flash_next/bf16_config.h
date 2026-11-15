@@ -116,47 +116,46 @@ struct Bf16LinearDecodeScheduleSelector {
                          Bf16PhaseOrder::RowSwizzled, 1, 1, 1, 2>;
 };
 
-
 template <>
 struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<2560, 640>> {
     using Type =
-        Bf16GemvSchedule<1, 1, 2, 4, 4, Bf16ActivationAccess::Direct,
-                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+        Bf16GemvSchedule<1, 1, 2, 4, 4, Bf16ActivationAccess::Direct, Bf16WeightCache::Streaming,
+                         Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
 };
 
 template <>
 struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<320, 10240>> {
     using Type =
-        Bf16GemvSchedule<8, 8, 1, 8, 4, Bf16ActivationAccess::Direct,
-                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 1, 1>;
+        Bf16GemvSchedule<8, 8, 1, 8, 4, Bf16ActivationAccess::Direct, Bf16WeightCache::Streaming,
+                         Bf16PhaseOrder::Sequential, 1, 2, 1, 1>;
 };
 
 template <>
 struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<10240, 320>> {
     using Type =
-        Bf16GemvSchedule<4, 1, 8, 2, 2, Bf16ActivationAccess::Direct,
-                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 1, 1>;
+        Bf16GemvSchedule<4, 1, 8, 2, 2, Bf16ActivationAccess::Direct, Bf16WeightCache::Streaming,
+                         Bf16PhaseOrder::Sequential, 1, 2, 1, 1>;
 };
 
 template <>
 struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<640, 2560>> {
     using Type =
-        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct,
-                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct, Bf16WeightCache::Streaming,
+                         Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
 };
 
 template <>
 struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<512, 2560>> {
     using Type =
-        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct,
-                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct, Bf16WeightCache::Streaming,
+                         Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
 };
 
 template <>
 struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<128, 2560>> {
     using Type =
-        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct,
-                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct, Bf16WeightCache::Streaming,
+                         Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
 };
 
 
@@ -197,47 +196,45 @@ struct Bf16LinearSmallTProductionSchedule {
 
 template <int ActiveTokens>
 struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<320, 10240>, ActiveTokens> {
-    using Type = Bf16SmallTInnerSchedule<
-        8, 8, 1, 8, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
-        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+    using Type =
+        Bf16SmallTInnerSchedule<8, 8, 1, 8, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+                                Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
 };
 
 template <int ActiveTokens>
 struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<512, 2560>, ActiveTokens> {
-    using Type = Bf16SmallTInnerSchedule<
-        8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
-        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+    using Type =
+        Bf16SmallTInnerSchedule<8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+                                Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
 };
 
 template <int ActiveTokens>
 struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<640, 2560>, ActiveTokens> {
-    using Type = Bf16SmallTInnerSchedule<
-        8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
-        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+    using Type =
+        Bf16SmallTInnerSchedule<8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+                                Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
 };
 
 template <int ActiveTokens>
 struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<2560, 640>, ActiveTokens> {
-    static constexpr int kRowsPerWarp =
-        ActiveTokens <= 8 ? 4 : 2;
-    static constexpr auto kActivationAccess =
-        ActiveTokens <= 8 ? Bf16SmallTActivationAccess::WarpPacked
-                          : Bf16SmallTActivationAccess::DirectStream;
-    using Type = Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, 4, 1, 4, kActivationAccess,
-                                         Bf16WeightCache::Default,
-                                         Bf16PhaseOrder::Sequential, 1, 2, 1, 2>;
+    static constexpr int kRowsPerWarp       = ActiveTokens <= 8 ? 4 : 2;
+    static constexpr auto kActivationAccess = ActiveTokens <= 8
+                                                  ? Bf16SmallTActivationAccess::WarpPacked
+                                                  : Bf16SmallTActivationAccess::DirectStream;
+    using Type =
+        Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, 4, 1, 4, kActivationAccess,
+                                Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 2, 1, 2>;
 };
 
 template <int ActiveTokens>
 struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<10240, 320>, ActiveTokens> {
-    static constexpr int kRowsPerWarp =
-        ActiveTokens <= 4 ? 8 : (ActiveTokens <= 8 ? 4 : 2);
-    static constexpr auto kActivationAccess =
-        ActiveTokens <= 8 ? Bf16SmallTActivationAccess::WarpPacked
-                          : Bf16SmallTActivationAccess::DirectStream;
-    using Type = Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, 2, 1, 4, kActivationAccess,
-                                         Bf16WeightCache::Default,
-                                         Bf16PhaseOrder::Sequential, 1, 2, 1, 2>;
+    static constexpr int kRowsPerWarp       = ActiveTokens <= 4 ? 8 : (ActiveTokens <= 8 ? 4 : 2);
+    static constexpr auto kActivationAccess = ActiveTokens <= 8
+                                                  ? Bf16SmallTActivationAccess::WarpPacked
+                                                  : Bf16SmallTActivationAccess::DirectStream;
+    using Type =
+        Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, 2, 1, 4, kActivationAccess,
+                                Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 2, 1, 2>;
 };
 
 } // namespace ninfer::ops::detail::flash_next

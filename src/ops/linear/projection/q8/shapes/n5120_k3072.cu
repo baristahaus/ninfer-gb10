@@ -4,7 +4,8 @@
 
 namespace ninfer::ops::detail {
 namespace {
-// the MTP block's attention output projection at width 2: the 5120x6144 Columns shard, which halves K rather than the rows.
+// the MTP block's attention output projection at width 2: the 5120x6144 Columns shard, which halves
+// K rather than the rows.
 //
 // The ladder is N5120K6144's, and that is a derivation rather than a copy: every band in it is
 // chosen from (n / kBlockRows) * ceil(T / BlockTokens) against the tuned wave, and that expression

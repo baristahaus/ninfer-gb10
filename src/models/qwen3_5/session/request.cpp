@@ -121,7 +121,7 @@ RequestBasePlan SessionImpl::plan_request(qwen::PreparedPromptData&& prompt,
     base->prefix_identity_tag = static_cast<std::uint32_t>(speculative_backend) |
                                 (static_cast<std::uint32_t>(plan.proposal_head) << 8U) |
                                 (static_cast<std::uint32_t>(plan.kv_storage) << 16U);
-    std::uint32_t previous = 0;
+    std::uint32_t previous    = 0;
     for (const auto frontier : prompt.identity.rewrite_execution_frontiers) {
         if (frontier <= previous || frontier > base->summary.prompt_tokens) {
             throw std::invalid_argument(
@@ -141,7 +141,7 @@ RequestBasePlan SessionImpl::plan_request(qwen::PreparedPromptData&& prompt,
             if (!base->accepts_capture(frontier)) { return; }
             auto it =
                 std::find_if(base->capture_groups.begin(), base->capture_groups.end(),
-                                    [frontier](const auto& group) { return group.frontier == frontier; });
+                             [frontier](const auto& group) { return group.frontier == frontier; });
             if (it == base->capture_groups.end()) {
                 base->capture_groups.push_back(base->capture_group(frontier));
                 it = std::prev(base->capture_groups.end());

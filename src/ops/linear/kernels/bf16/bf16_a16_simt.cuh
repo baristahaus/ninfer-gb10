@@ -100,7 +100,7 @@ __device__ __forceinline__ void bf16_simt_compute_rows(
     int warp_in_row, int lane,
     float (&accumulators)[Schedule::kRowsPerWarp][ActiveTokens][Schedule::kAccumulatorChains],
     int live_tokens, int input_rows) {
-    const int K                   = Schedule::kStaticK ? Schedule::kStaticK : input_rows;
+    const int K = Schedule::kStaticK ? Schedule::kStaticK : input_rows;
     constexpr int kValuesPerPhase =
         Schedule::kWarpsPerRow * common::kWarpSize * Schedule::kValuesPerLane;
     const int kPhases =

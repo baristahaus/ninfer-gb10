@@ -138,8 +138,8 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     // The check exists to catch a table/model mismatch for a parameter that actually SPLITS: the
     // table declares the extent along the sharded axis, and `shape[axis]` must agree. A Replicated
     // or PrimaryOnly placement never reads its extent — the ranges are the whole parameter — so
-    // validating it there would only police a number nothing uses, and the tables legitimately state
-    // the leading dimension for those rows.
+    // validating it there would only police a number nothing uses, and the tables legitimately
+    // state the leading dimension for those rows.
     if (shard->axis == artifact::ShardAxis::Rows || shard->axis == artifact::ShardAxis::Columns) {
         const std::size_t axis_index = shard->axis == artifact::ShardAxis::Rows ? 0 : 1;
         if (reference.shape.size() <= axis_index) {
@@ -149,10 +149,9 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
         const std::uint64_t declared = static_cast<std::uint64_t>(total_extent(*shard));
         const std::uint64_t bound    = reference.shape[axis_index];
         if (declared != bound) {
-            throw std::invalid_argument("sharding: " + std::string(reference.name) + " binds " +
-                                        std::to_string(bound) +
-                                        " along its sharded axis but the table declares " +
-                                        std::to_string(declared));
+            throw std::invalid_argument(
+                "sharding: " + std::string(reference.name) + " binds " + std::to_string(bound) +
+                " along its sharded axis but the table declares " + std::to_string(declared));
         }
     }
 
@@ -196,7 +195,8 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     } catch (const std::invalid_argument& error) {
         // The resolver has no parameter name, so a range error there is anonymous. Name the
         // parameter here: an error that says which weight is wrong is worth the two lines.
-        throw std::invalid_argument("sharding: " + std::string(reference.name) + ": " + error.what());
+        throw std::invalid_argument("sharding: " + std::string(reference.name) + ": " +
+                                    error.what());
     }
 
     std::uint64_t share = 0;

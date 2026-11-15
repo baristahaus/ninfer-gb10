@@ -30,7 +30,6 @@ struct Nvfp4IdentityEpilogue {
     }
 };
 
-
 template <int BlockM, int BlockN, int BlockK, int WarpsM, int WarpsN, int Stages,
           int MinBlocksPerSm>
 struct Nvfp4W4a4MmaSchedule {
@@ -128,9 +127,9 @@ stage_nvfp4_w4a4_activation(Nvfp4W4a4MaterializedActivation source,
             const int source_token = valid ? token : 0;
             auto* destination      = &shared.a_scale4[stage][row * Schedule::kK64PerStage];
             const auto* input      = source.scales + (static_cast<std::int64_t>(source_token) *
-                                                     Geometry::kScaleTilesPerRow +
-                                                 k_tile * Schedule::kK64PerStage) *
-                                                    4;
+                                                          Geometry::kScaleTilesPerRow +
+                                                      k_tile * Schedule::kK64PerStage) *
+                                                         4;
             cp_async_zfill<kScaleBytes>(destination, input, valid ? kScaleBytes : 0);
         }
     } else {
@@ -190,7 +189,7 @@ __device__ __forceinline__ void stage_nvfp4_w4a4_weight(const std::uint8_t* __re
             const int global_row_begin = row_begin + row_tile * 128;
             const int persistent_tile  = global_row_begin / 128;
             const int first_quartile   = (global_row_begin & 127) / 32;
-            auto* destination          = shared.b_scales[stage] +
+            auto* destination = shared.b_scales[stage] +
                                 ((row_tile * Schedule::kK64PerStage + local_k64) * 32 + row_mod32) *
                                     kScaleBytesPerTask;
             const auto* input = scales +
@@ -231,7 +230,8 @@ __global__
 __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4_mma_kernel(
     Nvfp4W4a4MaterializedActivation activation, const std::uint8_t* __restrict__ weight_codes,
     const std::uint8_t* __restrict__ weight_scales, std::int32_t tokens, float alpha,
-    Epilogue epilogue, OutputPolicy output, RowPolicy row_policy = {}, WorkPolicy work_policy = {}) {
+    Epilogue epilogue, OutputPolicy output, RowPolicy row_policy = {},
+    WorkPolicy work_policy = {}) {
     static_assert((Geometry::kInputRows % Schedule::kBlockK) == 0);
     static_assert((Geometry::kOutputRows % Schedule::kBlockN) == 0);
     static_assert(!PairRows || (Schedule::kBlockN % 2) == 0);
@@ -242,205 +242,204 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4
     constexpr int kKTiles       = Geometry::kInputRows / Schedule::kBlockK;
     constexpr int kWaitGroups   = kKTiles < Schedule::kStages ? kKTiles - 1 : Schedule::kStages - 1;
 
-    int work = WorkPolicy::kPersistent ? static_cast<int>(blockIdx.x) : 0;
+    int work       = WorkPolicy::kPersistent ? static_cast<int>(blockIdx.x) : 0;
     int work_limit = 1;
-    if constexpr (WorkPolicy::kPersistent) {
-        work_limit = work_policy.work_count(kRowsPerBlock);
-    }
+    if constexpr (WorkPolicy::kPersistent) { work_limit = work_policy.work_count(kRowsPerBlock); }
     while (work < work_limit) {
-    int token_begin;
-    int active_tokens;
-    int row_begin;
-    float work_alpha = alpha;
-    const std::uint8_t* tier_codes  = nullptr;
-    const std::uint8_t* tier_scales = nullptr;
-    if constexpr (WorkPolicy::kPersistent) {
-        work_policy.configure(work, kRowsPerBlock, token_begin, active_tokens, row_begin,
-                              work_alpha, row_policy, tier_codes, tier_scales);
-    } else {
-        token_begin = static_cast<int>(blockIdx.y) * Schedule::kBlockM;
-        active_tokens = tokens;
-        row_begin = static_cast<int>(blockIdx.x) * kRowsPerBlock;
-    }
-
-    if (tier_codes == nullptr) {
-        tier_codes  = weight_codes;
-        tier_scales = weight_scales;
-    }
-#pragma unroll
-    for (int stage = 0; stage < Schedule::kStages; ++stage) {
-        if (stage < kKTiles) {
-            stage_nvfp4_w4a4_activation<Geometry, Schedule>(activation, shared, stage, stage,
-                                                            token_begin, active_tokens);
-            stage_nvfp4_w4a4_weight<Geometry, Schedule>(tier_codes, tier_scales, shared, stage,
-                                                        stage, row_begin, row_policy);
-            cp_commit();
+        int token_begin;
+        int active_tokens;
+        int row_begin;
+        float work_alpha                = alpha;
+        const std::uint8_t* tier_codes  = nullptr;
+        const std::uint8_t* tier_scales = nullptr;
+        if constexpr (WorkPolicy::kPersistent) {
+            work_policy.configure(work, kRowsPerBlock, token_begin, active_tokens, row_begin,
+                                  work_alpha, row_policy, tier_codes, tier_scales);
+        } else {
+            token_begin   = static_cast<int>(blockIdx.y) * Schedule::kBlockM;
+            active_tokens = tokens;
+            row_begin     = static_cast<int>(blockIdx.x) * kRowsPerBlock;
         }
-    }
 
-    float accumulators[Schedule::kMmaM][Schedule::kMmaN][4] = {};
-    const int lane                                          = static_cast<int>(threadIdx.x) & 31;
-    const int warp                                          = static_cast<int>(threadIdx.x) >> 5;
-    const int warp_m                                        = warp / Schedule::kWarpsN;
-    const int warp_n                                        = warp - warp_m * Schedule::kWarpsN;
-
-    const int a_matrix      = lane >> 3;
-    const int a_row_offset  = (lane & 7) + ((a_matrix & 1) << 3);
-    const int a_column_byte = (a_matrix >> 1) * 16;
-    const int b_row_offset  = lane & 7;
-    const int b_column_byte = ((lane >> 3) & 1) * 16;
-    const int sfa_row       = ((lane & 1) << 3) | (lane >> 2);
-    const int sfb_row       = lane >> 2;
-
-    for (int k_tile = 0; k_tile < kKTiles; ++k_tile) {
-        const int stage = k_tile % Schedule::kStages;
-        cp_wait<kWaitGroups>();
-        __syncthreads();
-
+        if (tier_codes == nullptr) {
+            tier_codes  = weight_codes;
+            tier_scales = weight_scales;
+        }
 #pragma unroll
-        for (int local_k64 = 0; local_k64 < Schedule::kK64PerStage; ++local_k64) {
-            unsigned a_fragments[Schedule::kMmaM][4];
-            unsigned b_fragments[Schedule::kMmaN][2];
-            unsigned a_scales[Schedule::kMmaM];
-            unsigned b_scales[Schedule::kMmaN];
-
-#pragma unroll
-            for (int mma_m = 0; mma_m < Schedule::kMmaM; ++mma_m) {
-                const int row           = warp_m * Schedule::kWarpM + mma_m * 16 + a_row_offset;
-                const int logical_byte  = local_k64 * 32 + a_column_byte;
-                const int physical_byte = nvfp4_w4a4_swizzled_byte<Schedule>(row, logical_byte);
-                const auto* address =
-                    shared.a_codes[stage] + row * Schedule::kCodeRowBytes + physical_byte;
-                ldmatrix_x4(a_fragments[mma_m][0], a_fragments[mma_m][1], a_fragments[mma_m][2],
-                            a_fragments[mma_m][3], smem_addr(address));
-                const int scale_row = warp_m * Schedule::kWarpM + mma_m * 16 + sfa_row;
-                a_scales[mma_m] =
-                    shared.a_scale4[stage][scale_row * Schedule::kK64PerStage + local_k64];
+        for (int stage = 0; stage < Schedule::kStages; ++stage) {
+            if (stage < kKTiles) {
+                stage_nvfp4_w4a4_activation<Geometry, Schedule>(activation, shared, stage, stage,
+                                                                token_begin, active_tokens);
+                stage_nvfp4_w4a4_weight<Geometry, Schedule>(tier_codes, tier_scales, shared, stage,
+                                                            stage, row_begin, row_policy);
+                cp_commit();
             }
+        }
+
+        float accumulators[Schedule::kMmaM][Schedule::kMmaN][4] = {};
+        const int lane   = static_cast<int>(threadIdx.x) & 31;
+        const int warp   = static_cast<int>(threadIdx.x) >> 5;
+        const int warp_m = warp / Schedule::kWarpsN;
+        const int warp_n = warp - warp_m * Schedule::kWarpsN;
+
+        const int a_matrix      = lane >> 3;
+        const int a_row_offset  = (lane & 7) + ((a_matrix & 1) << 3);
+        const int a_column_byte = (a_matrix >> 1) * 16;
+        const int b_row_offset  = lane & 7;
+        const int b_column_byte = ((lane >> 3) & 1) * 16;
+        const int sfa_row       = ((lane & 1) << 3) | (lane >> 2);
+        const int sfb_row       = lane >> 2;
+
+        for (int k_tile = 0; k_tile < kKTiles; ++k_tile) {
+            const int stage = k_tile % Schedule::kStages;
+            cp_wait<kWaitGroups>();
+            __syncthreads();
 
 #pragma unroll
-            for (int mma_n = 0; mma_n < Schedule::kMmaN; ++mma_n) {
-                const int row           = warp_n * Schedule::kWarpN + mma_n * 8 + b_row_offset;
-                const int logical_byte  = local_k64 * 32 + b_column_byte;
-                const int physical_byte = nvfp4_w4a4_swizzled_byte<Schedule>(row, logical_byte);
-                const auto* address =
-                    shared.b_codes[stage] + row * Schedule::kCodeRowBytes + physical_byte;
-                ldmatrix_x2(b_fragments[mma_n][0], b_fragments[mma_n][1], smem_addr(address));
-                const int scale_row = warp_n * Schedule::kWarpN + mma_n * 8 + sfb_row;
-                const std::uint8_t* scale_address;
-                if constexpr (RowPolicy::kContiguous) {
-                    constexpr int kQuartilesPerTile =
-                        Schedule::kBlockN >= 128 ? 4 : Schedule::kBlockN / 32;
-                    constexpr int kScaleBytesPerTask = kQuartilesPerTile * 4;
-                    const int row_tile               = scale_row / 128;
-                    const int row_in_tile            = scale_row & 127;
-                    const int row_mod32              = row_in_tile & 31;
-                    const int row_quartile           = row_in_tile >> 5;
-                    scale_address =
-                        shared.b_scales[stage] +
-                        ((row_tile * Schedule::kK64PerStage + local_k64) * 32 + row_mod32) *
-                            kScaleBytesPerTask +
-                        row_quartile * 4;
-                } else {
-                    scale_address = shared.b_scales[stage] +
-                                    (scale_row * Schedule::kK64PerStage + local_k64) * 4;
+            for (int local_k64 = 0; local_k64 < Schedule::kK64PerStage; ++local_k64) {
+                unsigned a_fragments[Schedule::kMmaM][4];
+                unsigned b_fragments[Schedule::kMmaN][2];
+                unsigned a_scales[Schedule::kMmaM];
+                unsigned b_scales[Schedule::kMmaN];
+
+#pragma unroll
+                for (int mma_m = 0; mma_m < Schedule::kMmaM; ++mma_m) {
+                    const int row           = warp_m * Schedule::kWarpM + mma_m * 16 + a_row_offset;
+                    const int logical_byte  = local_k64 * 32 + a_column_byte;
+                    const int physical_byte = nvfp4_w4a4_swizzled_byte<Schedule>(row, logical_byte);
+                    const auto* address =
+                        shared.a_codes[stage] + row * Schedule::kCodeRowBytes + physical_byte;
+                    ldmatrix_x4(a_fragments[mma_m][0], a_fragments[mma_m][1], a_fragments[mma_m][2],
+                                a_fragments[mma_m][3], smem_addr(address));
+                    const int scale_row = warp_m * Schedule::kWarpM + mma_m * 16 + sfa_row;
+                    a_scales[mma_m] =
+                        shared.a_scale4[stage][scale_row * Schedule::kK64PerStage + local_k64];
                 }
-                b_scales[mma_n] = load_vec<unsigned>(scale_address);
-            }
 
-#pragma unroll
-            for (int mma_m = 0; mma_m < Schedule::kMmaM; ++mma_m) {
 #pragma unroll
                 for (int mma_n = 0; mma_n < Schedule::kMmaN; ++mma_n) {
-                    mma_nvfp4_e4m3(accumulators[mma_m][mma_n][0], accumulators[mma_m][mma_n][1],
-                                   accumulators[mma_m][mma_n][2], accumulators[mma_m][mma_n][3],
-                                   a_fragments[mma_m][0], a_fragments[mma_m][1],
-                                   a_fragments[mma_m][2], a_fragments[mma_m][3],
-                                   b_fragments[mma_n][0], b_fragments[mma_n][1], a_scales[mma_m],
-                                   b_scales[mma_n]);
+                    const int row           = warp_n * Schedule::kWarpN + mma_n * 8 + b_row_offset;
+                    const int logical_byte  = local_k64 * 32 + b_column_byte;
+                    const int physical_byte = nvfp4_w4a4_swizzled_byte<Schedule>(row, logical_byte);
+                    const auto* address =
+                        shared.b_codes[stage] + row * Schedule::kCodeRowBytes + physical_byte;
+                    ldmatrix_x2(b_fragments[mma_n][0], b_fragments[mma_n][1], smem_addr(address));
+                    const int scale_row = warp_n * Schedule::kWarpN + mma_n * 8 + sfb_row;
+                    const std::uint8_t* scale_address;
+                    if constexpr (RowPolicy::kContiguous) {
+                        constexpr int kQuartilesPerTile =
+                            Schedule::kBlockN >= 128 ? 4 : Schedule::kBlockN / 32;
+                        constexpr int kScaleBytesPerTask = kQuartilesPerTile * 4;
+                        const int row_tile               = scale_row / 128;
+                        const int row_in_tile            = scale_row & 127;
+                        const int row_mod32              = row_in_tile & 31;
+                        const int row_quartile           = row_in_tile >> 5;
+                        scale_address =
+                            shared.b_scales[stage] +
+                            ((row_tile * Schedule::kK64PerStage + local_k64) * 32 + row_mod32) *
+                                kScaleBytesPerTask +
+                            row_quartile * 4;
+                    } else {
+                        scale_address = shared.b_scales[stage] +
+                                        (scale_row * Schedule::kK64PerStage + local_k64) * 4;
+                    }
+                    b_scales[mma_n] = load_vec<unsigned>(scale_address);
+                }
+
+#pragma unroll
+                for (int mma_m = 0; mma_m < Schedule::kMmaM; ++mma_m) {
+#pragma unroll
+                    for (int mma_n = 0; mma_n < Schedule::kMmaN; ++mma_n) {
+                        mma_nvfp4_e4m3(accumulators[mma_m][mma_n][0], accumulators[mma_m][mma_n][1],
+                                       accumulators[mma_m][mma_n][2], accumulators[mma_m][mma_n][3],
+                                       a_fragments[mma_m][0], a_fragments[mma_m][1],
+                                       a_fragments[mma_m][2], a_fragments[mma_m][3],
+                                       b_fragments[mma_n][0], b_fragments[mma_n][1],
+                                       a_scales[mma_m], b_scales[mma_n]);
+                    }
+                }
+            }
+
+            __syncthreads();
+            const int next_k_tile = k_tile + Schedule::kStages;
+            if (next_k_tile < kKTiles) {
+                stage_nvfp4_w4a4_activation<Geometry, Schedule>(
+                    activation, shared, stage, next_k_tile, token_begin, active_tokens);
+                stage_nvfp4_w4a4_weight<Geometry, Schedule>(tier_codes, tier_scales, shared, stage,
+                                                            next_k_tile, row_begin, row_policy);
+            }
+            cp_commit();
+        }
+
+        const int accumulator_row   = lane >> 2;
+        const int accumulator_col   = 2 * (lane & 3);
+        constexpr int kOutputStride = Schedule::kBlockN + 8;
+        static_assert(sizeof(Nvfp4W4a4SharedStorage<Schedule>) >=
+                      Schedule::kBlockM * kOutputStride * sizeof(__nv_bfloat16));
+        auto* shared_output = reinterpret_cast<__nv_bfloat16*>(&shared);
+#pragma unroll
+        for (int mma_m = 0; mma_m < Schedule::kMmaM; ++mma_m) {
+            const int token0 =
+                token_begin + warp_m * Schedule::kWarpM + mma_m * 16 + accumulator_row;
+            const int token1 = token0 + 8;
+#pragma unroll
+            for (int mma_n = 0; mma_n < Schedule::kMmaN; ++mma_n) {
+                const int local_row0  = warp_n * Schedule::kWarpN + mma_n * 8 + accumulator_col;
+                const int parent_row0 = row_policy.weight_row(row_begin, local_row0);
+                auto* destination0    = reinterpret_cast<__nv_bfloat162*>(
+                    shared_output + (token0 - token_begin) * kOutputStride + local_row0);
+                auto* destination1 = reinterpret_cast<__nv_bfloat162*>(
+                    shared_output + (token1 - token_begin) * kOutputStride + local_row0);
+                const int parent_row1 = row_policy.weight_row(row_begin, local_row0 + 1);
+                float value00         = accumulators[mma_m][mma_n][0] * work_alpha;
+                float value01         = accumulators[mma_m][mma_n][1] * work_alpha;
+                float value10         = accumulators[mma_m][mma_n][2] * work_alpha;
+                float value11         = accumulators[mma_m][mma_n][3] * work_alpha;
+                if (token0 < active_tokens) {
+                    value00 = epilogue.apply(parent_row0, token0, value00);
+                    value01 = epilogue.apply(parent_row1, token0, value01);
+                }
+                if (token1 < active_tokens) {
+                    value10 = epilogue.apply(parent_row0, token1, value10);
+                    value11 = epilogue.apply(parent_row1, token1, value11);
+                }
+                *destination0 = __floats2bfloat162_rn(value00, value01);
+                *destination1 = __floats2bfloat162_rn(value10, value11);
+            }
+        }
+        __syncthreads();
+        constexpr int kStoredRows    = PairRows ? Schedule::kBlockN / 2 : Schedule::kBlockN;
+        constexpr int kVectorsPerRow = kStoredRows / 8;
+        constexpr int kOutputVectors = Schedule::kBlockM * kVectorsPerRow;
+        for (int task = static_cast<int>(threadIdx.x); task < kOutputVectors;
+             task += Schedule::kThreads) {
+            const int token_local = task / kVectorsPerRow;
+            const int row_vector  = task - token_local * kVectorsPerRow;
+            const int token       = token_begin + token_local;
+            if (token < active_tokens) {
+                const uint4 values =
+                    load_vec<uint4>(shared_output + token_local * kOutputStride + row_vector * 8);
+                if constexpr (PairRows) {
+                    const uint4 paired = load_vec<uint4>(
+                        shared_output + token_local * kOutputStride + kStoredRows + row_vector * 8);
+                    output.store_pair_vector(row_begin + row_vector * 8, token, values, paired);
+                } else {
+                    output.store_vector(row_begin + row_vector * 8, token, values);
                 }
             }
         }
-
+        if constexpr (requires {
+                          output.finish_block(row_begin, token_begin, active_tokens, kStoredRows);
+                      }) {
+            __syncthreads();
+            output.finish_block(row_begin, token_begin, active_tokens, kStoredRows);
+        }
+        if constexpr (!WorkPolicy::kPersistent) { break; }
+        // Persistent CTAs reuse `shared` for the next logical work item. Every warp must finish the
+        // cooperative output read (and any output-policy epilogue) before another warp starts
+        // overwriting that storage with the next item's async stages.
         __syncthreads();
-        const int next_k_tile = k_tile + Schedule::kStages;
-        if (next_k_tile < kKTiles) {
-            stage_nvfp4_w4a4_activation<Geometry, Schedule>(activation, shared, stage, next_k_tile,
-                                                            token_begin, active_tokens);
-            stage_nvfp4_w4a4_weight<Geometry, Schedule>(tier_codes, tier_scales, shared, stage,
-                                                        next_k_tile, row_begin, row_policy);
-        }
-        cp_commit();
-    }
-
-    const int accumulator_row   = lane >> 2;
-    const int accumulator_col   = 2 * (lane & 3);
-    constexpr int kOutputStride = Schedule::kBlockN + 8;
-    static_assert(sizeof(Nvfp4W4a4SharedStorage<Schedule>) >=
-                  Schedule::kBlockM * kOutputStride * sizeof(__nv_bfloat16));
-    auto* shared_output = reinterpret_cast<__nv_bfloat16*>(&shared);
-#pragma unroll
-    for (int mma_m = 0; mma_m < Schedule::kMmaM; ++mma_m) {
-        const int token0 = token_begin + warp_m * Schedule::kWarpM + mma_m * 16 + accumulator_row;
-            const int token1 = token0 + 8;
-#pragma unroll
-        for (int mma_n = 0; mma_n < Schedule::kMmaN; ++mma_n) {
-            const int local_row0  = warp_n * Schedule::kWarpN + mma_n * 8 + accumulator_col;
-            const int parent_row0 = row_policy.weight_row(row_begin, local_row0);
-            auto* destination0    = reinterpret_cast<__nv_bfloat162*>(
-                shared_output + (token0 - token_begin) * kOutputStride + local_row0);
-            auto* destination1 = reinterpret_cast<__nv_bfloat162*>(
-                shared_output + (token1 - token_begin) * kOutputStride + local_row0);
-            const int parent_row1 = row_policy.weight_row(row_begin, local_row0 + 1);
-            float value00         = accumulators[mma_m][mma_n][0] * work_alpha;
-            float value01         = accumulators[mma_m][mma_n][1] * work_alpha;
-            float value10         = accumulators[mma_m][mma_n][2] * work_alpha;
-            float value11         = accumulators[mma_m][mma_n][3] * work_alpha;
-            if (token0 < active_tokens) {
-                value00 = epilogue.apply(parent_row0, token0, value00);
-                value01 = epilogue.apply(parent_row1, token0, value01);
-            }
-            if (token1 < active_tokens) {
-                value10 = epilogue.apply(parent_row0, token1, value10);
-                value11 = epilogue.apply(parent_row1, token1, value11);
-            }
-            *destination0 = __floats2bfloat162_rn(value00, value01);
-            *destination1 = __floats2bfloat162_rn(value10, value11);
-        }
-    }
-    __syncthreads();
-    constexpr int kStoredRows    = PairRows ? Schedule::kBlockN / 2 : Schedule::kBlockN;
-    constexpr int kVectorsPerRow = kStoredRows / 8;
-    constexpr int kOutputVectors = Schedule::kBlockM * kVectorsPerRow;
-    for (int task = static_cast<int>(threadIdx.x); task < kOutputVectors;
-         task += Schedule::kThreads) {
-        const int token_local = task / kVectorsPerRow;
-        const int row_vector  = task - token_local * kVectorsPerRow;
-        const int token       = token_begin + token_local;
-        if (token < active_tokens) {
-            const uint4 values =
-                load_vec<uint4>(shared_output + token_local * kOutputStride + row_vector * 8);
-            if constexpr (PairRows) {
-                const uint4 paired = load_vec<uint4>(shared_output + token_local * kOutputStride +
-                                                     kStoredRows + row_vector * 8);
-                output.store_pair_vector(row_begin + row_vector * 8, token, values, paired);
-            } else {
-                output.store_vector(row_begin + row_vector * 8, token, values);
-            }
-        }
-    }
-    if constexpr (requires {
-                      output.finish_block(row_begin, token_begin, active_tokens, kStoredRows);
-                  }) {
-        __syncthreads();
-        output.finish_block(row_begin, token_begin, active_tokens, kStoredRows);
-    }
-    if constexpr (!WorkPolicy::kPersistent) { break; }
-    // Persistent CTAs reuse `shared` for the next logical work item. Every warp must finish the
-    // cooperative output read (and any output-policy epilogue) before another warp starts
-    // overwriting that storage with the next item's async stages.
-    __syncthreads();
-    work += static_cast<int>(gridDim.x);
+        work += static_cast<int>(gridDim.x);
     }
 }
 

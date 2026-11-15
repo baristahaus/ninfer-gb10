@@ -31,9 +31,8 @@ ninfer::product::ServeOptions parse(std::vector<std::string> arguments) {
 }
 
 ninfer::PromptSummary summary(bool starts_in_reasoning, bool has_media) {
-    return ninfer::PromptSummary{.starts_in_reasoning = starts_in_reasoning,
-                                 .prompt_tokens       = 128,
-                                 .has_media           = has_media};
+    return ninfer::PromptSummary{
+        .starts_in_reasoning = starts_in_reasoning, .prompt_tokens = 128, .has_media = has_media};
 }
 
 Json done_json(const GenerationOutcome& outcome) {
@@ -54,10 +53,10 @@ int main() {
     failures += check(!defaults.reasoning_close_retry, "the retry is not off by default");
     const auto enabled = parse({"ninfer-serve", "model.ninfer", "--reasoning-close-retry"});
     failures += check(enabled.reasoning_close_retry, "--reasoning-close-retry did not enable it");
-    const auto disabled = parse({"ninfer-serve", "model.ninfer", "--reasoning-close-retry",
-                                 "--no-reasoning-close-retry"});
-    failures += check(!disabled.reasoning_close_retry,
-                      "--no-reasoning-close-retry did not turn it off");
+    const auto disabled = parse(
+        {"ninfer-serve", "model.ninfer", "--reasoning-close-retry", "--no-reasoning-close-retry"});
+    failures +=
+        check(!disabled.reasoning_close_retry, "--no-reasoning-close-retry did not turn it off");
 
     // Eligibility: the option, a thinking start and no media. This is the gate that keeps the whole
     // path off when the option is off, whatever the request looks like.
@@ -78,11 +77,11 @@ int main() {
     tokens.close_suffix = {198, 248069, 271};
     tokens.think_close  = {248069};
     const std::vector<ninfer::TokenId> stopped{248046};
-    const ReasoningRetryInput in_reasoning{.starts_in_reasoning      = true,
-                                           .finish_reason            = ninfer::FinishReason::StopToken,
-                                           .generated                = stopped,
-                                           .content                  = "",
-                                           .tool_calls               = 0,
+    const ReasoningRetryInput in_reasoning{.starts_in_reasoning = true,
+                                           .finish_reason       = ninfer::FinishReason::StopToken,
+                                           .generated           = stopped,
+                                           .content             = "",
+                                           .tool_calls          = 0,
                                            .thinking_control_applied = false,
                                            .requested_output_tokens  = 1000};
     failures += check(plan_reasoning_retry(in_reasoning, tokens).trigger ==
@@ -90,9 +89,9 @@ int main() {
                       "the planner no longer triggers on a first-token stop");
     ReasoningRetryInput not_in_reasoning = in_reasoning;
     not_in_reasoning.starts_in_reasoning = false;
-    failures += check(plan_reasoning_retry(not_in_reasoning, tokens).trigger ==
-                          ReasoningRetryTrigger::None,
-                      "the planner triggered without a thinking start");
+    failures +=
+        check(plan_reasoning_retry(not_in_reasoning, tokens).trigger == ReasoningRetryTrigger::None,
+              "the planner triggered without a thinking start");
     failures += check(!reasoning_retry_eligible(true, summary(false, false)),
                       "a request the planner refuses passed the gate");
 
@@ -106,10 +105,10 @@ int main() {
     failures += check(done_json(untouched).at("result").at("reasoning_retry").is_null(),
                       "a request without a retry reported one");
     GenerationOutcome retried;
-    retried.reasoning_retry.trigger             = ReasoningRetryTrigger::StopInReasoning;
-    retried.reasoning_retry.kept_tokens         = 0;
-    retried.reasoning_retry.injected_tokens     = 3;
-    retried.reasoning_retry.continuation_prompt = 131;
+    retried.reasoning_retry.trigger                 = ReasoningRetryTrigger::StopInReasoning;
+    retried.reasoning_retry.kept_tokens             = 0;
+    retried.reasoning_retry.injected_tokens         = 3;
+    retried.reasoning_retry.continuation_prompt     = 131;
     retried.reasoning_retry.continuation_completion = 12;
     const auto retried_json = done_json(retried).at("result").at("reasoning_retry");
     failures += check(retried_json.at("trigger") == "stop_in_reasoning" &&

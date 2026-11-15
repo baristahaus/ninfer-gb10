@@ -10,9 +10,7 @@ void require_valid(ShardAxis axis, std::int64_t extent, int width) {
     if (width < 1) {
         throw std::invalid_argument("sharding: an execution group needs at least one rank");
     }
-    if (extent < 0) {
-        throw std::invalid_argument("sharding: a negative extent cannot be placed");
-    }
+    if (extent < 0) { throw std::invalid_argument("sharding: a negative extent cannot be placed"); }
     const bool splits = axis == ShardAxis::Rows || axis == ShardAxis::Columns;
     if (splits && extent % width != 0) {
         throw std::invalid_argument(
@@ -38,9 +36,7 @@ ShardPlacement split_evenly(ShardAxis axis, std::int64_t extent, int width) {
         break;
     case ShardAxis::PrimaryOnly:
         placement.ranges.push_back(ShardRange{0, extent});
-        for (int rank = 1; rank < width; ++rank) {
-            placement.ranges.push_back(ShardRange{0, 0});
-        }
+        for (int rank = 1; rank < width; ++rank) { placement.ranges.push_back(ShardRange{0, 0}); }
         break;
     case ShardAxis::Rows:
     case ShardAxis::Columns: {
@@ -54,7 +50,6 @@ ShardPlacement split_evenly(ShardAxis axis, std::int64_t extent, int width) {
     }
     return placement;
 }
-
 
 Binding shard_binding_ranges(const Binding& binding, std::span<const ShardRange> ranges) {
     Binding result;
@@ -105,7 +100,8 @@ Binding shard_binding(const Binding& binding, const ShardPlacement& placement, i
     if (rank < 0 || static_cast<std::size_t>(rank) >= placement.ranges.size()) {
         throw std::invalid_argument("sharding: rank outside the placement");
     }
-    return shard_binding_ranges(binding, std::span<const ShardRange>(&placement.ranges[static_cast<std::size_t>(rank)], 1));
+    return shard_binding_ranges(
+        binding, std::span<const ShardRange>(&placement.ranges[static_cast<std::size_t>(rank)], 1));
 }
 
 } // namespace ninfer::artifact

@@ -41,9 +41,9 @@ using Q8N7168K5120   = Q8LinearGeometry<7168, 5120>;
 using Q8N8704K5120   = Q8LinearGeometry<8704, 5120>;
 using Q8N124160K5120 = Q8LinearGeometry<124160, 5120>;
 // The fused mlp gate|up parent's Rows-shard half at width 2: 34816 halved to 17408.
-using Q8N17408K5120  = Q8LinearGeometry<17408, 5120>;
-using Q8N5120K3072   = Q8LinearGeometry<5120, 3072>;
-using Q8N5120K8704   = Q8LinearGeometry<5120, 8704>;
+using Q8N17408K5120 = Q8LinearGeometry<17408, 5120>;
+using Q8N5120K3072  = Q8LinearGeometry<5120, 3072>;
+using Q8N5120K8704  = Q8LinearGeometry<5120, 8704>;
 
 // The dispatcher admits N/K and positive T; each shape owns its complete T selection.
 [[nodiscard]] Q8Launch select_q8_n1024_k2048(std::int32_t tokens);

@@ -32,14 +32,14 @@ void require_bf16_weight(const Weight& w, std::int32_t rows, std::int32_t input_
 Weight bf16_row_view(const Weight& parent, std::int32_t row_begin, std::int32_t rows) {
     const std::size_t row_bytes = static_cast<std::size_t>(parent.k) * sizeof(std::uint16_t);
     const auto* data            = static_cast<const std::uint8_t*>(parent.qdata) +
-                       static_cast<std::size_t>(row_begin) * row_bytes;
-    Weight view          = parent;
-    view.payload         = data;
-    view.payload_bytes   = static_cast<std::uint64_t>(rows) * row_bytes;
-    view.qdata           = data;
-    view.shape[0]        = rows;
-    view.padded_shape[0] = rows;
-    view.n               = rows;
+                                  static_cast<std::size_t>(row_begin) * row_bytes;
+    Weight view                 = parent;
+    view.payload                = data;
+    view.payload_bytes          = static_cast<std::uint64_t>(rows) * row_bytes;
+    view.qdata                  = data;
+    view.shape[0]               = rows;
+    view.padded_shape[0]        = rows;
+    view.n                      = rows;
     return view;
 }
 

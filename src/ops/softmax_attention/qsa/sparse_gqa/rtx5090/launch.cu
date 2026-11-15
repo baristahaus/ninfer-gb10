@@ -12,7 +12,7 @@ void launch(const SparseGqaArguments& arguments, SparseGqaPlan plan,
     a.splits             = launch_plan.splits;
     constexpr bool Async = kSparseQuantized<Storage> && VectorCache;
     if (plan.instance == SparseGqaInstance::FullPrefix) {
-        constexpr auto load   = Async ? SparseGqaLoad::InPlace : SparseGqaLoad::Direct;
+        constexpr auto load = Async ? SparseGqaLoad::InPlace : SparseGqaLoad::Direct;
         constexpr auto kernel =
             sparse_gqa_all_select_kernel<Storage, 64, 4, VectorCache, load, KvHeads>;
         constexpr int bytes =

@@ -59,8 +59,8 @@ struct EncodedVector {
                     std::array<float, 256> values;
                     for (int d = 0; d < 256; ++d) {
                         const auto word = source.host[source.offset(d, h, r, p)];
-                        values[d]       = source.view.dtype == DType::BF16 ? bf16_to_f32(word)
-                                                                           : prepare::fp16_decode(word);
+                        values[d] = source.view.dtype == DType::BF16 ? bf16_to_f32(word)
+                                                                     : prepare::fp16_decode(word);
                     }
                     const auto encoded = prepare::encode_row(values, format);
                     std::copy(encoded.data.begin(), encoded.data.end(),

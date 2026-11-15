@@ -55,7 +55,7 @@ void SessionImpl::finish_result(ComputeResult result) {
         if (tx.kind == Kind::Prefill) {
             const auto& s = sequence(tx.members[0]);
             PrefillProgress progress;
-            progress.summary                 = {s.request->summary.prompt_tokens, s.reused,
+            progress.summary = {s.request->summary.prompt_tokens, s.reused,
                                 s.reused ? PrefixReusePath::Checkpoint : PrefixReusePath::Root};
             progress.processed_prompt_tokens = tx.result->rows[0].processed;
             progress.complete                = true;
@@ -91,7 +91,7 @@ void SessionImpl::finish_result(ComputeResult result) {
     if (tx.kind == Kind::Prefill) {
         const auto& s = sequence(tx.members[0]);
         PrefillProgress progress;
-        progress.summary                 = {s.request->summary.prompt_tokens, s.reused,
+        progress.summary = {s.request->summary.prompt_tokens, s.reused,
                             s.reused ? PrefixReusePath::Checkpoint : PrefixReusePath::Root};
         progress.processed_prompt_tokens = tx.result->rows[0].processed;
         progress.complete                = false;

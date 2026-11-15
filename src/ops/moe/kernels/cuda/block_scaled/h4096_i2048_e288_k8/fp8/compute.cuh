@@ -266,7 +266,7 @@ __global__ void vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank,
                     __bfloat162float(weight.scales[(row / 128) * (kHidden / 128) + block]), gate);
         up   = fmaf(dot_four(u, input),
                     __bfloat162float(
-                      weight.scales[((row + kIntermediate) / 128) * (kHidden / 128) + block]),
+                        weight.scales[((row + kIntermediate) / 128) * (kHidden / 128) + block]),
                     up);
     }
     gate = warp_reduce_sum(gate);

@@ -35,7 +35,9 @@ void expect_fail_rank(const PollDecision& decision, std::size_t rank, const char
 }
 
 PolledRank succeeded(std::uint64_t ticket) { return PolledRank{true, false, ticket}; }
+
 PolledRank failed(std::uint64_t ticket) { return PolledRank{true, true, ticket}; }
+
 PolledRank absent() { return PolledRank{}; }
 
 void case_1_all_succeed() {
@@ -116,8 +118,8 @@ void case_peers_to_advance() {
     expect_mask(peers_to_advance(behind), std::uint64_t{1} << 1, "a peer one behind is advanced");
 
     // Rank 1 ahead: it is not waiting on rank 0's collective, and advancing it further would be the
-    // 'run a peer ahead' failure the original rule was written to prevent. Rank 0 is polled on every
-    // host poll, so it catches up on its own.
+    // 'run a peer ahead' failure the original rule was written to prevent. Rank 0 is polled on
+    // every host poll, so it catches up on its own.
     const std::array<std::size_t, 2> ahead{128, 129};
     expect_mask(peers_to_advance(ahead), 0, "a peer ahead is not advanced");
 
@@ -129,8 +131,9 @@ void case_peers_to_advance() {
     expect_mask(peers_to_advance(last_ahead), std::uint64_t{1} << 1,
                 "a level rank is advanced and an ahead rank is not");
 
-    // A rank with no collective at all (the single-device lane, and a family that issues none): with a
-    // leader count of zero a peer is level, and polling it is the width-1 behaviour, unchanged.
+    // A rank with no collective at all (the single-device lane, and a family that issues none):
+    // with a leader count of zero a peer is level, and polling it is the width-1 behaviour,
+    // unchanged.
     const std::array<std::size_t, 2> none{0, 0};
     expect_mask(peers_to_advance(none), std::uint64_t{1} << 1,
                 "no collectives -> the peer is polled as before");

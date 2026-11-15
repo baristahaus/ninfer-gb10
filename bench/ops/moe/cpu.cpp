@@ -338,9 +338,9 @@ void measure(const Options& options, std::vector<std::unique_ptr<Bank>>& banks,
               K             = profile.top_k;
     const auto expert_bytes = geometry(profile.ffn.gate_up_type, 2 * I, H).bytes +
                               geometry(profile.ffn.down_type, H, I).bytes;
-    const auto kind = active == 0   ? ops::ExpertSubsetKind::None
-                      : active == K ? ops::ExpertSubsetKind::All
-                                    : ops::ExpertSubsetKind::MaskOnes;
+    const auto kind         = active == 0   ? ops::ExpertSubsetKind::None
+                              : active == K ? ops::ExpertSubsetKind::All
+                                            : ops::ExpertSubsetKind::MaskOnes;
     std::vector<int> mask(E);
     std::fill(mask.begin(), mask.begin() + E / 2, 1);
     const auto capacity = ops::routed_swiglu_workspace_capacity_bytes(profile, kind, 1, tokens);
@@ -581,13 +581,13 @@ int main(int argc, char** argv) {
         }
         const auto profile = make_profile(options.down_format);
         const int H = profile.ffn.hidden, I = profile.ffn.intermediate, E = profile.experts,
-                  K             = profile.top_k;
-        const auto expert_bytes = geometry(profile.ffn.gate_up_type, 2 * I, H).bytes +
-                                  geometry(profile.ffn.down_type, H, I).bytes;
+                  K                     = profile.top_k;
+        const auto expert_bytes         = geometry(profile.ffn.gate_up_type, 2 * I, H).bytes +
+                                          geometry(profile.ffn.down_type, H, I).bytes;
         const auto per_bank_working_set = (E / 2) * expert_bytes;
         const auto count =
             options.cache == "repeat" ? 1
-            : options.banks           ? options.banks
+            : options.banks ? options.banks
                             : std::max<std::size_t>(2, (4 * llc_bytes + per_bank_working_set - 1) /
                                                            per_bank_working_set);
         std::vector<std::unique_ptr<Bank>> banks;

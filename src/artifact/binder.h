@@ -48,6 +48,7 @@ public:
     explicit Binder(const Reader& reader);
 
     void set_shard_transform(ShardTransform transform) { shard_transform_ = std::move(transform); }
+
     [[nodiscard]] bool has_shard_transform() const noexcept {
         return static_cast<bool>(shard_transform_);
     }
@@ -95,8 +96,11 @@ public:
     // SP-4 tier planning inputs: the touched tiered banks with their permutations, for the
     // materialization planner to place after the plain device objects.
     [[nodiscard]] std::vector<TierPlanInput> tier_inputs() const;
+
     [[nodiscard]] std::uint64_t device_budget() const noexcept { return device_budget_; }
+
     [[nodiscard]] std::uint32_t cache_slot_cap() const noexcept { return cache_slot_cap_; }
+
     [[nodiscard]] std::span<const std::byte> resource_bytes(ObjectHandle object);
     [[nodiscard]] ObjectHandle resource(std::string_view component, std::string_view role);
     [[nodiscard]] HostValues values(const Binding& binding, std::optional<QType> format = {});
@@ -110,6 +114,7 @@ private:
     ShardTransform shard_transform_;
     std::vector<PreparedResource> resources_;
     std::vector<ObjectHandle> device_objects_;
+
     // SP-4 tiered banks: per-object tier metadata (the permutation and the hot count), plus
     // the adaptive-cache budget inputs applied by the materialization plan.
     struct TierState {
@@ -118,14 +123,15 @@ private:
         bool device               = false;
         bool host                 = false;
     };
+
     [[nodiscard]] TierState& tier_state(ObjectHandle object);
     // SP-4 tiered banks: remaps a binding's parts to the compacted mini-bank positions and
     // marks the tier seen. Shared by both binding paths so every residency-aware bind of a
     // tier-marked object takes the same route.
     void remap_tiered_parts(ParameterReference& out, Residency residency);
     std::vector<TierState> tier_states_;
-    std::uint64_t device_budget_  = 0;
-    std::uint32_t cache_slot_cap_ = 0;
+    std::uint64_t device_budget_     = 0;
+    std::uint32_t cache_slot_cap_    = 0;
     std::uint64_t read_bytes_        = 0;
     std::uint64_t owned_value_bytes_ = 0;
 };

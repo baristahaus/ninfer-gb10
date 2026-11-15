@@ -2,8 +2,8 @@
 // The two-rank round's release decision, as a pure function.
 //
 // A round is released only when EVERY rank has completed the same ticket. The decision is over the
-// ranks' polled events, so it is a pure function of those events and belongs here rather than inside
-// LocalExecutor, which needs real Devices and cannot be unit-tested without stubbing a core
+// ranks' polled events, so it is a pure function of those events and belongs here rather than
+// inside LocalExecutor, which needs real Devices and cannot be unit-tested without stubbing a core
 // contract.
 //
 // The invariant this encodes is the lockstep criterion: rank 0's event alone is not enough. A peer
@@ -14,8 +14,8 @@
 // discarding it makes a peer failure invisible to the engine.
 //
 // Two of the outcomes are not the same kind of "wait": `Wait` means no progress yet and the caller
-// should retry, while `ticket_mismatch` means a peer reported a DIFFERENT ticket, which is a symptom
-// of a sequencing bug and is named rather than silently dropped.
+// should retry, while `ticket_mismatch` means a peer reported a DIFFERENT ticket, which is a
+// symptom of a sequencing bug and is named rather than silently dropped.
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -25,22 +25,22 @@ namespace ninfer::runtime {
 // One rank's polled result, reduced to the three facts the decision needs. Kept free of the Event
 // variant so this can be tested without a Device or a Protocol.
 struct PolledRank {
-    bool has_event    = false;
-    bool failed       = false;
+    bool has_event          = false;
+    bool failed             = false;
     std::uint64_t ticket_id = 0;
 };
 
 enum class PollOutcome {
-    Wait,   // no progress this poll; the caller retries
-    Release,// every rank completed the same ticket; release rank 0's event
-    Fail,   // a rank failed; the ticket fails on that rank
+    Wait,    // no progress this poll; the caller retries
+    Release, // every rank completed the same ticket; release rank 0's event
+    Fail,    // a rank failed; the ticket fails on that rank
 };
 
 struct PollDecision {
-    PollOutcome outcome      = PollOutcome::Wait;
-    std::size_t failing_rank = 0;     // valid when outcome == Fail
-    bool ticket_mismatch     = false; // a peer reported a different ticket; outcome is Wait
-    std::size_t mismatch_rank = 0;    // valid when ticket_mismatch
+    PollOutcome outcome       = PollOutcome::Wait;
+    std::size_t failing_rank  = 0;     // valid when outcome == Fail
+    bool ticket_mismatch      = false; // a peer reported a different ticket; outcome is Wait
+    std::size_t mismatch_rank = 0;     // valid when ticket_mismatch
 };
 
 // The six rules, in order:
@@ -53,25 +53,25 @@ struct PollDecision {
 [[nodiscard]] inline PollDecision decide_poll(std::span<const PolledRank> ranks) {
     PollDecision decision;
     if (ranks.empty() || !ranks[0].has_event) { return decision; } // 1
-    if (ranks[0].failed) {                                          // 2
+    if (ranks[0].failed) {                                         // 2
         decision.outcome      = PollOutcome::Fail;
         decision.failing_rank = 0;
         return decision;
     }
     for (std::size_t rank = 1; rank < ranks.size(); ++rank) {
-        if (!ranks[rank].has_event) { return decision; }            // 3
-        if (ranks[rank].failed) {                                   // 4
+        if (!ranks[rank].has_event) { return decision; } // 3
+        if (ranks[rank].failed) {                        // 4
             decision.outcome      = PollOutcome::Fail;
             decision.failing_rank = rank;
             return decision;
         }
-        if (ranks[rank].ticket_id != ranks[0].ticket_id) {          // 5
+        if (ranks[rank].ticket_id != ranks[0].ticket_id) { // 5
             decision.ticket_mismatch = true;
             decision.mismatch_rank   = rank;
             return decision;
         }
     }
-    decision.outcome = PollOutcome::Release;                        // 6
+    decision.outcome = PollOutcome::Release; // 6
     return decision;
 }
 
@@ -81,11 +81,13 @@ struct PollDecision {
 // enqueues device work, so an ungated peer poll can run that rank ahead of the lockstep order. But
 // the ungated rule deadlocks in two different ways, both measured on the width-2 lane:
 //
-//   1. ONE progress() CALL CAN ENTER A COLLECTIVE. The stage machine runs in a loop, so a single call
-//      can carry rank 0 from a stage that waits on its own stream into one that enqueues a cross-rank
-//      collective. Rank 0 then has no event precisely BECAUSE it is in a rendezvous, and refusing to
-//      touch any peer leaves that rendezvous unanswered: the peer parked one stage behind never
-//      issues its collective, rank 0's device never completes, the round never releases.
+//   1. ONE progress() CALL CAN ENTER A COLLECTIVE. The stage machine runs in a loop, so a single
+//   call
+//      can carry rank 0 from a stage that waits on its own stream into one that enqueues a
+//      cross-rank collective. Rank 0 then has no event precisely BECAUSE it is in a rendezvous, and
+//      refusing to touch any peer leaves that rendezvous unanswered: the peer parked one stage
+//      behind never issues its collective, rank 0's device never completes, the round never
+//      releases.
 //   2. A PEER CAN HOLD THE EVENT THE ROUND NEEDS. Symmetrically, a peer that has finished its work
 //      publishes ResultReady and stops. Its event is only collected when it is polled, and it is
 //      polled only when rank 0 has an event -- which rank 0 does not, because it is waiting for the
@@ -96,10 +98,11 @@ struct PollDecision {
 // AHEAD of rank 0: behind means it has not yet issued the collective rank 0 waits for, and level
 // means it may already hold the event the round needs. A peer ahead of rank 0 is not touched, which
 // is the original guarantee, and the rule is self-limiting: advancing a level peer that has nothing
-// left to do is a no-op, and one that does run ahead is then ahead and stops being polled until rank
-// 0 catches up. Rank 0 is polled on every host poll regardless, so it always catches up.
+// left to do is a no-op, and one that does run ahead is then ahead and stops being polled until
+// rank 0 catches up. Rank 0 is polled on every host poll regardless, so it always catches up.
 //
-// `counts` is one entry per rank and counts[0] is the leader. Pure, so it is tested without Devices.
+// `counts` is one entry per rank and counts[0] is the leader. Pure, so it is tested without
+// Devices.
 [[nodiscard]] inline std::uint64_t peers_to_advance(std::span<const std::size_t> counts) {
     std::uint64_t mask = 0;
     if (counts.empty()) { return mask; }

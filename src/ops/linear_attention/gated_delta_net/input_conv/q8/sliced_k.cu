@@ -94,9 +94,9 @@ void launch_medium_cols(const Tensor& x, const Weight& weight, Tensor& qkv, Tens
 
 using ProjectionLauncher = void (*)(const Tensor&, const Weight&, Tensor&, Tensor&, cudaStream_t);
 using SnapshotLauncher   = void (*)(const Tensor&, const Weight&, const Tensor&, Tensor&,
-                                  const Tensor&, const Tensor&, const Tensor&, Tensor&, Tensor&,
-                                  Tensor&, Tensor&, cudaStream_t);
-using RecordLauncher     = void (*)(const Tensor&, const Weight&, const Tensor&, const Tensor&,
+                                    const Tensor&, const Tensor&, const Tensor&, Tensor&, Tensor&,
+                                    Tensor&, Tensor&, cudaStream_t);
+using RecordLauncher = void (*)(const Tensor&, const Weight&, const Tensor&, const Tensor&,
                                 const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
                                 Tensor&, cudaStream_t);
 

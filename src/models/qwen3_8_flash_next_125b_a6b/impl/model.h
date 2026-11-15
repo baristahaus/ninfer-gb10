@@ -83,7 +83,7 @@ struct MtpWeights {
 };
 
 using EmptyDFlashWeights = qwen3_8_flash_next::DFlashWeights<0>;
-using DFlash2Weights = qwen3_8_flash_next::DFlash2Weights<5>;
+using DFlash2Weights     = qwen3_8_flash_next::DFlash2Weights<5>;
 
 struct OptimizedProposalWeights {
     Weight head;

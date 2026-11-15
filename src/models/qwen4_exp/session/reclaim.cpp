@@ -410,8 +410,8 @@ ContextDemotionBatch ContextReclaimPlan::begin_kv_batch(ContextResources shortag
     batch->shortage = shortage;
     batch->pool     = pool;
     batch->valid    = !shortage.state_slots && !shortage.host_bytes && pool &&
-                   !impl->shortage.state_slots && !impl->shortage.host_bytes &&
-                   impl->shortage.first_kv_deficit() == pool;
+                      !impl->shortage.state_slots && !impl->shortage.host_bytes &&
+                      impl->shortage.first_kv_deficit() == pool;
     return ContextDemotionBatch(std::move(batch));
 }
 

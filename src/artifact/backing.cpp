@@ -74,7 +74,7 @@ std::size_t map_file_range(FileObjectView object, std::uint64_t offset, std::uin
     auto first     = std::lower_bound(object.segments.begin(), object.segments.end(), offset,
                                       [](const ReadSegment& segment, std::uint64_t position) {
                                       return segment.destination_offset + segment.bytes <= position;
-                                  });
+                                      });
     auto last      = first;
     while (last != object.segments.end() && last->destination_offset < end) ++last;
     const auto count = static_cast<std::size_t>(last - first);

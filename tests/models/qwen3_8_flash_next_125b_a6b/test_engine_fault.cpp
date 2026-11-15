@@ -75,7 +75,9 @@ public:
     }
 
     void progress(ninfer::PromptProgress) override {}
+
     void timing(ninfer::GenerationTimingObservation) override {}
+
     void publish(ninfer::OutputEvent) override {}
 
 private:
@@ -94,9 +96,7 @@ int exercise_oom_recovery(const char* artifact) {
     std::thread first_consumer([&] {
         try {
             first.wait(&sink);
-        } catch (...) {
-            first_error = std::current_exception();
-        }
+        } catch (...) { first_error = std::current_exception(); }
     });
     auto second = engine.submit(engine.prepare_tokens(long_prompt()), greedy_options(16));
 
@@ -105,9 +105,7 @@ int exercise_oom_recovery(const char* artifact) {
             const auto result = second.wait();
             return result.generated_token_ids.size() == 16 &&
                    result.finish_reason == ninfer::FinishReason::OutputLimit;
-        } catch (...) {
-            return false;
-        }
+        } catch (...) { return false; }
     }();
     first_consumer.join();
 
@@ -117,9 +115,7 @@ int exercise_oom_recovery(const char* artifact) {
             return false;
         } catch (const ninfer::RequestError& error) {
             return error.kind() == ninfer::RequestErrorKind::Overloaded;
-        } catch (...) {
-            return false;
-        }
+        } catch (...) { return false; }
     }();
 
     if (!first_overloaded || !second_completed) {
@@ -132,9 +128,7 @@ int exercise_oom_recovery(const char* artifact) {
             const auto result =
                 engine.generate(engine.prepare_tokens(canonical_prompt()), greedy_options(8));
             return result.generated_token_ids.size() == 8;
-        } catch (...) {
-            return false;
-        }
+        } catch (...) { return false; }
     }();
     if (!third_completed) {
         std::cerr << "Flash-Next OOM recovery: the Engine is not serving after recovery\n";
@@ -156,16 +150,12 @@ int exercise_invariant_failure(const char* artifact) {
     std::thread first_consumer([&] {
         try {
             first.wait();
-        } catch (...) {
-            first_error = std::current_exception();
-        }
+        } catch (...) { first_error = std::current_exception(); }
     });
     std::exception_ptr second_error;
     try {
         second.wait();
-    } catch (...) {
-        second_error = std::current_exception();
-    }
+    } catch (...) { second_error = std::current_exception(); }
     first_consumer.join();
 
     bool submission_unavailable = false;
@@ -177,10 +167,10 @@ int exercise_invariant_failure(const char* artifact) {
 
     if (first_error == nullptr || second_error == nullptr || !submission_unavailable ||
         engine.is_available()) {
-        std::cerr << "Flash-Next invariant failure: first_failed="
-                  << (first_error != nullptr) << " second_failed="
-                  << (second_error != nullptr) << " submission_unavailable="
-                  << submission_unavailable << " is_available=" << engine.is_available() << '\n';
+        std::cerr << "Flash-Next invariant failure: first_failed=" << (first_error != nullptr)
+                  << " second_failed=" << (second_error != nullptr)
+                  << " submission_unavailable=" << submission_unavailable
+                  << " is_available=" << engine.is_available() << '\n';
         return 1;
     }
     return 0;
@@ -195,13 +185,11 @@ int exercise_oom_recovery_cap(const char* artifact) {
     for (int index = 0; index < 9; ++index) {
         engine.arm_next_worker_fault(ninfer::Engine::WorkerFault::Oom);
     }
-    auto handle = engine.submit(engine.prepare_tokens(long_prompt()), greedy_options(16));
+    auto handle         = engine.submit(engine.prepare_tokens(long_prompt()), greedy_options(16));
     bool request_failed = false;
     try {
         handle.wait();
-    } catch (...) {
-        request_failed = true;
-    }
+    } catch (...) { request_failed = true; }
 
     bool submission_unavailable = false;
     try {
@@ -227,7 +215,8 @@ int main() {
 #else
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B fault-injection test did not run. Set it to the 125B .ninfer file\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B fault-injection "
+                     "test did not run. Set it to the 125B .ninfer file\n";
         return 77;
     }
     try {

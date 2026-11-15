@@ -151,14 +151,11 @@ void DecodeGraphDefinition::dump_nodes(const char* label) const {
 DecodeGraphExecutable::~DecodeGraphExecutable() { reset(); }
 
 DecodeGraphExecutable::DecodeGraphExecutable(DecodeGraphExecutable&& other) noexcept
-    : exec_(other.exec_),
-      definition_(other.definition_),
-      launch_stream_(other.launch_stream_),
-      upload_stream_(other.upload_stream_),
-      needs_upload_(other.needs_upload_),
+    : exec_(other.exec_), definition_(other.definition_), launch_stream_(other.launch_stream_),
+      upload_stream_(other.upload_stream_), needs_upload_(other.needs_upload_),
       children_(std::move(other.children_)) {
-    other.exec_         = nullptr;
-    other.definition_   = nullptr;
+    other.exec_          = nullptr;
+    other.definition_    = nullptr;
     other.launch_stream_ = nullptr;
     other.upload_stream_ = nullptr;
     other.needs_upload_  = false;
@@ -260,9 +257,8 @@ void DecodeGraphExecutable::rebuild(const DecodeGraphDefinition& definition) {
 }
 
 void DecodeGraphExecutable::retain_bindings(cudaGraph_t parent) {
-    std::erase_if(children_, [parent](const ChildBinding& binding) {
-        return binding.parent != parent;
-    });
+    std::erase_if(children_,
+                  [parent](const ChildBinding& binding) { return binding.parent != parent; });
 }
 
 void DecodeGraphExecutable::rebind_children() {

@@ -109,9 +109,9 @@ ExpertMatrixDeviceView device_weight_bank(const WeightBankView& bank) {
     out.high_stride  = layout.high.expert_stride;
     out.scale_stride = layout.scales.expert_stride;
     if (layout.has_divisors) {
-        out.divisors = reinterpret_cast<const float*>(bank.parent->data +
-                                                      bank.parent->geometry.divisor_offset) +
-                       layout.divisor_begin;
+        out.divisors       = reinterpret_cast<const float*>(bank.parent->data +
+                                                            bank.parent->geometry.divisor_offset) +
+                             layout.divisor_begin;
         out.divisor_stride = layout.divisor_stride;
     }
     return out;

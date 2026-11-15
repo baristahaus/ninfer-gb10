@@ -400,8 +400,8 @@ struct Fixture {
                     for (int d = 0; d < kCandidates; ++d) {
                         const double actual = lattice[lattice_offset(b, 1, 5, c)] -
                                               lattice[lattice_offset(b, 1, 5, d)];
-                        const double other = lattice[lattice_offset(b, 1, 0, c)] -
-                                             lattice[lattice_offset(b, 1, 0, d)];
+                        const double other  = lattice[lattice_offset(b, 1, 0, c)] -
+                                              lattice[lattice_offset(b, 1, 0, d)];
                         if (actual - other > largest) {
                             largest  = actual - other;
                             left     = c;

@@ -13,7 +13,6 @@
 namespace ninfer::flashnext_runtime {
 using namespace ninfer::runtime;
 
-
 struct ContextPortfolioOwnerPolicy {
     PlanningOwnerId owner;
     std::uint32_t private_retention_weight = 0;

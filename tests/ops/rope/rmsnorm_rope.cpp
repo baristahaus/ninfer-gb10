@@ -276,9 +276,9 @@ int run_single_case(int tokens, int first_position, std::uint32_t seed, float th
         },
         graph);
 
-    const std::string label = "rmsnorm_rope single graph=" + std::to_string(graph) +
-                              " T=" + std::to_string(tokens) + " P=" + std::to_string(first_position) +
-                              " theta=" + std::to_string(theta);
+    const std::string label =
+        "rmsnorm_rope single graph=" + std::to_string(graph) + " T=" + std::to_string(tokens) +
+        " P=" + std::to_string(first_position) + " theta=" + std::to_string(theta);
     int failures = verify_profile(label, from_device_bf16(input_device.data(), count), expected);
     failures += input_device.verify_guards(label + " guards");
     failures +=
@@ -310,8 +310,8 @@ void add_rmsnorm_rope_cases(ninfer::test::OpSuite& suite) {
     };
     for (int width = 2; width <= 16; ++width)
         for (int batch = 1; batch <= 8; ++batch)
-            pair(width, batch, width == 2 && batch == 1 ? 0 : 262000,
-                 0x1000U + width * 8 + batch, kTheta);
+            pair(width, batch, width == 2 && batch == 1 ? 0 : 262000, 0x1000U + width * 8 + batch,
+                 kTheta);
     // The DFlash2 draft companion checkpoint declares theta=1e4; this exercises the derived
     // frequency path, not the precomputed 1e7 table.
     pair(4, 2, 0, 0x1100U, 1.0e4F);

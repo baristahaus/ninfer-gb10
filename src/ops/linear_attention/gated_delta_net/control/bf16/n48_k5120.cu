@@ -26,9 +26,8 @@ constexpr Plan mma(int tile, int split) { return {Kernel::Mma, tile, split}; }
 // Every token count above one goes to the MMA route: the small-split route still carries a literal
 // 48 in its kernels, and the MMA geometry's padded 16-head M tile serves 24 heads without it.
 constexpr std::array kN48K5120{
-    Route{1, 1, {Kernel::Gemv}},    Route{2, 1024, mma(128, 8)},
-    Route{1025, 2048, mma(128, 4)}, Route{2049, 4096, mma(128, 2)},
-    Route{4097, kLast, mma(128, 1)},
+    Route{1, 1, {Kernel::Gemv}},    Route{2, 1024, mma(128, 8)},     Route{1025, 2048, mma(128, 4)},
+    Route{2049, 4096, mma(128, 2)}, Route{4097, kLast, mma(128, 1)},
 };
 static_assert(closed(kN48K5120));
 } // namespace

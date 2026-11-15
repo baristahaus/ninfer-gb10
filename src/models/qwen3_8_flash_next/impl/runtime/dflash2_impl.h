@@ -45,9 +45,9 @@ void prepare_branch(const Tensor& residual, const Tensor& norm, const Tensor& ba
                     const Weight& kernel_projection, DFlash2Branch& branch, MemoryArena& work,
                     CudaExecutionView execution) {
     const std::int32_t width = residual.ne[1], batch_size = residual.ne[2];
-    MemoryArena scratch(work.alloc_bytes(
-        ops::rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes(width, width,
-                                                                          batch_size, batch_size)));
+    MemoryArena scratch(
+        work.alloc_bytes(ops::rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes(
+            width, width, batch_size, batch_size)));
     ops::rmsnorm_dynamic_grouped_conv_prepare(residual, norm, Config::rms_epsilon, base_kernel,
                                               kernel_projection, branch.prepared,
                                               branch.finish_delta, scratch, execution);
@@ -58,8 +58,8 @@ void finish_branch(const Tensor& input, const Weight& projection, const Tensor& 
                    DFlash2Branch& branch, Tensor& residual, MemoryArena& work,
                    CudaExecutionView execution) {
     const std::int32_t width = input.ne[1], batch_size = input.ne[2];
-    MemoryArena scratch(work.alloc_bytes(
-        ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
+    MemoryArena scratch(
+        work.alloc_bytes(ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
             input.ne[0], width, width, batch_size, batch_size)));
     ops::linear_dynamic_grouped_conv_add(input, projection, base_kernel, branch.finish_delta,
                                          residual, scratch, execution);
@@ -77,8 +77,8 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
     if constexpr (!V::supports_dflash) {
         throw std::logic_error("DFlash2 proposal is unavailable for this target");
     } else {
-        using Config             = typename V::DFlashConfig;
-        const std::int32_t width = static_cast<std::int32_t>(k) + 1;
+        using Config               = typename V::DFlashConfig;
+        const std::int32_t width   = static_cast<std::int32_t>(k) + 1;
         const std::int32_t columns = width * batch_size;
         nvtx::ScopedRange proposal_range(nvtx::Name::DFlashProposal, nvtx::Category::DFlash,
                                          static_cast<std::uint64_t>(columns));
@@ -96,7 +96,7 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
         ;
         ops::prepare_masked_block(anchors, frontiers, valid_columns, Config::mask_token, ids,
                                   positions, state.execution.device.stream());
-        Tensor residual = work.alloc(DType::BF16, {Config::hidden, width, batch_size});
+        Tensor residual      = work.alloc(DType::BF16, {Config::hidden, width, batch_size});
         Tensor flat_residual = residual.view({Config::hidden, columns});
         ops::embedding(ids.view({columns}), state.execution.model.token_embedding, flat_residual,
                        state.execution.device.execution_view());
@@ -115,13 +115,12 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                                        weight.attention_conv_base_kernel,
                                        weight.attention_conv_kernel_projection, branch, work,
                                        state.execution.device.execution_view());
-                Tensor query =
-                    work.alloc(DType::BF16, {Config::head_dim, Config::query_heads, width,
-                                             batch_size});
-                Tensor key =
-                    work.alloc(DType::BF16, {Config::head_dim, Config::kv_heads, width, batch_size});
-                Tensor value =
-                    work.alloc(DType::BF16, {Config::head_dim, Config::kv_heads, width, batch_size});
+                Tensor query = work.alloc(
+                    DType::BF16, {Config::head_dim, Config::query_heads, width, batch_size});
+                Tensor key   = work.alloc(DType::BF16,
+                                          {Config::head_dim, Config::kv_heads, width, batch_size});
+                Tensor value = work.alloc(DType::BF16,
+                                          {Config::head_dim, Config::kv_heads, width, batch_size});
                 Tensor query_flat = query.view({Config::query_size, columns});
                 Tensor key_flat   = key.view({Config::kv_size, columns});
                 Tensor value_flat = value.view({Config::kv_size, columns});
@@ -130,23 +129,19 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                                   weight.query_key_value, outputs,
                                   state.execution.device.execution_view());
                 ops::rmsnorm_rope(positions, weight.query_norm, weight.key_norm, query, key,
-                                  Config::rope_theta,
-                                  state.execution.device.execution_view());
-                Tensor attention =
-                    work.alloc(DType::BF16, {Config::head_dim, Config::query_heads, width,
-                                             batch_size});
+                                  Config::rope_theta, state.execution.device.execution_view());
+                Tensor attention = work.alloc(
+                    DType::BF16, {Config::head_dim, Config::query_heads, width, batch_size});
                 ops::sliding_window_attention(
                     query, key, value, positions, valid_columns, state_destinations,
                     {Config::head_dim, Config::query_heads, Config::kv_heads},
                     Config::local_capacity, Config::attention_scale,
                     dflash_state(state).local_layer(static_cast<std::uint32_t>(layer)),
-                    envelopes.local, work, attention,
-                    state.execution.device.execution_view());
-                finish_branch<Config>(
-                    attention.view({Config::query_size, width, batch_size}), weight.output,
-                    weight.attention_conv_base_kernel, branch, residual, work,
-                    state.execution.device.execution_view());
-                }
+                    envelopes.local, work, attention, state.execution.device.execution_view());
+                finish_branch<Config>(attention.view({Config::query_size, width, batch_size}),
+                                      weight.output, weight.attention_conv_base_kernel, branch,
+                                      residual, work, state.execution.device.execution_view());
+            }
             {
                 nvtx::ScopedRange mlp_range(nvtx::Name::DFlashMlp, nvtx::Category::PostMixer,
                                             static_cast<std::uint64_t>(layer));
@@ -165,13 +160,13 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                 finish_branch<Config>(intermediate, weight.mlp_down, weight.mlp_conv_base_kernel,
                                       branch, residual, work,
                                       state.execution.device.execution_view());
-                }
+            }
         }
 
         const std::int32_t mask_columns = static_cast<std::int32_t>(k) * batch_size;
-        Tensor proposal_hidden = work.alloc(DType::BF16, {Config::hidden, mask_columns});
-        ops::rmsnorm_pack_tail(residual, state.execution.model.dflash2->final_norm,
-                               proposal_hidden, state.execution.device.execution_view());
+        Tensor proposal_hidden          = work.alloc(DType::BF16, {Config::hidden, mask_columns});
+        ops::rmsnorm_pack_tail(residual, state.execution.model.dflash2->final_norm, proposal_hidden,
+                               state.execution.device.execution_view());
         Tensor candidates = frame.proposal_candidates.slice(2, 0, batch_size);
         Tensor scores     = frame.proposal_scores.slice(2, 0, batch_size);
         Tensor logits     = work.alloc(DType::BF16, {TextConfig::output_rows, mask_columns});
@@ -180,9 +175,9 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
         // top candidates per column.
         ops::linear(proposal_hidden, state.execution.model.output_head, logits,
                     state.execution.device.execution_view());
-        ops::column_topk(logits.view({TextConfig::output_rows, static_cast<std::int32_t>(k),
-                                      batch_size}),
-                         candidates, scores, state.execution.device.execution_view());
+        ops::column_topk(
+            logits.view({TextConfig::output_rows, static_cast<std::int32_t>(k), batch_size}),
+            candidates, scores, state.execution.device.execution_view());
         Tensor projected = work.alloc(DType::BF16, {Config::selector_rank, mask_columns});
         ops::linear(proposal_hidden, state.execution.model.dflash2->selector_hidden_projection,
                     projected, state.execution.device.execution_view());
@@ -199,12 +194,12 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
             candidates, scores,
             projected.view({Config::selector_rank, static_cast<std::int32_t>(k), batch_size}),
             anchors, state.execution.model.dflash2->selector_predecessor_codebook,
-            state.execution.model.dflash2->selector_successor_codebook, frontiers,
-            frame.sampling, drafts, proposal_q, work,
-            state.execution.device.execution_view());
+            state.execution.model.dflash2->selector_successor_codebook, frontiers, frame.sampling,
+            drafts, proposal_q, work, state.execution.device.execution_view());
         work.reset();
     }
 }
 
 } // namespace
-} // namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::schedule
+} // namespace
+  // ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::schedule

@@ -42,7 +42,8 @@ namespace {
 // path that is right lands inside it, one that is wrong does not.
 // The acceptance tolerance is not a constant: the residual is a function of the K/V profile (the
 // teacher-forced oracle's is: BF16 0.0281 nats, FP8 E4M3 0.1380), so the derived tolerance comes in
-// through NINFER_SCORE_TOLERANCE. The 0.12 default is the old borrowed anchor and is only a fallback.
+// through NINFER_SCORE_TOLERANCE. The 0.12 default is the old borrowed anchor and is only a
+// fallback.
 constexpr double kDefaultToleranceNats = 0.12;
 
 double tolerance_nats() {
@@ -59,6 +60,7 @@ const char* kv_profile_name() {
     if (std::string(env) == "fp8") { return "fp8"; }
     return "bf16";
 }
+
 constexpr std::uint32_t kMaxContext = 2048;
 constexpr std::size_t kTokenCount   = 256;
 constexpr std::size_t kAlteredIndex = 128;
@@ -113,18 +115,33 @@ struct Sha256 {
             const std::uint32_t s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
             const std::uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
             const std::uint32_t t2 = s0 + mj;
-            h = g; g = f; f = e; e = d + t1;
-            d = c; c = b; b = a; a = t1 + t2;
+            h                      = g;
+            g                      = f;
+            f                      = e;
+            e                      = d + t1;
+            d                      = c;
+            c                      = b;
+            b                      = a;
+            a                      = t1 + t2;
         }
-        state[0] += a; state[1] += b; state[2] += c; state[3] += d;
-        state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+        state[5] += f;
+        state[6] += g;
+        state[7] += h;
     }
 
     void update(const std::uint8_t* data, std::size_t size) {
         bytes += size;
         for (std::size_t i = 0; i < size; ++i) {
             block[filled++] = data[i];
-            if (filled == block.size()) { compress(); filled = 0; }
+            if (filled == block.size()) {
+                compress();
+                filled = 0;
+            }
         }
     }
 
@@ -150,7 +167,8 @@ std::string artifact_sha256(const std::string& path) {
     Sha256 hash;
     std::vector<std::uint8_t> buffer(8u << 20);
     while (file) {
-        file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        file.read(reinterpret_cast<char*>(buffer.data()),
+                  static_cast<std::streamsize>(buffer.size()));
         const auto read = static_cast<std::size_t>(file.gcount());
         if (read) hash.update(buffer.data(), read);
     }
@@ -163,11 +181,11 @@ struct Reference {
     std::string artifact_sha256;
     std::uint64_t artifact_bytes = 0;
     std::string kv_dtype;
-    std::uint32_t max_context = 0;
+    std::uint32_t max_context  = 0;
     std::uint32_t first_target = 0;
     std::vector<ninfer::TokenId> tokens;
     std::vector<float> logprobs;
-    std::size_t altered_index = 0;
+    std::size_t altered_index     = 0;
     ninfer::TokenId altered_token = 0;
     std::vector<float> altered_logprobs;
 };
@@ -214,12 +232,18 @@ bool read_reference(const std::string& path, Reference& reference, std::string& 
     std::string key;
     std::size_t count = 0;
     while (in >> key) {
-        if (key == "sequence") in >> reference.sequence;
-        else if (key == "artifact_sha256") in >> reference.artifact_sha256;
-        else if (key == "artifact_bytes") in >> reference.artifact_bytes;
-        else if (key == "kv_dtype") in >> reference.kv_dtype;
-        else if (key == "max_context") in >> reference.max_context;
-        else if (key == "first_target") in >> reference.first_target;
+        if (key == "sequence")
+            in >> reference.sequence;
+        else if (key == "artifact_sha256")
+            in >> reference.artifact_sha256;
+        else if (key == "artifact_bytes")
+            in >> reference.artifact_bytes;
+        else if (key == "kv_dtype")
+            in >> reference.kv_dtype;
+        else if (key == "max_context")
+            in >> reference.max_context;
+        else if (key == "first_target")
+            in >> reference.first_target;
         else if (key == "tokens") {
             in >> count;
             reference.tokens.resize(count);
@@ -237,8 +261,9 @@ bool read_reference(const std::string& path, Reference& reference, std::string& 
             return false;
         }
     }
-    // first_target = 1 means the first token has no prediction, so N tokens produce N - first_target
-    // positions. Equality between the two counts is impossible for any correct capture.
+    // first_target = 1 means the first token has no prediction, so N tokens produce N -
+    // first_target positions. Equality between the two counts is impossible for any correct
+    // capture.
     if (reference.tokens.empty() || reference.first_target == 0 ||
         reference.first_target >= reference.tokens.size()) {
         error = "first_target is outside the token sequence";
@@ -270,10 +295,10 @@ ninfer::EngineOptions options_for(const char* artifact, int width) {
     // tolerance must be a function of; at width 2 it sits behind its own unvalidated gate row, so a
     // measurement run lifts that row locally and the measurement is a diagnostic, not a validation
     // of the quantized-pool row.
-    options.kv_cache = std::string(kv_profile_name()) == "fp8"
-                           ? ninfer::KvCacheStorage::Fp8E4M3Row256
-                           : ninfer::KvCacheStorage::BFloat16;
-    options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(kMaxContext);
+    options.kv_cache    = std::string(kv_profile_name()) == "fp8"
+                              ? ninfer::KvCacheStorage::Fp8E4M3Row256
+                              : ninfer::KvCacheStorage::BFloat16;
+    options.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(kMaxContext);
     if (width > 1) {
         options.devices = {0, 1};
     } else {
@@ -317,11 +342,11 @@ std::vector<ninfer::TokenId> sequence_for(ninfer::Engine& engine, const std::str
         return tokens;
     }
     // Distinct: walk a long, varied text and keep only ids not seen yet. The pool is the whole
-    // varied corpus, not two repeated paragraphs: two English paragraphs do not contain 256 distinct
-    // ids, because common words recur and every repeat is dropped.
+    // varied corpus, not two repeated paragraphs: two English paragraphs do not contain 256
+    // distinct ids, because common words recur and every repeat is dropped.
     std::string text;
     for (int pass = 0; pass < 3; ++pass) text += first + second + third + fourth + fifth;
-    const auto all   = engine.tokenize_text(text);
+    const auto all = engine.tokenize_text(text);
     std::vector<bool> seen(250000, false);
     for (const auto token : all) {
         if (tokens.size() == kTokenCount) break;
@@ -369,10 +394,10 @@ double percentile(std::vector<double> values, double fraction) {
 } // namespace
 
 int main() {
-    const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
-    const char* mode     = std::getenv("NINFER_SCORE_MODE");
-    const char* fixture  = std::getenv("NINFER_SCORE_FIXTURE");
-    int devices          = 0;
+    const char* artifact     = std::getenv("NINFER_TEST_ARTIFACT");
+    const char* mode         = std::getenv("NINFER_SCORE_MODE");
+    const char* fixture      = std::getenv("NINFER_SCORE_FIXTURE");
+    int devices              = 0;
     const cudaError_t status = cudaGetDeviceCount(&devices);
     const int device_count   = status == cudaSuccess ? devices : 0;
     const bool capture       = mode != nullptr && std::string(mode) == "capture";
@@ -406,8 +431,7 @@ int main() {
     auto engine = build(artifact, capture ? 1 : 2);
     if (!engine) { return 1; }
     const char* sequence_env = std::getenv("NINFER_SCORE_SEQUENCE");
-    const std::string kind =
-        sequence_env != nullptr && *sequence_env ? sequence_env : "periodic";
+    const std::string kind   = sequence_env != nullptr && *sequence_env ? sequence_env : "periodic";
     std::vector<ninfer::TokenId> tokens;
     try {
         tokens = sequence_for(*engine, kind);
@@ -435,17 +459,17 @@ int main() {
             std::ifstream probe(artifact, std::ios::binary | std::ios::ate);
             reference.artifact_bytes = static_cast<std::uint64_t>(probe.tellg());
         }
-        reference.kv_dtype     = kv_profile_name();
-        reference.max_context  = kMaxContext;
-        reference.first_target = 1;
-        reference.tokens       = tokens;
-        reference.logprobs     = engine->score_tokens(tokens, 1);
+        reference.kv_dtype      = kv_profile_name();
+        reference.max_context   = kMaxContext;
+        reference.first_target  = 1;
+        reference.tokens        = tokens;
+        reference.logprobs      = engine->score_tokens(tokens, 1);
         reference.altered_index = tokens.size() / 2;
         auto altered            = tokens;
         reference.altered_token =
             static_cast<ninfer::TokenId>((tokens[reference.altered_index] + 977) % 150000);
         altered[reference.altered_index] = reference.altered_token;
-        reference.altered_logprobs = engine->score_tokens(altered, 1);
+        reference.altered_logprobs       = engine->score_tokens(altered, 1);
         if (!write_reference(fixture, reference)) {
             std::cerr << "could not write the reference to " << fixture << '\n';
             return 1;
@@ -477,7 +501,8 @@ int main() {
         return 1;
     }
     if (reference.tokens != tokens) {
-        std::cerr << "REFUSED: the reference's token sequence differs from this box's tokenization\n";
+        std::cerr
+            << "REFUSED: the reference's token sequence differs from this box's tokenization\n";
         return 1;
     }
     if (reference.kv_dtype != kv_profile_name()) {
@@ -494,7 +519,7 @@ int main() {
     }
     std::vector<double> deltas;
     deltas.reserve(sharded.size());
-    double max_delta = 0.0;
+    double max_delta  = 0.0;
     double mean_delta = 0.0;
     for (std::size_t i = 0; i < sharded.size(); ++i) {
         if (!std::isfinite(sharded[i]) || !std::isfinite(reference.logprobs[i])) {
@@ -512,9 +537,9 @@ int main() {
     const std::size_t over_0p05 = static_cast<std::size_t>(
         std::count_if(deltas.begin(), deltas.end(), [](double d) { return d > 0.05; }));
     // The distribution is the lead the fix needs: a global offset or a wrong normalisation corrupts
-    // every position, so a SUBSET taking a wrong path points at something positional. Every position
-    // is written to a report beside the fixture, and the worst are printed, so one run answers
-    // "which positions are wrong" without a second run.
+    // every position, so a SUBSET taking a wrong path points at something positional. Every
+    // position is written to a report beside the fixture, and the worst are printed, so one run
+    // answers "which positions are wrong" without a second run.
     {
         const std::string report_path = std::string(fixture) + ".positions";
         std::ofstream report(report_path, std::ios::trunc);
@@ -543,14 +568,15 @@ int main() {
               << " mean|dlogp|=" << mean_delta << " p99|dlogp|=" << percentile(deltas, 0.99)
               << " over0.01=" << over_0p01 << " over0.05=" << over_0p05 << '\n';
     if (max_delta > tolerance) {
-        fail("width-2 scoring differs from the recorded width-1 reference beyond the tolerance of " +
-             std::to_string(tolerance) + " nats");
+        fail(
+            "width-2 scoring differs from the recorded width-1 reference beyond the tolerance of " +
+            std::to_string(tolerance) + " nats");
     }
 
-    // The property adjudication needs: both routes must find the real next token clearly better than
-    // a deliberately altered one, and agree on how much worse.
-    auto altered = tokens;
-    altered[reference.altered_index] = reference.altered_token;
+    // The property adjudication needs: both routes must find the real next token clearly better
+    // than a deliberately altered one, and agree on how much worse.
+    auto altered                             = tokens;
+    altered[reference.altered_index]         = reference.altered_token;
     const std::vector<float> sharded_altered = engine->score_tokens(altered, 1);
     const double reference_margin =
         static_cast<double>(reference.logprobs[reference.altered_index]) -

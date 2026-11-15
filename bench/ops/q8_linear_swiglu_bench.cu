@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
                 options.graph
                     ? bench::measure_cold_graph(graph, flush, cuda, options.warmup, options.repeat)
                     : bench::measure_cold_launch(body, flush, cuda, options.warmup, options.repeat);
-            const auto exact  = ops::linear_swiglu_workspace_capacity_bytes(
+            const auto exact = ops::linear_swiglu_workspace_capacity_bytes(
                 QType::Q8_G32_FP16, problem.gate_up_rows, problem.hidden,
                 ops::LinearPolicy::A16Only, t, t);
             append(results, problem, t, timing, packed.model_weight_bytes(), exact, graph.nodes(),

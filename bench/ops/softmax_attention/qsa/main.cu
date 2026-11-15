@@ -213,10 +213,10 @@ int main(int argc, char** argv) {
                                     [&](CudaExecutionView cuda) {
                                         if (contiguous)
                                             ops::linear(fixture.x, weights.weight, fixture.packed,
-                                                            cuda);
+                                                        cuda);
                                         else
                                             ops::linear_split(fixture.x, weights.weight,
-                                                                  fixture.split, cuda);
+                                                              fixture.split, cuda);
                                     },
                                     [](auto) {}, flush, device.execution_view(), options.timing,
                                     execution, cache);

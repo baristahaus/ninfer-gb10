@@ -16,10 +16,10 @@ using namespace ninfer;
 using namespace ninfer::test;
 
 constexpr int kStreams = 4;
-constexpr int kHidden = 2560;
-constexpr int kHyper = kStreams * kHidden;
-constexpr int kTokens = 2;
-constexpr int kState = 9;
+constexpr int kHidden  = 2560;
+constexpr int kHyper   = kStreams * kHidden;
+constexpr int kTokens  = 2;
+constexpr int kState   = 9;
 
 std::vector<std::uint16_t> encode(const std::vector<float>& values) {
     std::vector<std::uint16_t> bits(values.size());
@@ -30,20 +30,20 @@ std::vector<std::uint16_t> encode(const std::vector<float>& values) {
 Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
     out.payload = out.qdata = storage.data();
-    out.payload_bytes = storage.size();
-    out.qtype = QType::BF16;
-    out.layout = QuantLayout::Contiguous;
+    out.payload_bytes       = storage.size();
+    out.qtype               = QType::BF16;
+    out.layout              = QuantLayout::Contiguous;
     out.n = out.shape[0] = out.padded_shape[0] = rows;
     out.k = out.shape[1] = out.padded_shape[1] = columns;
-    out.ndim = 2;
+    out.ndim                                   = 2;
     return out;
 }
 
 double fp8_e4m3(std::uint8_t bits) {
-    const int sign = bits >> 7;
+    const int sign     = bits >> 7;
     const int exponent = (bits >> 3) & 15;
     const int fraction = bits & 7;
-    double value = 0.0;
+    double value       = 0.0;
     if (exponent == 0) {
         value = std::ldexp(static_cast<double>(fraction), -9);
     } else if (exponent == 15 && fraction == 7) {
@@ -61,7 +61,8 @@ double represented_bf16(double value) {
 // fork: the history continues from a checkpoint slot into a distinct slot whose prior content
 // is unrelated; the checkpoint must stay unchanged and the stale content must never be read.
 int run(bool fork) {
-    std::vector<float> hyper(kHyper * kTokens), key_norm(kHyper), query_norm(kHyper), conv_norm(kHyper), state(kHyper * kState);
+    std::vector<float> hyper(kHyper * kTokens), key_norm(kHyper), query_norm(kHyper),
+        conv_norm(kHyper), state(kHyper * kState);
     fill_uniform(hyper, 1701, -0.5F, 0.5F);
     fill_uniform(key_norm, 1702, -0.08F, 0.08F);
     fill_uniform(query_norm, 1703, -0.08F, 0.08F);
@@ -78,35 +79,49 @@ int run(bool fork) {
     for (std::size_t i = 0; i < gathered.size(); ++i) { gathered[i] = fp8_values[i % 6]; }
     constexpr float embedding_scale = 0.25F;
     std::vector<double> embedding(gathered.size());
-    for (std::size_t i = 0; i < gathered.size(); ++i) { embedding[i] = fp8_e4m3(gathered[i]) * embedding_scale; }
+    for (std::size_t i = 0; i < gathered.size(); ++i) {
+        embedding[i] = fp8_e4m3(gathered[i]) * embedding_scale;
+    }
 
     std::vector<float> key_weight(static_cast<std::size_t>(kHyper) * kHidden, 0.0F);
     std::vector<float> value_weight(static_cast<std::size_t>(kHidden) * kHidden, 0.0F);
-    for (int row = 0; row < kHyper; ++row) { key_weight[static_cast<std::size_t>(row) * kHidden + (17 * row) % kHidden] = (row & 1) ? -0.125F : 0.125F; }
-    for (int row = 0; row < kHidden; ++row) { value_weight[static_cast<std::size_t>(row) * kHidden + row] = 0.25F; }
+    for (int row = 0; row < kHyper; ++row) {
+        key_weight[static_cast<std::size_t>(row) * kHidden + (17 * row) % kHidden] =
+            (row & 1) ? -0.125F : 0.125F;
+    }
+    for (int row = 0; row < kHidden; ++row) {
+        value_weight[static_cast<std::size_t>(row) * kHidden + row] = 0.25F;
+    }
     std::vector<float> conv_weight(kHyper * 4);
     for (int channel = 0; channel < kHyper; ++channel) {
-        conv_weight[channel] = 0.125F;
-        conv_weight[kHyper + channel] = -0.0625F;
+        conv_weight[channel]              = 0.125F;
+        conv_weight[kHyper + channel]     = -0.0625F;
         conv_weight[2 * kHyper + channel] = 0.03125F;
         conv_weight[3 * kHyper + channel] = 0.25F;
     }
 
-    std::vector<double> key(kHyper * kTokens), value(kHidden * kTokens), gated(kHyper * kTokens), normalized(kHyper * kTokens), expected(kHyper * kTokens);
+    std::vector<double> key(kHyper * kTokens), value(kHidden * kTokens), gated(kHyper * kTokens),
+        normalized(kHyper * kTokens), expected(kHyper * kTokens);
     std::vector<double> expected_state(state.begin(), state.end());
     for (int token = 0; token < kTokens; ++token) {
         for (int row = 0; row < kHyper; ++row) {
             double sum = 0.0;
-            for (int column = 0; column < kHidden; ++column) { sum += key_weight[static_cast<std::size_t>(row) * kHidden + column] * embedding[token * kHidden + column]; }
+            for (int column = 0; column < kHidden; ++column) {
+                sum += key_weight[static_cast<std::size_t>(row) * kHidden + column] *
+                       embedding[token * kHidden + column];
+            }
             key[token * kHyper + row] = represented_bf16(sum);
         }
         for (int row = 0; row < kHidden; ++row) {
             double sum = 0.0;
-            for (int column = 0; column < kHidden; ++column) { sum += value_weight[static_cast<std::size_t>(row) * kHidden + column] * embedding[token * kHidden + column]; }
+            for (int column = 0; column < kHidden; ++column) {
+                sum += value_weight[static_cast<std::size_t>(row) * kHidden + column] *
+                       embedding[token * kHidden + column];
+            }
             value[token * kHidden + row] = represented_bf16(sum);
         }
         for (int stream = 0; stream < kStreams; ++stream) {
-            const int base = token * kHyper + stream * kHidden;
+            const int base  = token * kHyper + stream * kHidden;
             double q_square = 0.0, k_square = 0.0;
             for (int d = 0; d < kHidden; ++d) {
                 q_square += double(hyper[base + d]) * hyper[base + d];
@@ -114,22 +129,24 @@ int run(bool fork) {
             }
             const double qi = 1.0 / std::sqrt(q_square / kHidden + 1.0e-6);
             const double ki = 1.0 / std::sqrt(k_square / kHidden + 1.0e-6);
-            double dot = 0.0;
-            for (int d = 0; d < kHidden; ++d) { dot += hyper[base + d] * qi * (1.0 + query_norm[stream * kHidden + d]) * key[base + d] * ki * (1.0 + key_norm[stream * kHidden + d]); }
-            dot /= std::sqrt(static_cast<double>(kHidden));
-            const double transformed = std::copysign(std::sqrt(std::max(std::abs(dot), 1.0e-6)), dot);
-            const double gate = 1.0 / (1.0 + std::exp(-transformed));
-            double square = 0.0;
+            double dot      = 0.0;
             for (int d = 0; d < kHidden; ++d) {
-                gated[base + d] =
-                    represented_bf16(gate * value[token * kHidden + d]);
+                dot += hyper[base + d] * qi * (1.0 + query_norm[stream * kHidden + d]) *
+                       key[base + d] * ki * (1.0 + key_norm[stream * kHidden + d]);
+            }
+            dot /= std::sqrt(static_cast<double>(kHidden));
+            const double transformed =
+                std::copysign(std::sqrt(std::max(std::abs(dot), 1.0e-6)), dot);
+            const double gate = 1.0 / (1.0 + std::exp(-transformed));
+            double square     = 0.0;
+            for (int d = 0; d < kHidden; ++d) {
+                gated[base + d] = represented_bf16(gate * value[token * kHidden + d]);
                 square += gated[base + d] * gated[base + d];
             }
             const double inverse = 1.0 / std::sqrt(square / kHidden + 1.0e-6);
             for (int d = 0; d < kHidden; ++d) {
-                normalized[base + d] = represented_bf16(
-                    gated[base + d] * inverse *
-                    (1.0 + conv_norm[stream * kHidden + d]));
+                normalized[base + d] = represented_bf16(gated[base + d] * inverse *
+                                                        (1.0 + conv_norm[stream * kHidden + d]));
             }
         }
         for (int channel = 0; channel < kHyper; ++channel) {
@@ -138,46 +155,62 @@ int run(bool fork) {
             conv += conv_weight[2 * kHyper + channel] * expected_state[6 * kHyper + channel];
             conv += conv_weight[3 * kHyper + channel] * normalized[token * kHyper + channel];
             const double represented_conv = represented_bf16(conv);
-            const double silu = represented_bf16(
-                represented_conv / (1.0 + std::exp(-represented_conv)));
-            expected[token * kHyper + channel] = represented_bf16(
-                gated[token * kHyper + channel] + silu);
+            const double silu =
+                represented_bf16(represented_conv / (1.0 + std::exp(-represented_conv)));
+            expected[token * kHyper + channel] =
+                represented_bf16(gated[token * kHyper + channel] + silu);
         }
         for (int i = 0; i < kState - 1; ++i) {
-            for (int channel = 0; channel < kHyper; ++channel) { expected_state[i * kHyper + channel] = expected_state[(i + 1) * kHyper + channel]; }
+            for (int channel = 0; channel < kHyper; ++channel) {
+                expected_state[i * kHyper + channel] = expected_state[(i + 1) * kHyper + channel];
+            }
         }
-        for (int channel = 0; channel < kHyper; ++channel) { expected_state[(kState - 1) * kHyper + channel] = normalized[token * kHyper + channel]; }
+        for (int channel = 0; channel < kHyper; ++channel) {
+            expected_state[(kState - 1) * kHyper + channel] = normalized[token * kHyper + channel];
+        }
     }
 
-    DeviceBuffer d_hyper = to_device(encode(hyper));
-    DeviceBuffer d_gathered = to_device(gathered);
-    DeviceBuffer d_key_weight = to_device(encode(key_weight));
+    DeviceBuffer d_hyper        = to_device(encode(hyper));
+    DeviceBuffer d_gathered     = to_device(gathered);
+    DeviceBuffer d_key_weight   = to_device(encode(key_weight));
     DeviceBuffer d_value_weight = to_device(encode(value_weight));
-    DeviceBuffer d_key_norm = to_device(encode(key_norm));
-    DeviceBuffer d_query_norm = to_device(encode(query_norm));
-    DeviceBuffer d_conv_norm = to_device(encode(conv_norm));
-    DeviceBuffer d_conv_weight = to_device(encode(conv_weight));
-    DeviceBuffer d_scale = to_device(encode(std::vector<float>{embedding_scale}));
+    DeviceBuffer d_key_norm     = to_device(encode(key_norm));
+    DeviceBuffer d_query_norm   = to_device(encode(query_norm));
+    DeviceBuffer d_conv_norm    = to_device(encode(conv_norm));
+    DeviceBuffer d_conv_weight  = to_device(encode(conv_weight));
+    DeviceBuffer d_scale        = to_device(encode(std::vector<float>{embedding_scale}));
     const std::vector<std::uint16_t> state_bits = encode(state);
     std::vector<float> stale(state.size());
     fill_uniform(stale, 1723, -4.0F, 4.0F);
     DeviceBuffer d_state             = to_device(state_bits);
     DeviceBuffer d_destination_state = to_device(fork ? encode(stale) : state_bits);
     GuardedDeviceBuffer d_output(expected.size() * sizeof(std::uint16_t));
-    Tensor hyper_tensor(d_hyper.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, kTokens});
-    Tensor gathered_tensor(d_gathered.data(), ninfer::test::cuda_environment().context.device(), DType::FP8_E4M3FN, {kHidden, kTokens});
-    Tensor state_tensor(d_state.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, kState});
-    Tensor destination_state_tensor(fork ? d_destination_state.data() : d_state.data(), ninfer::test::cuda_environment().context.device(), DType::BF16,
+    Tensor hyper_tensor(d_hyper.data(), ninfer::test::cuda_environment().context.device(),
+                        DType::BF16, {kHyper, kTokens});
+    Tensor gathered_tensor(d_gathered.data(), ninfer::test::cuda_environment().context.device(),
+                           DType::FP8_E4M3FN, {kHidden, kTokens});
+    Tensor state_tensor(d_state.data(), ninfer::test::cuda_environment().context.device(),
+                        DType::BF16, {kHyper, kState});
+    Tensor destination_state_tensor(fork ? d_destination_state.data() : d_state.data(),
+                                    ninfer::test::cuda_environment().context.device(), DType::BF16,
                                     {kHyper, kState});
-    Tensor output_tensor(d_output.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, kTokens});
+    Tensor output_tensor(d_output.data(), ninfer::test::cuda_environment().context.device(),
+                         DType::BF16, {kHyper, kTokens});
     ops::FlashNextPleWeights weights{
-        .key_projection = bf16_weight(d_key_weight, kHyper, kHidden),
+        .key_projection   = bf16_weight(d_key_weight, kHyper, kHidden),
         .value_projection = bf16_weight(d_value_weight, kHidden, kHidden),
-        .key_norm = Tensor(d_key_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper}),
-        .query_norm = Tensor(d_query_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper}),
-        .convolution_norm = Tensor(d_conv_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper}),
-        .convolution = Tensor(d_conv_weight.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, 4}),
-        .embedding_scale = Tensor(d_scale.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {1}),
+        .key_norm   = Tensor(d_key_norm.data(), ninfer::test::cuda_environment().context.device(),
+                             DType::BF16, {kHyper}),
+        .query_norm = Tensor(d_query_norm.data(), ninfer::test::cuda_environment().context.device(),
+                             DType::BF16, {kHyper}),
+        .convolution_norm =
+            Tensor(d_conv_norm.data(), ninfer::test::cuda_environment().context.device(),
+                   DType::BF16, {kHyper}),
+        .convolution =
+            Tensor(d_conv_weight.data(), ninfer::test::cuda_environment().context.device(),
+                   DType::BF16, {kHyper, 4}),
+        .embedding_scale = Tensor(d_scale.data(), ninfer::test::cuda_environment().context.device(),
+                                  DType::BF16, {1}),
     };
     MemoryArena workspace(ops::flash_next_ple_workspace_capacity_bytes(kTokens));
     ops::flash_next_ple(hyper_tensor, gathered_tensor, weights, state_tensor,
@@ -241,7 +274,8 @@ int run_replay_fold() {
     }
 
     DeviceBuffer d_records = to_device(record_bits);
-    Tensor records_tensor(d_records.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, kWidth, kRows});
+    Tensor records_tensor(d_records.data(), ninfer::test::cuda_environment().context.device(),
+                          DType::BF16, {kHyper, kWidth, kRows});
     int failures     = 0;
     const auto check = [&](const DeviceBuffer& d_states, const char* label) {
         const std::vector<std::uint16_t> actual =
@@ -253,7 +287,8 @@ int run_replay_fold() {
     };
 
     DeviceBuffer d_host_states = to_device(state_bits);
-    Tensor host_states(d_host_states.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, kState, kSlots});
+    Tensor host_states(d_host_states.data(), ninfer::test::cuda_environment().context.device(),
+                       DType::BF16, {kHyper, kState, kSlots});
     const std::vector<ops::FlashNextPleFoldRow> host_rows{
         {rows[0].source, rows[0].destination, rows[0].columns},
         {rows[1].source, rows[1].destination, rows[1].columns}};
@@ -262,10 +297,12 @@ int run_replay_fold() {
     check(d_host_states, "host rows");
 
     DeviceBuffer d_device_states = to_device(state_bits);
-    Tensor device_states(d_device_states.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, kState, kSlots});
+    Tensor device_states(d_device_states.data(), ninfer::test::cuda_environment().context.device(),
+                         DType::BF16, {kHyper, kState, kSlots});
     std::vector<std::int32_t> words(4 * kRows, 0);
     DeviceBuffer d_words = to_device(words);
-    Tensor words_tensor(d_words.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {4, kRows});
+    Tensor words_tensor(d_words.data(), ninfer::test::cuda_environment().context.device(),
+                        DType::I32, {4, kRows});
     DeviceContext context;
     DecodeGraphDefinition definition;
     DecodeGraphExecutable graph;
@@ -298,7 +335,8 @@ int run_replay_fold() {
 
 int main() {
     if (ninfer::test::cuda_unavailable()) {
-        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     try {

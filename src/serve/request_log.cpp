@@ -346,8 +346,7 @@ Json speculation_detail_json(const RequestStats& metrics) {
     return Json{{"accepted_lengths", steps},
                 {"draft_window", metrics.speculative.draft_window},
                 {"accepted_lengths_truncated",
-                 lengths.size() <
-                     metrics.speculative.rounds + metrics.speculative.fallback_steps}};
+                 lengths.size() < metrics.speculative.rounds + metrics.speculative.fallback_steps}};
 }
 
 Json speculative_json(const RequestStats& metrics) {
@@ -603,39 +602,39 @@ std::string format_server_start_json(const std::string& server_instance_id, std:
     const ninfer::ContextCostSummary& context_cost = load.context_cost;
     const auto total_device_state_slots            = description.device_state_capacity;
     record["engine"]                               = Json{
-                                      {"device", engine_options.device},
-                                      {"max_context", engine_options.max_context},
-                                      {"kv_capacity_mode", kv_capacity_mode_name(engine_options.kv_capacity.mode)},
-                                      {"kv_capacity", description.kv_capacity},
-                                      {"kv_capacity_page_groups",
-                                       (description.kv_pools.empty() ? 0 : description.kv_pools.front().capacity_page_groups)},
-                                      {"max_concurrency", engine_options.max_concurrency},
-                                      {"max_pending_requests", engine_options.max_pending_requests},
-                                      {"pending_timeout_ms", engine_options.pending_timeout_ms},
-                                      {"prefill_chunk", engine_options.prefill_chunk},
-                                      {"log_stats_interval_ms", options.launch.logging.stats_interval_ms},
-                                      {"kv_cache", kv_cache_name(engine_options.kv_cache)},
-                                      {"vision", engine_options.enable_vision},
-                                      {"cuda_graph", engine_options.use_cuda_graph},
-                                      {"prefix_reuse", options.launch.engine.context_cache.enabled},
-                                      {"speculative_backend",
-                                       product::speculative_backend_name(engine_options.speculative.backend)},
-                                      {"speculative_draft_window", engine_options.speculative.draft_tokens},
-                                      {"proposal_head", proposal_head_name(engine_options.speculative.proposal_head)},
-                                      {"context_cost", Json{{"transfer_source", ninfer::context_cost_preset_source_name(
+        {"device", engine_options.device},
+        {"max_context", engine_options.max_context},
+        {"kv_capacity_mode", kv_capacity_mode_name(engine_options.kv_capacity.mode)},
+        {"kv_capacity", description.kv_capacity},
+        {"kv_capacity_page_groups",
+         (description.kv_pools.empty() ? 0 : description.kv_pools.front().capacity_page_groups)},
+        {"max_concurrency", engine_options.max_concurrency},
+        {"max_pending_requests", engine_options.max_pending_requests},
+        {"pending_timeout_ms", engine_options.pending_timeout_ms},
+        {"prefill_chunk", engine_options.prefill_chunk},
+        {"log_stats_interval_ms", options.launch.logging.stats_interval_ms},
+        {"kv_cache", kv_cache_name(engine_options.kv_cache)},
+        {"vision", engine_options.enable_vision},
+        {"cuda_graph", engine_options.use_cuda_graph},
+        {"prefix_reuse", options.launch.engine.context_cache.enabled},
+        {"speculative_backend",
+         product::speculative_backend_name(engine_options.speculative.backend)},
+        {"speculative_draft_window", engine_options.speculative.draft_tokens},
+        {"proposal_head", proposal_head_name(engine_options.speculative.proposal_head)},
+        {"context_cost", Json{{"transfer_source", ninfer::context_cost_preset_source_name(
                                                       context_cost.transfer_source)},
-                                                            {"prefill_source", ninfer::context_cost_preset_source_name(
+                              {"prefill_source", ninfer::context_cost_preset_source_name(
                                                      context_cost.prefill_source)},
-                                                            {"hardware_class", context_cost.hardware_class},
-                                                            {"prefill_signature", context_cost.prefill_signature},
-                                                            {"preset_path", context_cost.preset_path.string()}}},
-                                      {"context_cache", Json{{"enabled", cache.enabled},
-                                                             {"extra_state_slots", cache.extra_state_slots.value_or(0)},
-                                                             {"total_device_state_slots", total_device_state_slots},
-                                                             // The resolved quota: the raw option may be unset (the engine
-                                                             // resolves the platform default), so the description carries
-                                                             // what the engine actually runs with.
-                                                             {"host_capacity_bytes", description.host_context_capacity_bytes}}}};
+                              {"hardware_class", context_cost.hardware_class},
+                              {"prefill_signature", context_cost.prefill_signature},
+                              {"preset_path", context_cost.preset_path.string()}}},
+        {"context_cache", Json{{"enabled", cache.enabled},
+                               {"extra_state_slots", cache.extra_state_slots.value_or(0)},
+                               {"total_device_state_slots", total_device_state_slots},
+                               // The resolved quota: the raw option may be unset (the engine
+                               // resolves the platform default), so the description carries
+                               // what the engine actually runs with.
+                               {"host_capacity_bytes", description.host_context_capacity_bytes}}}};
     record["sampling_defaults"] =
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},
@@ -670,12 +669,12 @@ format_request_scheduling_json(const std::string& server_instance_id,
     record["elapsed_ns"]        = observation.elapsed_ns;
     record["preemption_index"]  = observation.preemption_index;
     record["progress"]          = Json{
-                 {"global_prefill_tokens", observation.global_prefill_tokens},
-                 {"global_decode_tokens", observation.global_decode_tokens},
-                 {"global_replayed_tokens", observation.global_replayed_tokens},
-                 {"request_prefill_tokens", observation.request_prefill_tokens},
-                 {"request_decode_tokens", observation.request_decode_tokens},
-                 {"request_replayed_tokens", observation.request_replayed_tokens},
+        {"global_prefill_tokens", observation.global_prefill_tokens},
+        {"global_decode_tokens", observation.global_decode_tokens},
+        {"global_replayed_tokens", observation.global_replayed_tokens},
+        {"request_prefill_tokens", observation.request_prefill_tokens},
+        {"request_decode_tokens", observation.request_decode_tokens},
+        {"request_replayed_tokens", observation.request_replayed_tokens},
     };
     return record.dump();
 }
@@ -704,44 +703,43 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
     Json record       = event_base(server_instance_id, timestamp, "request_done");
     record["request"] = request_json(context);
     record["result"]  = Json{
-         {"finish_reason", finish_reason_name(outcome.finish_reason)},
-         {"prompt_tokens", outcome.prompt_tokens},
-         {"completion_tokens", outcome.completion_tokens},
-         {"generated_token_ids", outcome.generated_token_ids},
-         {"computed_prefill_tokens", outcome.stats.computed_prefill_tokens},
-         {"prefix_cache_hit_tokens", outcome.stats.reused_prompt_tokens},
-         {"prefix_reuse_path", prefix_reuse_path_name(outcome.stats.prefix_reuse_path)},
-         {"thinking_budget", outcome.stats.thinking.configured_budget
-                                 ? Json(*outcome.stats.thinking.configured_budget)
-                                 : Json(nullptr)},
-         {"model_thinking_tokens", outcome.stats.thinking.model_thinking_tokens},
-         {"thinking_control_tokens", outcome.stats.thinking.injected_tokens},
-         {"thinking_control_applied", outcome.stats.thinking.applied},
-         {"tool_call_count",
-          std::count_if(outcome.tool_calls.begin(), outcome.tool_calls.end(),
-                        [](const auto& call) { return call.status == ToolCallStatus::Complete; })},
-         {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)},
-         {"reasoning_retry",
-          outcome.reasoning_retry.trigger == ReasoningRetryTrigger::None
-              ? Json(nullptr)
-              : Json{{"trigger", reasoning_retry_trigger_name(outcome.reasoning_retry.trigger)},
-                     {"kept_tokens", outcome.reasoning_retry.kept_tokens},
-                     {"injected_tokens", outcome.reasoning_retry.injected_tokens},
-                     {"continuation_prompt_tokens",
-                      outcome.reasoning_retry.continuation_prompt},
-                     {"continuation_completion_tokens",
-                      outcome.reasoning_retry.continuation_completion},
-                     {"error", outcome.reasoning_retry.error.empty()
-                                   ? Json(nullptr)
-                                   : Json(outcome.reasoning_retry.error)}}},
-         {"prefill_miss",
-          outcome.prefill_miss
-              ? Json{{"directory", outcome.prefill_miss->directory},
-                     {"prompt_tokens", outcome.prefill_miss->prompt_tokens},
-                     {"reused_tokens", outcome.prefill_miss->reused_tokens},
-                     {"common_prefix_tokens", outcome.prefill_miss->common_prefix},
-                     {"old_context_tokens", outcome.prefill_miss->old_context_tokens}}
-              : Json(nullptr)}};
+        {"finish_reason", finish_reason_name(outcome.finish_reason)},
+        {"prompt_tokens", outcome.prompt_tokens},
+        {"completion_tokens", outcome.completion_tokens},
+        {"generated_token_ids", outcome.generated_token_ids},
+        {"computed_prefill_tokens", outcome.stats.computed_prefill_tokens},
+        {"prefix_cache_hit_tokens", outcome.stats.reused_prompt_tokens},
+        {"prefix_reuse_path", prefix_reuse_path_name(outcome.stats.prefix_reuse_path)},
+        {"thinking_budget", outcome.stats.thinking.configured_budget
+                                ? Json(*outcome.stats.thinking.configured_budget)
+                                : Json(nullptr)},
+        {"model_thinking_tokens", outcome.stats.thinking.model_thinking_tokens},
+        {"thinking_control_tokens", outcome.stats.thinking.injected_tokens},
+        {"thinking_control_applied", outcome.stats.thinking.applied},
+        {"tool_call_count",
+         std::count_if(outcome.tool_calls.begin(), outcome.tool_calls.end(),
+                       [](const auto& call) { return call.status == ToolCallStatus::Complete; })},
+        {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)},
+        {"reasoning_retry",
+         outcome.reasoning_retry.trigger == ReasoningRetryTrigger::None
+             ? Json(nullptr)
+             : Json{{"trigger", reasoning_retry_trigger_name(outcome.reasoning_retry.trigger)},
+                    {"kept_tokens", outcome.reasoning_retry.kept_tokens},
+                    {"injected_tokens", outcome.reasoning_retry.injected_tokens},
+                    {"continuation_prompt_tokens", outcome.reasoning_retry.continuation_prompt},
+                    {"continuation_completion_tokens",
+                     outcome.reasoning_retry.continuation_completion},
+                    {"error", outcome.reasoning_retry.error.empty()
+                                  ? Json(nullptr)
+                                  : Json(outcome.reasoning_retry.error)}}},
+        {"prefill_miss",
+         outcome.prefill_miss
+             ? Json{{"directory", outcome.prefill_miss->directory},
+                    {"prompt_tokens", outcome.prefill_miss->prompt_tokens},
+                    {"reused_tokens", outcome.prefill_miss->reused_tokens},
+                    {"common_prefix_tokens", outcome.prefill_miss->common_prefix},
+                    {"old_context_tokens", outcome.prefill_miss->old_context_tokens}}
+             : Json(nullptr)}};
     record["timings_seconds"] =
         Json{{"prepare", outcome.service_prepare_seconds + outcome.stats.timings.prepare_seconds},
              {"ttft", outcome.stats.timings.first_token_seconds + outcome.service_prepare_seconds},
@@ -799,12 +797,12 @@ std::string format_throughput_json(const std::string& server_instance_id, std::u
         const auto value =
             product::execution_window(report.previous_execution[i], report.current_execution[i]);
         return Json{
-                          {"units", value.units},
-                          {"rows", value.rows},
-                          {"input_tokens", value.input_tokens},
-                          {"scheduled_positions", value.scheduled_positions},
-                          {"elapsed_seconds", value.elapsed_seconds},
-                          {"mean_seconds", value.mean_seconds() ? Json(*value.mean_seconds()) : Json(nullptr)}};
+            {"units", value.units},
+            {"rows", value.rows},
+            {"input_tokens", value.input_tokens},
+            {"scheduled_positions", value.scheduled_positions},
+            {"elapsed_seconds", value.elapsed_seconds},
+            {"mean_seconds", value.mean_seconds() ? Json(*value.mean_seconds()) : Json(nullptr)}};
     };
     record["execution"] = {{"prefill", window(ExecutionKind::Prefill)},
                            {"decode", window(ExecutionKind::Decode)},
@@ -846,37 +844,37 @@ std::string format_throughput_json(const std::string& server_instance_id, std::u
                                   {"average_size", std::move(average_batch)}};
     record["gpus"]         = gpu_samples_json(report.gpus);
     record["host_work"]    = Json{
-           {"elapsed_seconds",
-            Json{{"engine_boundary", nanoseconds_to_seconds(host.engine_boundary_ns)},
-                 {"session_call", nanoseconds_to_seconds(host.session_call_ns)},
-                 {"executor_poll", nanoseconds_to_seconds(host.executor_poll_ns)},
-                 {"executor_flush", nanoseconds_to_seconds(host.executor_flush_ns)},
-                 {"engine_commit_output", nanoseconds_to_seconds(host.engine_commit_output_ns)},
-                 {"engine_maintenance", nanoseconds_to_seconds(host.engine_maintenance_ns)},
-                 {"total", nanoseconds_to_seconds(active_host)}}},
-           {"scheduler_yield_seconds", nanoseconds_to_seconds(host.scheduler_yield_ns)},
-           {"executor_flush_seconds", nanoseconds_to_seconds(host.executor_flush_ns)},
-           {"work_class_seconds",
-            Json{
-                {"decode_host", nanoseconds_to_seconds(host.decode_host_ns)},
-                {"decode_scheduler_yield", nanoseconds_to_seconds(host.decode_scheduler_yield_ns)},
-                {"prefill_host", nanoseconds_to_seconds(host.prefill_host_ns)},
-                {"prefill_scheduler_yield", nanoseconds_to_seconds(host.prefill_scheduler_yield_ns)},
-                {"control_host", nanoseconds_to_seconds(host.control_host_ns)},
-                {"control_scheduler_yield", nanoseconds_to_seconds(host.control_scheduler_yield_ns)}}},
-           {"detail_subset_seconds",
-            Json{{"stats_publication", nanoseconds_to_seconds(host.stats_publication_ns)}}},
-           {"detail_invocations", Json{{"stats_publication", host.stats_publication_invocations}}},
-           {"units", Json{{"prefill", host.prefill_units}, {"control", host.control_units}}},
-           {"decode_host_microseconds_per_round",
-            microseconds_per(host.decode_host_ns, report.decode_rounds)},
-           {"decode_host_microseconds_per_row_round",
-            microseconds_per(host.decode_host_ns, report.decode_row_rounds)},
-           {"decode_scheduler_yield_microseconds_per_round",
-            microseconds_per(host.decode_scheduler_yield_ns, report.decode_rounds)},
-           {"detail_microseconds_per_invocation",
-            Json{{"stats_publication",
-                  microseconds_per(host.stats_publication_ns, host.stats_publication_invocations)}}},
+        {"elapsed_seconds",
+         Json{{"engine_boundary", nanoseconds_to_seconds(host.engine_boundary_ns)},
+              {"session_call", nanoseconds_to_seconds(host.session_call_ns)},
+              {"executor_poll", nanoseconds_to_seconds(host.executor_poll_ns)},
+              {"executor_flush", nanoseconds_to_seconds(host.executor_flush_ns)},
+              {"engine_commit_output", nanoseconds_to_seconds(host.engine_commit_output_ns)},
+              {"engine_maintenance", nanoseconds_to_seconds(host.engine_maintenance_ns)},
+              {"total", nanoseconds_to_seconds(active_host)}}},
+        {"scheduler_yield_seconds", nanoseconds_to_seconds(host.scheduler_yield_ns)},
+        {"executor_flush_seconds", nanoseconds_to_seconds(host.executor_flush_ns)},
+        {"work_class_seconds",
+         Json{
+             {"decode_host", nanoseconds_to_seconds(host.decode_host_ns)},
+             {"decode_scheduler_yield", nanoseconds_to_seconds(host.decode_scheduler_yield_ns)},
+             {"prefill_host", nanoseconds_to_seconds(host.prefill_host_ns)},
+             {"prefill_scheduler_yield", nanoseconds_to_seconds(host.prefill_scheduler_yield_ns)},
+             {"control_host", nanoseconds_to_seconds(host.control_host_ns)},
+             {"control_scheduler_yield", nanoseconds_to_seconds(host.control_scheduler_yield_ns)}}},
+        {"detail_subset_seconds",
+         Json{{"stats_publication", nanoseconds_to_seconds(host.stats_publication_ns)}}},
+        {"detail_invocations", Json{{"stats_publication", host.stats_publication_invocations}}},
+        {"units", Json{{"prefill", host.prefill_units}, {"control", host.control_units}}},
+        {"decode_host_microseconds_per_round",
+         microseconds_per(host.decode_host_ns, report.decode_rounds)},
+        {"decode_host_microseconds_per_row_round",
+         microseconds_per(host.decode_host_ns, report.decode_row_rounds)},
+        {"decode_scheduler_yield_microseconds_per_round",
+         microseconds_per(host.decode_scheduler_yield_ns, report.decode_rounds)},
+        {"detail_microseconds_per_invocation",
+         Json{{"stats_publication",
+               microseconds_per(host.stats_publication_ns, host.stats_publication_invocations)}}},
     };
     record["context_cache"] = Json{
         {"captures", Json{{"completed", monotonic_delta(previous.active_captures_completed,

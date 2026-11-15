@@ -421,9 +421,8 @@ void bf16_gdn_gating_execute_plan(const Bf16GdnGatingPlan& plan, const Tensor& x
 
 void bf16_gdn_gating_execute_candidate(Bf16GdnGatingScheduleId schedule, const Tensor& x,
                                        const Weight& a_weight, const Weight& b_weight,
-                                       const Tensor& A_log, const Tensor& dt_bias,
-                                       MemoryArena& ws, Tensor& g, Tensor& beta,
-                                       CudaExecutionView execution) {
+                                       const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws,
+                                       Tensor& g, Tensor& beta, CudaExecutionView execution) {
     const Bf16GdnGatingProblem problem{g.ne[0], x.ne[0], x.ne[1]};
     const Bf16GdnGatingPlan plan = bf16_gdn_gating_resolve_candidate(schedule, problem);
     execute_resolved(plan, problem, x, a_weight, b_weight, A_log, dt_bias, ws, g, beta, execution);

@@ -19,9 +19,7 @@ namespace {
 using Json        = nlohmann::json;
 using OrderedJson = nlohmann::ordered_json;
 
-std::string random_identifier(const char* prefix) {
-    return std::string(prefix) + secure_hex(8);
-}
+std::string random_identifier(const char* prefix) { return std::string(prefix) + secure_hex(8); }
 
 std::string event(const char* type, Json payload) {
     return std::string("event: ") + type + "\ndata: " + payload.dump() + "\n\n";

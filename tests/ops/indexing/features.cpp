@@ -153,9 +153,9 @@ void add_features_cases(ninfer::test::OpSuite& suite) {
         for (int tokens : {1, 6, 48})
             suite.add("concat_features/" + std::to_string(hidden) + "/t" + std::to_string(tokens),
                       [=] { return pack_case(hidden, tokens); });
-    // Both widths' packed geometry: width 1 is 14336 rows with 24/4/24/4 heads, width 2 is 7168 with
-    // 12/2/12/2 because the Rows shard halves every head count. A case at only one width is how the
-    // op kept a width-1 literal.
+    // Both widths' packed geometry: width 1 is 14336 rows with 24/4/24/4 heads, width 2 is 7168
+    // with 12/2/12/2 because the Rows shard halves every head count. A case at only one width is
+    // how the op kept a width-1 literal.
     for (int tokens : {1, 6, 48})
         suite.add("split_features/t" + std::to_string(tokens) + "/w1",
                   [=] { return split_case(tokens, 24, 4); });

@@ -194,7 +194,8 @@ int test_shard_parameter() {
     // contiguous, which is the defect the first real width-2 load found.
     failures += check(conv.binding.parts.size() == 4 * 3,
                       "the convolution binding is one slice per tap per segment");
-    failures += check(conv.binding.elements == 5120 * 4, "the convolution binding totals the share");
+    failures +=
+        check(conv.binding.elements == 5120 * 4, "the convolution binding totals the share");
 
     // A Replicated parameter is untouched.
     const auto norm = shard_parameter(synthetic("text/layers/3/input_norm", {5120}, 5120), 2, 1);

@@ -240,8 +240,8 @@ ContinuationMetadata SessionImpl::prepare_commit(Sequence& s, const WorkRow& row
     const auto tokens = inputs.size();
     auto metadata     = s.continuation.metadata;
     if (tokens) {
-        metadata.ple_raw_tail = {tokens > 1 ? inputs[tokens - 2] : metadata.ple_raw_tail[1],
-                                 inputs[tokens - 1]};
+        metadata.ple_raw_tail  = {tokens > 1 ? inputs[tokens - 2] : metadata.ple_raw_tail[1],
+                                  inputs[tokens - 1]};
         metadata.main_frontier = row.main_frontier + tokens;
         if (pool_count() > 1) metadata.mtp_frontier = mtp_history_frontier(metadata.main_frontier);
     }

@@ -54,7 +54,8 @@ struct Variant {
     static void mtp_q_gate_projection(const Tensor&, const MtpAttentionProjectionWeights&, Tensor&,
                                       Tensor&, MemoryArena&, CudaExecutionView execution);
     static void gdn_input_projection(const Tensor&, const GdnProjectionWeights&, Tensor&, Tensor&,
-                                     qwen3_8_flash_next::TextPhase, MemoryArena&, CudaExecutionView execution);
+                                     qwen3_8_flash_next::TextPhase, MemoryArena&,
+                                     CudaExecutionView execution);
     static void gdn_input_projection_snapshot(const Tensor&, const GdnProjectionWeights&,
                                               const Tensor&, Tensor&, const Tensor&, const Tensor&,
                                               const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
@@ -66,12 +67,14 @@ struct Variant {
                                             Tensor&, qwen3_8_flash_next::TextPhase, MemoryArena&,
                                             CudaExecutionView execution);
     static void gdn_output_projection(const Tensor&, const Weight&, Tensor&,
-                                      qwen3_8_flash_next::TextPhase, MemoryArena&, CudaExecutionView execution);
+                                      qwen3_8_flash_next::TextPhase, MemoryArena&,
+                                      CudaExecutionView execution);
     static void gdn_norm_control_projection(const Tensor&, const Tensor&, float,
                                             const GdnProjectionWeights&, Tensor&, Tensor&, Tensor&,
                                             MemoryArena&, CudaExecutionView);
     static void post_mixer(const Tensor&, const PostMixerWeights&, Tensor&,
-                           qwen3_8_flash_next::TextPhase, MemoryArena&, CudaExecutionView execution);
+                           qwen3_8_flash_next::TextPhase, MemoryArena&,
+                           CudaExecutionView execution);
     static void mtp_post_mixer(const Tensor&, const MtpPostMixerWeights&, Tensor&, MemoryArena&,
                                CudaExecutionView execution);
 

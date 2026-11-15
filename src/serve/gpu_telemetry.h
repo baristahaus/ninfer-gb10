@@ -3,8 +3,8 @@
 #pragma once
 
 // GPU clock, power, energy and temperature samples for the request JSONL `throughput` event.
-// Ported from capy-flash `src/serve/gpu_telemetry.{h,cpp}` (capy HEAD 3d4b4b76); the NVML subset and
-// the sampling rules are capy's. Two differences from capy are noted in the .cpp: the device
+// Ported from capy-flash `src/serve/gpu_telemetry.{h,cpp}` (capy HEAD 3d4b4b76); the NVML subset
+// and the sampling rules are capy's. Two differences from capy are noted in the .cpp: the device
 // identities come from this tree's `ServerLogEnvironment`, and nothing here touches CUDA.
 //
 // The NVIDIA Management Library is loaded at run time (dlopen of libnvidia-ml.so.1, installed with

@@ -113,24 +113,29 @@ inline void record(int rank, const char* site) {
     if (!enabled()) { return true; }
     if (round_counts(0).by_site == round_counts(1).by_site) { return true; }
     std::ostringstream message;
-    message << "collective audit (round): the two ranks did not issue the same collectives in this "
-               "round ("
-            << where << "); rank0 " << format(round_counts(0)) << " rank1 "
-            << format(round_counts(1))
-            << ". The two ranks can be in DIFFERENT FRAMES: a rank one frame ahead has issued a "
-               "collective its peer has not reached, and the per-frame maps look equal because each "
-               "frame matched. The lockstep criterion -- a round is released only when every rank "
-               "has completed it -- is the invariant; this count is how it is enforced.";
+    message
+        << "collective audit (round): the two ranks did not issue the same collectives in this "
+           "round ("
+        << where << "); rank0 " << format(round_counts(0)) << " rank1 " << format(round_counts(1))
+        << ". The two ranks can be in DIFFERENT FRAMES: a rank one frame ahead has issued a "
+           "collective its peer has not reached, and the per-frame maps look equal because each "
+           "frame matched. The lockstep criterion -- a round is released only when every rank "
+           "has completed it -- is the invariant; this count is how it is enforced.";
     throw std::logic_error(message.str());
 }
 
 #else
 
 inline bool enabled() { return false; }
+
 inline void reset_frame() {}
+
 inline void reset_round() {}
+
 inline void record(int, const char*) {}
+
 [[nodiscard]] inline bool verify(const char*) { return true; }
+
 [[nodiscard]] inline bool verify_round(const char*) { return true; }
 
 #endif

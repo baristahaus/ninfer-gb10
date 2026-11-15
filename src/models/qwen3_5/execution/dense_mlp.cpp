@@ -78,8 +78,8 @@ void dense_mlp(const Tensor& hidden, const DenseParameters& parameters, Tensor& 
     if (parameters.gate_up_roles) {
         const auto& gate = (*parameters.gate_up_roles)[0];
         const auto& up   = (*parameters.gate_up_roles)[1];
-        Tensor gate_out = workspace.alloc(DType::BF16, {gate.weight.shape[0], columns});
-        Tensor up_out   = workspace.alloc(DType::BF16, {up.weight.shape[0], columns});
+        Tensor gate_out  = workspace.alloc(DType::BF16, {gate.weight.shape[0], columns});
+        Tensor up_out    = workspace.alloc(DType::BF16, {up.weight.shape[0], columns});
         {
             auto call = workspace.scope();
             ops::linear(hidden, gate.weight, gate_out, gate.policy, workspace, execution);
@@ -88,11 +88,9 @@ void dense_mlp(const Tensor& hidden, const DenseParameters& parameters, Tensor& 
             auto call = workspace.scope();
             ops::linear(hidden, up.weight, up_out, up.policy, workspace, execution);
         }
-        Tensor activation =
-            workspace.alloc(DType::BF16, {gate.weight.shape[0], columns});
+        Tensor activation = workspace.alloc(DType::BF16, {gate.weight.shape[0], columns});
         ops::silu_mul(gate_out, up_out, activation, execution);
-        ops::linear_add(activation, down, residual, parameters.down.policy, workspace,
-                        execution);
+        ops::linear_add(activation, down, residual, parameters.down.policy, workspace, execution);
         return;
     }
     if (use == DenseMlpUse::Mtp) {

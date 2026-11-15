@@ -64,13 +64,20 @@ bool lane_trace() {
 }
 } // namespace
 
-namespace { void record_launch_time(const std::timespec&, const std::timespec&); }
-namespace { void note_mailbox_shape(int, int, int, int); }
-// Forward-declared because the guard that needs it runs before the counter's definition. The counter
-// lives next to the enqueue path it counts; the guard lives next to the throw it precedes, so one of
-// the two has to be reached by declaration rather than by position.
-namespace { void print_exchange_counts_give_up(const char* call); }
+namespace {
+void record_launch_time(const std::timespec&, const std::timespec&);
+}
 
+namespace {
+void note_mailbox_shape(int, int, int, int);
+}
+
+// Forward-declared because the guard that needs it runs before the counter's definition. The
+// counter lives next to the enqueue path it counts; the guard lives next to the throw it precedes,
+// so one of the two has to be reached by declaration rather than by position.
+namespace {
+void print_exchange_counts_give_up(const char* call);
+}
 
 namespace {
 
@@ -141,8 +148,8 @@ PeerMailbox::PeerMailbox(const ExecutionContext& ec, std::size_t slot_bytes, int
                                                           detail::kPeerPipelinedVecsPerLane);
             const std::size_t payload_bytes = static_cast<std::size_t>(slots_) * set.slot_bytes * 2;
             const std::size_t flag_words    = static_cast<std::size_t>(slots_) *
-                                           static_cast<std::size_t>(set.lanes) *
-                                           detail::kPeerFlagStride;
+                                              static_cast<std::size_t>(set.lanes) *
+                                              detail::kPeerFlagStride;
             // Both ranks' flag lines, then (ordinary set) the hang word's line.
             const std::size_t words_bytes =
                 (2 * flag_words + (index == 0 ? detail::kPeerFlagStride : 0)) *
@@ -164,15 +171,15 @@ PeerMailbox::PeerMailbox(const ExecutionContext& ec, std::size_t slot_bytes, int
             set.flags[1]   = flags + flag_words;
             if (index == 0) { hang_ = flags + 2 * flag_words; }
             // KNOWN LIMITATION, MEASURED: this instrument cannot be armed everywhere. On hephaestus
-            // (RTX 5070 Ti, driver of 2026-11) cudaHostRegister(mapped, bytes, cudaHostRegisterMapped)
-            // rejects a file-backed mmap with cudaErrorInvalidValue: invalid argument, at both the
-            // 32-byte size the four words need and a page-rounded 4096-byte size, so construction
-            // throws before any kernel runs and the four words stay zero. A zero status word on such
-            // a host means THE INSTRUMENT WAS NEVER ARMED, not that the kernel never reached the
-            // spin; check that the file exists and that the entry counter moved before reading its
-            // silence as evidence. The earlier reading (entry=129, target=65, last_seen=0) cannot
-            // have come from an environment where this constructor throws, so its provenance is
-            // unknown and it is not established fact.
+            // (RTX 5070 Ti, driver of 2026-11) cudaHostRegister(mapped, bytes,
+            // cudaHostRegisterMapped) rejects a file-backed mmap with cudaErrorInvalidValue:
+            // invalid argument, at both the 32-byte size the four words need and a page-rounded
+            // 4096-byte size, so construction throws before any kernel runs and the four words stay
+            // zero. A zero status word on such a host means THE INSTRUMENT WAS NEVER ARMED, not
+            // that the kernel never reached the spin; check that the file exists and that the entry
+            // counter moved before reading its silence as evidence. The earlier reading (entry=129,
+            // target=65, last_seen=0) cannot have come from an environment where this constructor
+            // throws, so its provenance is unknown and it is not established fact.
             if (index == 0 && std::getenv("NINFER_STATUS_FILE") != nullptr) {
                 // THE FILE-BACKED STATUS WORD. Four words per rank -- entry counter, published
                 // target, last peer value seen, exit counter -- in a MAP_SHARED file that is
@@ -347,8 +354,6 @@ int take_l2_hint(Hint& hint, int blocks, int threads, detail::PeerPipelinedTunin
 }
 } // namespace
 
-
-
 void PeerMailbox::require_no_hang(const char* call) const {
     // The guard's word is sticky by design: once one poller abandons an exchange, that rank's
     // partial holds only its own operand and its later waits return immediately, so every value it
@@ -364,15 +369,16 @@ void PeerMailbox::require_no_hang(const char* call) const {
     throw std::runtime_error(
         std::string("mailbox: a poller gave up in an earlier exchange of this round, so the ranks' "
                     "results have diverged and ") +
-        call + " cannot continue; see the kernel's [mailbox] GAVE UP line for the rank, warp and "
-               "probe count");
+        call +
+        " cannot continue; see the kernel's [mailbox] GAVE UP line for the rank, warp and "
+        "probe count");
 }
 
 namespace {
-// PER-RANK EXCHANGE COUNT, keyed by payload shape. The mailbox protocol has been measured correct on
-// every axis (flags, epochs, stride, warp index, vecs, target arithmetic, visibility); what remains
-// is whether both ranks ISSUE the same number of exchanges. A counter, not a breakpoint: the
-// question is a call count, and it is the first question in this workstream about the traversal
+// PER-RANK EXCHANGE COUNT, keyed by payload shape. The mailbox protocol has been measured correct
+// on every axis (flags, epochs, stride, warp index, vecs, target arithmetic, visibility); what
+// remains is whether both ranks ISSUE the same number of exchanges. A counter, not a breakpoint:
+// the question is a call count, and it is the first question in this workstream about the traversal
 // rather than about the protocol.
 struct ExchangeCounts {
     std::mutex mutex;
@@ -390,36 +396,48 @@ struct ExchangeCounts {
     // cannot be added silently.
     bool seen_pipelined = false;
     bool seen_f32       = false;
+
     void add(int rank, std::size_t bytes, bool f32) {
         if (rank < 0 || rank > 1) { return; }
         std::lock_guard<std::mutex> lock(mutex);
         ++total[rank];
-        if (f32) { seen_f32 = true; } else { seen_pipelined = true; }
+        if (f32) {
+            seen_f32 = true;
+        } else {
+            seen_pipelined = true;
+        }
         const int vecs = static_cast<int>(bytes / 16);
         if (f32) {
-            if (vecs == 20480) { ++f32_20480[rank]; }
-            else if (vecs == 31040) { ++f32_31040[rank]; }
+            if (vecs == 20480) {
+                ++f32_20480[rank];
+            } else if (vecs == 31040) {
+                ++f32_31040[rank];
+            }
         } else {
-            if (vecs == 20480) { ++pipelined_20480[rank]; }
-            else if (vecs == 31040) { ++pipelined_31040[rank]; }
+            if (vecs == 20480) {
+                ++pipelined_20480[rank];
+            } else if (vecs == 31040) {
+                ++pipelined_31040[rank];
+            }
         }
     }
+
     void print(int round) {
         if (!lane_trace()) { return; }
         std::lock_guard<std::mutex> lock(mutex);
         for (int rank = 0; rank < 2; ++rank) {
-            std::fprintf(stderr,
-                         "[exchange-count] rank=%d round=%d pipelined_20480=%llu pipelined_31040=%llu "
-                         "f32_20480=%llu f32_31040=%llu total=%llu\n",
-                         rank, round, (unsigned long long)pipelined_20480[rank],
-                         (unsigned long long)pipelined_31040[rank],
-                         (unsigned long long)f32_20480[rank], (unsigned long long)f32_31040[rank],
-                         (unsigned long long)total[rank]);
+            std::fprintf(
+                stderr,
+                "[exchange-count] rank=%d round=%d pipelined_20480=%llu pipelined_31040=%llu "
+                "f32_20480=%llu f32_31040=%llu total=%llu\n",
+                rank, round, (unsigned long long)pipelined_20480[rank],
+                (unsigned long long)pipelined_31040[rank], (unsigned long long)f32_20480[rank],
+                (unsigned long long)f32_31040[rank], (unsigned long long)total[rank]);
             std::fflush(stderr);
         }
-        // The coverage check: the paths this counter knows about must all have reported. A path that
-        // never reports is either unused (fine) or uninstrumented (the failure mode that cost a
-        // round). Printed every round so it cannot be missed.
+        // The coverage check: the paths this counter knows about must all have reported. A path
+        // that never reports is either unused (fine) or uninstrumented (the failure mode that cost
+        // a round). Printed every round so it cannot be missed.
         if (!seen_pipelined) {
             std::fprintf(stderr, "[exchange-count] COVERAGE: the pipelined path never reported\n");
         }
@@ -428,13 +446,15 @@ struct ExchangeCounts {
         }
         std::fflush(stderr);
     }
-    // THE COUNT AT THE MOMENT OF THE GIVE-UP, READ BEFORE THE ROUND IS ABANDONED. The round-boundary
-    // print reports equal totals on both ranks, and that equality is what made a missing exchange
-    // look impossible. Read here instead, the two totals separate the two remaining explanations:
-    // different totals mean one rank ISSUED fewer exchanges; equal totals mean it issued the same
-    // number and one of them never executed. Those are different defects with different fixes, and
-    // this is the only point in time where they can be told apart, because the round-boundary print
-    // runs after the abandoned round has already stopped enqueueing on one side.
+
+    // THE COUNT AT THE MOMENT OF THE GIVE-UP, READ BEFORE THE ROUND IS ABANDONED. The
+    // round-boundary print reports equal totals on both ranks, and that equality is what made a
+    // missing exchange look impossible. Read here instead, the two totals separate the two
+    // remaining explanations: different totals mean one rank ISSUED fewer exchanges; equal totals
+    // mean it issued the same number and one of them never executed. Those are different defects
+    // with different fixes, and this is the only point in time where they can be told apart,
+    // because the round-boundary print runs after the abandoned round has already stopped
+    // enqueueing on one side.
     void print_give_up(const char* call) {
         if (!lane_trace()) { return; }
         std::lock_guard<std::mutex> lock(mutex);
@@ -464,7 +484,12 @@ struct ExchangeCounts {
         std::fflush(stderr);
     }
 };
-ExchangeCounts& exchange_counts() { static ExchangeCounts c; return c; }
+
+ExchangeCounts& exchange_counts() {
+    static ExchangeCounts c;
+    return c;
+}
+
 void print_exchange_counts_give_up(const char* call) { exchange_counts().print_give_up(call); }
 } // namespace
 
@@ -493,18 +518,18 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
     // (counts, epochs, status words) reports a symptom rather than the cause. The pointers come off
     // the host-mapped slab, so this is a direct host read with no copy and no fence.
     if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
-        std::fprintf(stderr,
-                     "[flag-addr] rank=%d site=%s slot=%d lane_base=%zu flag_slot=%zu mine=%p peer=%p\n",
-                     rank, site, slot, lane_base, flag_slot,
-                     static_cast<void*>(set.flags[rank] + flag_slot),
-                     static_cast<void*>(set.flags[1 - rank] + flag_slot));
+        std::fprintf(
+            stderr,
+            "[flag-addr] rank=%d site=%s slot=%d lane_base=%zu flag_slot=%zu mine=%p peer=%p\n",
+            rank, site, slot, lane_base, flag_slot, static_cast<void*>(set.flags[rank] + flag_slot),
+            static_cast<void*>(set.flags[1 - rank] + flag_slot));
         std::fflush(stderr);
     }
     ::ninfer::core::audit::record(rank, site);
-    const std::size_t vecs      = bytes / sizeof(detail::PeerVec);
-    std::uint32_t* words        = set.device_words[rank];
-    auto* partial               = static_cast<detail::PeerVecBf16*>(data);
-    auto* mine_payload = reinterpret_cast<detail::PeerVecBf16*>(set.payload[rank] + offset);
+    const std::size_t vecs = bytes / sizeof(detail::PeerVec);
+    std::uint32_t* words   = set.device_words[rank];
+    auto* partial          = static_cast<detail::PeerVecBf16*>(data);
+    auto* mine_payload     = reinterpret_cast<detail::PeerVecBf16*>(set.payload[rank] + offset);
     const auto* peer_payload =
         reinterpret_cast<const detail::PeerVecBf16*>(set.payload[1 - rank] + offset);
     if (kernel_ == PeerExchangeKernel::Legacy) {
@@ -521,12 +546,12 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
         tuning.status              = status_ != nullptr ? status_ + 4 * rank : nullptr;
         tuning.rank                = rank;
         tuning.slot                = slot;
-        // This rank's FIRST exchange is the one place where a healthy peer can be legitimately late:
-        // the two Programs start independently, so the peer may not have launched its round yet. The
-        // steady-state budget is a dead-peer detector and would abandon the exchange (leaving a
-        // partial that holds only this rank's operand, and a sticky word that disables every later
-        // wait in the round), so the first exchange gets the orders-of-magnitude-larger budget. See
-        // kPeerFirstSpinLimit.
+        // This rank's FIRST exchange is the one place where a healthy peer can be legitimately
+        // late: the two Programs start independently, so the peer may not have launched its round
+        // yet. The steady-state budget is a dead-peer detector and would abandon the exchange
+        // (leaving a partial that holds only this rank's operand, and a sticky word that disables
+        // every later wait in the round), so the first exchange gets the orders-of-magnitude-larger
+        // budget. See kPeerFirstSpinLimit.
         if (!started_[rank]) {
             started_[rank]    = true;
             tuning.spin_limit = detail::kPeerFirstSpinLimit;
@@ -534,7 +559,7 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
             // dumping: one print per rank keeps the output readable.
             if (trace_) { tuning.trace = true; }
         }
-        const int prefetch_blocks  = take_l2_hint(l2_hint_[rank], blocks, kThreads, tuning);
+        const int prefetch_blocks = take_l2_hint(l2_hint_[rank], blocks, kThreads, tuning);
         // THE SHAPE, FROM THE HOST, WHERE IT CANNOT BE LOST. A device-side printf is buffered and
         // flushed at sync, and the give-up kills the process before that happens, which is why rank
         // 1's shape never appeared. This is written to unbuffered stderr at the enqueue site, once
@@ -564,32 +589,40 @@ namespace {
 struct LaunchTimes {
     std::mutex mutex;
     std::vector<double> us;
+
     void add(double v) {
         std::lock_guard<std::mutex> lock(mutex);
         us.push_back(v);
     }
+
     ~LaunchTimes() {
         if (us.empty()) {
             std::fprintf(stderr, "[mailbox-launch] no samples\n");
             return;
         }
         std::sort(us.begin(), us.end());
-        const auto at = [&](double q) { return us[(std::size_t)(q * (us.size() - 1))]; };
+        const auto at     = [&](double q) { return us[(std::size_t)(q * (us.size() - 1))]; };
         std::size_t above = 0;
-        double total = 0;
-        for (double v : us) { total += v; if (v > 100.0) ++above; }
+        double total      = 0;
+        for (double v : us) {
+            total += v;
+            if (v > 100.0) ++above;
+        }
         std::fprintf(stderr,
                      "[mailbox-launch] n=%zu p50=%.2f p90=%.2f p99=%.2f max=%.2f us above100=%zu "
                      "total=%.1f ms\n",
                      us.size(), at(0.50), at(0.90), at(0.99), us.back(), above, total / 1000.0);
     }
 };
+
 LaunchTimes& launch_times() {
     static LaunchTimes times;
     return times;
 }
+
 void record_launch_time(const std::timespec& t0, const std::timespec& t1) {
-    const double us = (double)(t1.tv_sec - t0.tv_sec) * 1e6 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e3;
+    const double us =
+        (double)(t1.tv_sec - t0.tv_sec) * 1e6 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e3;
     launch_times().add(us);
 }
 } // namespace
@@ -601,10 +634,12 @@ namespace {
 void note_mailbox_shape(int rank, int vecs, int blocks, int threads) {
     struct Key {
         int rank, vecs, blocks, threads;
+
         bool operator==(const Key& o) const {
             return rank == o.rank && vecs == o.vecs && blocks == o.blocks && threads == o.threads;
         }
     };
+
     static std::mutex mutex;
     static std::vector<Key> seen;
     const Key key{rank, vecs, blocks, threads};
@@ -642,12 +677,12 @@ void PeerMailbox::enqueue_exchange_sum_f32(int rank, int slot, void* data, std::
         static_cast<std::size_t>(slot) * static_cast<std::size_t>(set.lanes);
     const std::size_t flag_slot = lane_base * detail::kPeerFlagStride;
     ::ninfer::core::audit::record(rank, "f32");
-    const std::size_t vecs      = bytes / sizeof(detail::PeerVec);
-    constexpr int kVecsPerLane  = detail::kPeerPipelinedVecsPerLane;
-    constexpr int kThreads      = detail::kPeerPipelinedThreads;
-    const int blocks            = detail::peer_pipelined_blocks(vecs, kVecsPerLane, kThreads);
-    auto tuning                 = pipelined_tuning(release_dependents_);
-    const int prefetch_blocks   = take_l2_hint(l2_hint_[rank], blocks, kThreads, tuning);
+    const std::size_t vecs     = bytes / sizeof(detail::PeerVec);
+    constexpr int kVecsPerLane = detail::kPeerPipelinedVecsPerLane;
+    constexpr int kThreads     = detail::kPeerPipelinedThreads;
+    const int blocks           = detail::peer_pipelined_blocks(vecs, kVecsPerLane, kThreads);
+    auto tuning                = pipelined_tuning(release_dependents_);
+    const int prefetch_blocks  = take_l2_hint(l2_hint_[rank], blocks, kThreads, tuning);
     detail::peer_exchange_pipelined_f32_kernel<kVecsPerLane>
         <<<blocks + prefetch_blocks, kThreads, 0, stream>>>(
             static_cast<detail::PeerVec*>(data),

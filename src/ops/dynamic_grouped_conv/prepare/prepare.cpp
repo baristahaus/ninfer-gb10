@@ -43,10 +43,10 @@ void rmsnorm_dynamic_grouped_conv_prepare(const Tensor& residual, const Tensor& 
     dc::validate_prepare(residual, norm_weight, epsilon, base_kernel, projection, prepared,
                          finish_delta, workspace, execution);
     const auto shape = dc::Shape::of(residual.ne[0]);
-    const auto plan  = dc::prepare::select_plan(residual.ne[1], residual.ne[2],
-                                                shape.coefficient_rows);
-    auto scope      = workspace.scope();
-    auto* partials  = static_cast<float*>(workspace.alloc_bytes(plan.workspace_bytes).data);
+    const auto plan =
+        dc::prepare::select_plan(residual.ne[1], residual.ne[2], shape.coefficient_rows);
+    auto scope     = workspace.scope();
+    auto* partials = static_cast<float*>(workspace.alloc_bytes(plan.workspace_bytes).data);
     rmsnorm(residual, norm_weight, epsilon, false, prepared, execution);
     dc::prepare::launch(plan, base_kernel, projection, partials, prepared, finish_delta, stream);
 }

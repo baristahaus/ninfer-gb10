@@ -68,7 +68,7 @@ struct GateFixture {
         key     = Tensor(projected.tensor.data, projected.tensor.device, DType::BF16, {H, C, t, b});
         auto* v = static_cast<std::uint16_t*>(projected.tensor.data) +
                   (layout == GateLayout::Separate ? std::size_t(D) * t * b : D);
-        value = Tensor(v, projected.tensor.device, DType::BF16, {H, t, b});
+        value   = Tensor(v, projected.tensor.device, DType::BF16, {H, t, b});
         if (layout != GateLayout::Separate) {
             key.nb[2] = value.nb[1] = projected.tensor.nb[1];
             key.nb[3] = value.nb[2] = projected.tensor.nb[2];

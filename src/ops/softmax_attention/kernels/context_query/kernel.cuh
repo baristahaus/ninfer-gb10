@@ -264,8 +264,8 @@ __device__ __forceinline__ void context_query_split_partial_body(
     const unsigned v_sbase     = common::smem_addr(v_s);
     const unsigned v_lane_base = v_sbase + static_cast<unsigned>(((lane >> 3) & 1) * 8 * RowBytes) +
                                  static_cast<unsigned>(b_rin * RowBytes);
-    const unsigned v_as = static_cast<unsigned>((lane >> 4) << 4);
-    const unsigned v_r  = static_cast<unsigned>(b_rin << 4);
+    const unsigned v_as        = static_cast<unsigned>((lane >> 4) << 4);
+    const unsigned v_r         = static_cast<unsigned>(b_rin << 4);
 
     auto tile_metadata = [&](int iteration, bool& is_query, int& key0, int& valid_keys) {
         is_query = iteration >= context_tile_count;

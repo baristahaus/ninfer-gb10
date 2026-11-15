@@ -628,7 +628,7 @@ ParsedToolCallOutput parse_qwen_tool_call_output(const std::string& text,
     // stay ordinary content.
     const std::string_view source(text);
     std::vector<RawToolCall> raw_calls;
-    std::size_t accepted         = std::string::npos;
+    std::size_t accepted = std::string::npos;
     decltype(out.diagnostics.duplicate_parameters_repaired) repaired{};
     FallbackReason first_failure = FallbackReason::MalformedStructure;
     bool first_failure_recorded  = false;

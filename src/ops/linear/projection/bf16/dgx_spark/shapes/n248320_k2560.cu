@@ -18,11 +18,11 @@ using S4        = Bf16LmHeadSchedule<Original4, 4>;
 using S5        = Bf16LmHeadSchedule<Original5, 5>;
 using S6        = Bf16LmHeadSchedule<Original6, 6>;
 using Small     = Bf16LmHeadSchedule<
-        Bf16KTailSchedule<Bf16ScheduleInstance<
-            Bf16A16SimtSchedule<2, 2, 1, 16, 4, 2, Bf16SimtActivationAccess::DirectStream,
-                                Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 1, 2, 8>,
-            2560>>,
-        10>;
+    Bf16KTailSchedule<Bf16ScheduleInstance<
+        Bf16A16SimtSchedule<2, 2, 1, 16, 4, 2, Bf16SimtActivationAccess::DirectStream,
+                            Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 1, 2, 8>,
+        2560>>,
+    10>;
 using Medium =
     Bf16LmHeadSchedule<Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<64, 64, 64, 32, 16, 3, 2>, 2560>,
                        12>;

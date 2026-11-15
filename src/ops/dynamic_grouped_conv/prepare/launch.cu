@@ -133,12 +133,12 @@ __launch_bounds__(Capacity * 16, 4) __global__
         float sum     = 0;
         for (int split = 0; split < splits; ++split)
             sum += partial[(static_cast<std::int64_t>(split) * tokens + batch * width + position) *
-                               kCoefficients + row];
+                               kCoefficients +
+                           row];
         projected[coefficient][position] = sum;
     }
     const int position = tid / 16, channel = tid % 16, hidden = group * 16 + channel;
-    const std::int64_t offset =
-        static_cast<std::int64_t>(batch * width + position) * H + hidden;
+    const std::int64_t offset = static_cast<std::int64_t>(batch * width + position) * H + hidden;
     if (position < width) { normalized[position][channel] = __bfloat162float(prepared[offset]); }
     __syncthreads();
     if (tid < 2 * Capacity && tid % Capacity < width) {

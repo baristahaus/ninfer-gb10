@@ -20,33 +20,33 @@ struct Fp8ActivationGeometry {
     static constexpr std::int32_t kInputRows = InputRows;
 };
 
-using Fp8N14336K5120             = Fp8Geometry<14336, 5120>;
-using Fp8N16384K5120             = Fp8Geometry<16384, 5120>;
-using Fp8N34816K5120             = Fp8Geometry<34816, 5120>;
-using Fp8N248320K5120            = Fp8Geometry<248320, 5120>;
-using Fp8N5120K6144              = Fp8Geometry<5120, 6144>;
-using Fp8N5120K17408             = Fp8Geometry<5120, 17408>;
+using Fp8N14336K5120  = Fp8Geometry<14336, 5120>;
+using Fp8N16384K5120  = Fp8Geometry<16384, 5120>;
+using Fp8N34816K5120  = Fp8Geometry<34816, 5120>;
+using Fp8N248320K5120 = Fp8Geometry<248320, 5120>;
+using Fp8N5120K6144   = Fp8Geometry<5120, 6144>;
+using Fp8N5120K17408  = Fp8Geometry<5120, 17408>;
 // One rank's half of the fused FP8 objects the 27B binds at tensor-parallel width 2.
-using Fp8N7168K5120              = Fp8Geometry<7168, 5120>;
-using Fp8N8192K5120              = Fp8Geometry<8192, 5120>;
-using Fp8N124160K5120            = Fp8Geometry<124160, 5120>;
+using Fp8N7168K5120   = Fp8Geometry<7168, 5120>;
+using Fp8N8192K5120   = Fp8Geometry<8192, 5120>;
+using Fp8N124160K5120 = Fp8Geometry<124160, 5120>;
 // The role-split shapes of the sharded 27B lane: one role of a fused qkv/qkvz object.
-using Fp8N5120K5120              = Fp8Geometry<5120, 5120>;
-using Fp8N3072K5120              = Fp8Geometry<3072, 5120>;
-using Fp8N512K5120               = Fp8Geometry<512, 5120>;
-using Fp8N8704K5120              = Fp8Geometry<8704, 5120>;
+using Fp8N5120K5120 = Fp8Geometry<5120, 5120>;
+using Fp8N3072K5120 = Fp8Geometry<3072, 5120>;
+using Fp8N512K5120  = Fp8Geometry<512, 5120>;
+using Fp8N8704K5120 = Fp8Geometry<8704, 5120>;
 // The COLUMN-sharded outputs of the same lane. A Columns shard halves K, so the two 5120x6144
 // output projections become 5120x3072 and mlp/down becomes 5120x8704.
-using Fp8N5120K3072              = Fp8Geometry<5120, 3072>;
-using Fp8N5120K8704              = Fp8Geometry<5120, 8704>;
+using Fp8N5120K3072 = Fp8Geometry<5120, 3072>;
+using Fp8N5120K8704 = Fp8Geometry<5120, 8704>;
 // The GDN input projection's two width-1 parents: the fused 16384-row object is presented as a
 // 10240-row qkv parent and a 6144-row z parent, which is what the model's paired form consumes when
 // the four parts do not pack into one contiguous parent. Width 2 takes the four-role split instead.
-using Fp8N10240K5120             = Fp8Geometry<10240, 5120>;
-using Fp8N6144K5120              = Fp8Geometry<6144, 5120>;
+using Fp8N10240K5120 = Fp8Geometry<10240, 5120>;
+using Fp8N6144K5120  = Fp8Geometry<6144, 5120>;
 // The width-1 attention key and value roles: 4 KV heads of width 256. Width 2 halves them to the
 // 512-row N512K5120; width 1 presents them at full width.
-using Fp8N1024K5120              = Fp8Geometry<1024, 5120>;
+using Fp8N1024K5120 = Fp8Geometry<1024, 5120>;
 // The width-1 dense MLP gate and up roles: half of the fused 34816-row object. The engine takes the
 // two-role form because a row-scaled weight's scale plane makes neither role a contiguous parent
 // region, so `linear_swiglu` on the fused parent is refused.
@@ -57,8 +57,8 @@ using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
 // The A8 route quantizes the activation, so its geometry is the activation's K and every projection
 // K that reaches the A8 path needs one here. The column-sharded width-2 outputs are the first K
 // values that were not already present: 5120x3072 and 5120x8704 present K = 3072 and 8704.
-using Fp8Activation3072Geometry  = Fp8ActivationGeometry<3072>;
-using Fp8Activation8704Geometry  = Fp8ActivationGeometry<8704>;
+using Fp8Activation3072Geometry = Fp8ActivationGeometry<3072>;
+using Fp8Activation8704Geometry = Fp8ActivationGeometry<8704>;
 
 enum class Fp8GeometryId : std::uint8_t {
     N14336K5120,

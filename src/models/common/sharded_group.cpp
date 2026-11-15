@@ -12,8 +12,8 @@ namespace {
 
 const ExecutionContext& require_two_ranks(const ExecutionContext& execution) {
     if (execution.width() != 2) {
-        throw std::invalid_argument(
-            "sharded group: a two-Program collective needs an execution group of exactly two ranks");
+        throw std::invalid_argument("sharded group: a two-Program collective needs an execution "
+                                    "group of exactly two ranks");
     }
     return execution;
 }
@@ -92,9 +92,8 @@ ShardedGroupOwner::ShardedGroupOwner(const ExecutionContext& execution, std::int
     // sum is not a sum and the magnitude is whatever lives there.
     if (std::getenv("NINFER_MAILBOX_TRACE") != nullptr) {
         for (int rank = 0; rank < 2; ++rank) {
-            std::fprintf(stderr,
-                         "[group] rank=%d dev=%d partials=%p logits=%p mailbox_slab=%p\n", rank,
-                         execution_.device(rank).device().index(),
+            std::fprintf(stderr, "[group] rank=%d dev=%d partials=%p logits=%p mailbox_slab=%p\n",
+                         rank, execution_.device(rank).device().index(),
                          static_cast<const void*>(partials_[rank].data),
                          static_cast<const void*>(logits_[rank].data),
                          static_cast<const void*>(mailbox_.payload_base(rank)));
@@ -117,9 +116,7 @@ ShardedGroupOwner::ShardedGroupOwner(const ExecutionContext& execution, std::int
 ShardedGroupOwner::~ShardedGroupOwner() = default;
 
 Device ShardedGroupOwner::partial_device(int rank) const {
-    if (rank < 0 || rank >= 2) {
-        throw std::out_of_range("sharded group: rank outside [0,2)");
-    }
+    if (rank < 0 || rank >= 2) { throw std::out_of_range("sharded group: rank outside [0,2)"); }
     return partials_[static_cast<std::size_t>(rank)].device;
 }
 

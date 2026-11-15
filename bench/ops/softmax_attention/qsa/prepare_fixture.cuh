@@ -119,18 +119,18 @@ struct PrepareFixture {
         const auto v_scales = allocate_plane(value_scales, schema.value.scale_dtype,
                                              schema.value.scale_leading_extent);
         index_keys          = make_zeros(std::size_t(pages) * 128 * 16 * 2);
-        projected           = {kv_only ? Tensor{}
-                                       : Tensor(q.span(), DType::BF16, {256, 12 * o.kv_heads, tokens, B}),
-                     Tensor(k.span(), DType::BF16, {256, o.kv_heads, tokens, B}),
-                     Tensor(v.span(), DType::BF16, {256, o.kv_heads, tokens, B}),
-                     kv_only ? Tensor{} : Tensor(iq.span(), DType::BF16, {128, 4, tokens, B}),
-                     Tensor(ik.span(), DType::BF16, {128, tokens, B})};
+        projected  = {kv_only ? Tensor{}
+                              : Tensor(q.span(), DType::BF16, {256, 12 * o.kv_heads, tokens, B}),
+                      Tensor(k.span(), DType::BF16, {256, o.kv_heads, tokens, B}),
+                      Tensor(v.span(), DType::BF16, {256, o.kv_heads, tokens, B}),
+                      kv_only ? Tensor{} : Tensor(iq.span(), DType::BF16, {128, 4, tokens, B}),
+                      Tensor(ik.span(), DType::BF16, {128, tokens, B})};
         parameters = {
             {Tensor(wk.span(), DType::BF16, {256}), Tensor(wik.span(), DType::BF16, {128})},
             kv_only ? Tensor{} : Tensor(wq.span(), DType::BF16, {256}),
             kv_only ? Tensor{} : Tensor(wiq.span(), DType::BF16, {128})};
-        batch   = {Tensor(positions.span(), DType::I32, {tokens, B}),
-                   Tensor(valid.span(), DType::I32, {B}), Tensor(table_rows.span(), DType::I32, {B})};
+        batch = {Tensor(positions.span(), DType::I32, {tokens, B}),
+                 Tensor(valid.span(), DType::I32, {B}), Tensor(table_rows.span(), DType::I32, {B})};
         before  = {before_raw.view, before_rope.view, Tensor(slots.span(), DType::I32, {B})};
         records = {record_raw.view, record_rope.view, Tensor(offsets.span(), DType::I32, {B})};
         Tensor block_tables(tables.span(), DType::I32, {logical, B});

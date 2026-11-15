@@ -203,7 +203,7 @@ void run_new_bf16_geometry(Suite& suite, const Geometry& shape) {
     const int step         = raw ? 4 : 1;
     const int maximum      = raw ? 131072 : text ? std::numeric_limits<int>::max() : 32768;
     const bool wide        = (shape.n == 2560 && (shape.k == 2560 || shape.k == 3072)) ||
-                      shape.n == 124160 || shape.n == 77440 || shape.n == 48;
+                             shape.n == 124160 || shape.n == 77440 || shape.n == 48;
     auto test     = linear_suite::make_case("bf16", shape.n, shape.k, 0, ops::LinearPolicy::A16Only,
                                             linear_suite::Execution::Eager, "column-domain");
     test.policies = 7;

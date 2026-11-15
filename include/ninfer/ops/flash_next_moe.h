@@ -18,31 +18,31 @@ namespace ninfer::ops {
 
 
 struct FlashNextExpertBank {
-    const void* codes = nullptr;
-    const void* scales = nullptr;
+    const void* codes                  = nullptr;
+    const void* scales                 = nullptr;
     const float* weight_scale_divisors = nullptr;
-    const float* input_scale_divisors = nullptr;
-    QType qtype = QType::NVFP4;
-    std::int32_t experts = 0;
-    std::int32_t rows = 0;
-    std::int32_t columns = 0;
+    const float* input_scale_divisors  = nullptr;
+    QType qtype                        = QType::NVFP4;
+    std::int32_t experts               = 0;
+    std::int32_t rows                  = 0;
+    std::int32_t columns               = 0;
     // SP-4 tiered banks: the pinned-host warm mini-bank (the same per-expert block layout as
     // `codes`/`scales`), the always-armed per-expert activation counters, and the residency
     // table (bit 31 marks the warm tier, the low bits the expert's compacted rank). Null
     // pointers keep the untiered direct path where every expert reads the device bank at its
     // own rank. `tiered_hot_experts` is the device mini-bank's hot prefix; the cache tail
     // slots behind it are addressed by the residency's compacted rank.
-    const void* warm_codes = nullptr;
-    const void* warm_scales = nullptr;
+    const void* warm_codes                  = nullptr;
+    const void* warm_scales                 = nullptr;
     const float* warm_weight_scale_divisors = nullptr;
     // SP-4 tiered banks: device scratch for the tier exchange. The swap stages the demoted
     // expert's per-plane block here so the two copies never read a slot they just wrote.
     // Owned by the materializer's tier state; sized to the largest per-expert plane block.
     // Required for swap_expert_tier*; unused by the decode path.
-    void* tier_swap_staging = nullptr;
-    std::uint32_t* expert_activations = nullptr;
+    void* tier_swap_staging               = nullptr;
+    std::uint32_t* expert_activations     = nullptr;
     const std::uint32_t* expert_residency = nullptr;
-    std::uint32_t tiered_hot_experts = 0;
+    std::uint32_t tiered_hot_experts      = 0;
 };
 
 // The shared expert's gate and up projections: two BF16 [640,2560] matrices, or one row-scaled
@@ -76,8 +76,8 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
 // SP-4 tiered banks: reads and zeroes the per-expert activation counters. Returns the host
 // counts (index = expert id). Synchronous diagnostic; call between rounds. Throws when the
 // bank is untiered (null counters).
-[[nodiscard]] std::vector<std::uint32_t> read_and_reset_expert_activations(
-    const FlashNextExpertBank& bank, CudaExecutionView execution);
+[[nodiscard]] std::vector<std::uint32_t>
+read_and_reset_expert_activations(const FlashNextExpertBank& bank, CudaExecutionView execution);
 
 // The enqueue-only form: the device-to-host copy and the counter reset land on the
 // execution stream and return immediately; the caller synchronizes the stream once after

@@ -582,8 +582,7 @@ struct Fixture {
     Cache cache;
     std::uint64_t next_order = 0;
 
-    explicit Fixture(std::size_t capacity,
-                     std::optional<std::uint32_t> max_tracked_sessions = {},
+    explicit Fixture(std::size_t capacity, std::optional<std::uint32_t> max_tracked_sessions = {},
                      std::optional<std::uint64_t> activity_window = {})
         : program{.host_capacity = capacity},
           cache(true, {.prefill = {.token_ns_q32 = ninfer::runtime::kContextCostQ32One}},
@@ -625,7 +624,6 @@ struct Fixture {
         cache.abandon(program, token);
     }
 };
-
 
 void test_cold_writeback_protects_reused_history() {
     Fixture f(64);

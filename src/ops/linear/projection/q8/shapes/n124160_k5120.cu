@@ -4,7 +4,8 @@
 
 namespace ninfer::ops::detail {
 namespace {
-// the MTP block's output_head at width 2: the 248320-row vocabulary halved by the Rows shard, the same geometry text/output_head presents.
+// the MTP block's output_head at width 2: the 248320-row vocabulary halved by the Rows shard, the
+// same geometry text/output_head presents.
 //
 // The ladder is N14336K5120's, and that is a derivation rather than a copy: every band in it is
 // chosen from (n / kBlockRows) * ceil(T / BlockTokens) against the tuned wave, and that expression

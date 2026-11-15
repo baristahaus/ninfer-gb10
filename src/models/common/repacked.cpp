@@ -35,7 +35,7 @@ struct Run {
 };
 
 std::uint64_t scale_bytes(const WeightGeometry& geometry, std::uint64_t column) {
-    const std::uint64_t group = geometry.group_size ? geometry.group_size : 1;
+    const std::uint64_t group          = geometry.group_size ? geometry.group_size : 1;
     const std::uint64_t groups_per_row = geometry.padded_columns / group;
     if (groups_per_row == 0 || column % group != 0) {
         throw std::invalid_argument("repack: a column shard must align to the scale group");
@@ -72,8 +72,8 @@ void copy_2d(const std::byte* source, std::size_t source_pitch, std::byte* desti
 
 } // namespace
 
-RepackedWeights::RepackedWeights() = default;
-RepackedWeights::~RepackedWeights() = default;
+RepackedWeights::RepackedWeights()                                      = default;
+RepackedWeights::~RepackedWeights()                                     = default;
 RepackedWeights::RepackedWeights(RepackedWeights&&) noexcept            = default;
 RepackedWeights& RepackedWeights::operator=(RepackedWeights&&) noexcept = default;
 
@@ -127,9 +127,9 @@ std::uint64_t gather_view_into(const BoundWeight& weight, const WeightGeometry& 
         throw std::invalid_argument(weight.name + ": a repack does not cover its own rows");
     }
 
-    const Device device                 = source.device;
-    const std::size_t source_code_pitch = source.geometry.code_bytes_per_row;
-    const std::size_t target_code_pitch = target.code_bytes_per_row;
+    const Device device                  = source.device;
+    const std::size_t source_code_pitch  = source.geometry.code_bytes_per_row;
+    const std::size_t target_code_pitch  = target.code_bytes_per_row;
     const std::size_t source_scale_pitch = source.geometry.scale_row_bytes;
     const std::size_t target_scale_pitch = target.scale_row_bytes;
     for (const auto& run : runs) {
@@ -163,10 +163,10 @@ void RepackedWeights::gather(std::vector<BoundWeight>& weights,
     std::vector<bool> fused(weights.size(), false);
     for (const auto& group : groups) {
         if (group.members.size() < 2) { continue; }
-        std::uint64_t rows            = 0;
-        const WeightParent* source    = nullptr;
-        const WeightParent* first     = nullptr;
-        bool needs                    = false;
+        std::uint64_t rows         = 0;
+        const WeightParent* source = nullptr;
+        const WeightParent* first  = nullptr;
+        bool needs                 = false;
         for (const auto id : group.members) {
             const auto& view = weights.at(id.index).view;
             if (view.shape.size() != 2 || view.parts.empty()) {
@@ -181,14 +181,12 @@ void RepackedWeights::gather(std::vector<BoundWeight>& weights,
             rows += view.shape[0];
         }
         if (!needs || source == nullptr) { continue; } // width 1: one parent, every member whole
-        for (const auto id : group.members) {
-            fused.at(id.index) = true;
-        }
+        for (const auto id : group.members) { fused.at(id.index) = true; }
         const std::uint64_t columns = weights.at(group.members.front().index).view.shape[1];
         const std::vector<std::uint64_t> fused_shape{rows, columns};
         const WeightGeometry target =
             weight_geometry(source->geometry.format, source->geometry.layout, fused_shape);
-        auto owned = std::make_unique<Owned>();
+        auto owned          = std::make_unique<Owned>();
         const Device device = source->device;
         if (device.type() == DeviceType::CPU) {
             owned->host_buffer.assign(target.bytes, std::byte{0});
@@ -204,13 +202,12 @@ void RepackedWeights::gather(std::vector<BoundWeight>& weights,
             owned->divisors.assign(source->weight_divisors.begin(), source->weight_divisors.end());
             owned->parent.weight_divisors = owned->divisors;
         }
-        auto* destination = const_cast<std::byte*>(owned->parent.data);
+        auto* destination       = const_cast<std::byte*>(owned->parent.data);
         std::uint64_t first_row = 0;
         for (const auto id : group.members) {
-            auto& weight = weights.at(id.index);
-            const std::uint64_t written =
-                gather_view_into(weight, target, destination, first_row);
-            const std::uint64_t begin = first_row * target.code_bytes_per_row;
+            auto& weight                = weights.at(id.index);
+            const std::uint64_t written = gather_view_into(weight, target, destination, first_row);
+            const std::uint64_t begin   = first_row * target.code_bytes_per_row;
             weight.view.parts = {WeightRegion{&owned->parent, begin,
                                               begin + weight_element_count(weight.view.shape)}};
             first_row += written;
@@ -221,7 +218,7 @@ void RepackedWeights::gather(std::vector<BoundWeight>& weights,
     // Every weight a fused group did not claim is gathered on its own, exactly as before.
     for (std::size_t index = 0; index < weights.size(); ++index) {
         if (fused.at(index)) { continue; }
-        auto& weight = weights.at(index);
+        auto& weight     = weights.at(index);
         WeightView& view = weight.view;
         if (view.shape.size() != 2) { continue; }
         if (contiguous(view)) { continue; }
@@ -259,10 +256,9 @@ void RepackedWeights::gather(std::vector<BoundWeight>& weights,
                 std::memcpy(destination + target.divisor_offset, owned->divisors.data(),
                             target.divisor_count * sizeof(float));
             } else {
-                CUDA_CHECK(cudaMemcpyAsync(destination + target.divisor_offset,
-                                           owned->divisors.data(),
-                                           target.divisor_count * sizeof(float),
-                                           cudaMemcpyHostToDevice, nullptr));
+                CUDA_CHECK(cudaMemcpyAsync(
+                    destination + target.divisor_offset, owned->divisors.data(),
+                    target.divisor_count * sizeof(float), cudaMemcpyHostToDevice, nullptr));
             }
         }
         view.parts = {WeightRegion{&owned->parent, 0, target.elements}};

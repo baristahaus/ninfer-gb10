@@ -42,12 +42,12 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
     PreparedRequest prepared;
     try {
         ninfer::GenerationObservationOptions observation{
-            .constraint_timings = true,
+            .constraint_timings    = true,
             .accepted_length_steps = service_->speculation_detail_steps(),
-            .live_timings       = request.stream && request.timings_per_token,
-            .prompt_progress    = request.stream && request.return_progress,
-            .scheduling         = scheduling_observer(req_id, metadata.http_request_id),
-            .first_token        = first_token_observer(),
+            .live_timings          = request.stream && request.timings_per_token,
+            .prompt_progress       = request.stream && request.return_progress,
+            .scheduling            = scheduling_observer(req_id, metadata.http_request_id),
+            .first_token           = first_token_observer(),
         };
         prepared = service_->prepare(
             request.generation,
@@ -185,7 +185,8 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
                         render_and_write(transport, [&] { return encoder->reasoning_delta(text); });
                     };
                     output.on_tool_call_progress = [&](std::size_t bytes) {
-                        render_and_write(transport, [&] { return encoder->tool_call_progress(bytes); });
+                        render_and_write(transport,
+                                         [&] { return encoder->tool_call_progress(bytes); });
                     };
                     output.on_tool_start = [&](const ninfer::ToolCallStart& event) {
                         render_and_write(transport, [&] { return encoder->tool_start(event); });

@@ -167,7 +167,7 @@ void run(const Options& o) {
             const auto start = 2 + 100000 + b * 100003ULL + sample * o.tokens;
             ids[b]           = std::span(corpus).subspan(start, o.tokens);
             rows[b]          = {{b, sample, start, {corpus[start - 2], corpus[start - 1]}},
-                       o.incremental_us ? ids[b].first(1) : ids[b]};
+                                o.incremental_us ? ids[b].first(1) : ids[b]};
             lengths[b]       = o.tokens;
         }
         const auto before = service.stats();

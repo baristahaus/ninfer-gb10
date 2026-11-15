@@ -19,7 +19,6 @@
 namespace ninfer::flashnext_runtime {
 using namespace ninfer::runtime;
 
-
 struct MaterializationCheckpointPolicy {
     PlanningOwnerId owner;
     CheckpointRef checkpoint;
@@ -173,7 +172,7 @@ public:
                 const auto price_split         = [&](std::span<const std::uint32_t> frontiers) {
                     const std::uint64_t baseline =
                         machine_cost.prefill_ns(selected.candidate->identity_assessment()
-                                                            .machine_work.remaining_prefill_work);
+                                                    .machine_work.remaining_prefill_work);
                     const std::uint64_t target =
                         machine_cost.prefill_ns(program.shared_capture_split_prefill_work(
                             *selected.candidate, prompt, frontiers));
@@ -273,10 +272,10 @@ public:
         std::optional<std::uint64_t> first_improvement_ns;
         std::uint32_t incumbent_improvements = 0;
         std::uint64_t option_step_ns = 1'000, assessment_step_ns = 20'000,
-                      expansion_step_ns = 20'000;
-        std::uint64_t search_work       = 0;
-        const auto work_limit           = static_cast<std::uint64_t>(kTargetBudget) *
-                                (16U + 16ULL * pressure.owner_policy.size());
+                      expansion_step_ns       = 20'000;
+        std::uint64_t search_work             = 0;
+        const auto work_limit                 = static_cast<std::uint64_t>(kTargetBudget) *
+                                                (16U + 16ULL * pressure.owner_policy.size());
         std::uint32_t optional_targets        = 0;
         MaterializationStopReason stop_reason = MaterializationStopReason::QueueExhausted;
         bool budget_exhausted                 = false;
@@ -482,7 +481,7 @@ public:
         bool refinement_seeded = false;
         const auto have_paths  = [&] {
             return std::any_of(paths.begin(), paths.end(),
-                                [](const auto& path) { return bool(path.cursor); });
+                               [](const auto& path) { return bool(path.cursor); });
         };
         while (!search_stopped &&
                (next_path < 2U * order.size() || have_paths() || !refinement_seeded)) {
@@ -736,9 +735,9 @@ public:
         diagnostics.search_discovery_used      = search_budget.discovery_used();
         diagnostics.search_stop_phase          = search_phase;
         diagnostics.search_boundary_limited    = search_budget.boundary_limited();
-        diagnostics.search_overshoot_ns        = search_elapsed_ns > search_budget.granted_ns()
-                                                     ? search_elapsed_ns - search_budget.granted_ns()
-                                                     : 0;
+        diagnostics.search_overshoot_ns = search_elapsed_ns > search_budget.granted_ns()
+                                              ? search_elapsed_ns - search_budget.granted_ns()
+                                              : 0;
         Result result;
         result.plan                = std::move(*sealed);
         result.candidate           = candidates[incumbent.candidate_index].id;

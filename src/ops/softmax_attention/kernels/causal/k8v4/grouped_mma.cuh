@@ -356,24 +356,24 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
                     const int col0 = nt * 8 + 2 * lid;
                     const int key0 = k0 + col0;
                     const int key1 = key0 + 1;
-                    score[nt][0]   = row0 < tile_tokens * Geometry::GroupSize &&
+                    score[nt][0] = row0 < tile_tokens * Geometry::GroupSize &&
                                            key0 >= split_start && key0 < split_end && key0 <= qabs0
-                                         ? score[nt][0] * attention_scale
-                                         : -CUDART_INF_F;
-                    score[nt][1]   = row0 < tile_tokens * Geometry::GroupSize &&
+                                       ? score[nt][0] * attention_scale
+                                       : -CUDART_INF_F;
+                    score[nt][1] = row0 < tile_tokens * Geometry::GroupSize &&
                                            key1 >= split_start && key1 < split_end && key1 <= qabs0
-                                         ? score[nt][1] * attention_scale
-                                         : -CUDART_INF_F;
-                    score[nt][2]   = row1 < tile_tokens * Geometry::GroupSize &&
+                                       ? score[nt][1] * attention_scale
+                                       : -CUDART_INF_F;
+                    score[nt][2] = row1 < tile_tokens * Geometry::GroupSize &&
                                            key0 >= split_start && key0 < split_end && key0 <= qabs1
-                                         ? score[nt][2] * attention_scale
-                                         : -CUDART_INF_F;
-                    score[nt][3]   = row1 < tile_tokens * Geometry::GroupSize &&
+                                       ? score[nt][2] * attention_scale
+                                       : -CUDART_INF_F;
+                    score[nt][3] = row1 < tile_tokens * Geometry::GroupSize &&
                                            key1 >= split_start && key1 < split_end && key1 <= qabs1
-                                         ? score[nt][3] * attention_scale
-                                         : -CUDART_INF_F;
-                    bm0            = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
-                    bm1            = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
+                                       ? score[nt][3] * attention_scale
+                                       : -CUDART_INF_F;
+                    bm0          = fmaxf(bm0, fmaxf(score[nt][0], score[nt][1]));
+                    bm1          = fmaxf(bm1, fmaxf(score[nt][2], score[nt][3]));
                 }
                 bm0             = common::warp_max<4>(bm0, FullMask);
                 bm1             = common::warp_max<4>(bm1, FullMask);

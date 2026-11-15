@@ -648,10 +648,10 @@ EncodedVector encode_prefix_vector(std::span<const std::uint16_t, kFullHeadDim> 
                (key && storage == KvCacheStorage::Fp8KeyNvfp4Value)) {
         float maximum = 0;
         for (const auto value : values) maximum = std::max(maximum, std::abs(value));
-        const auto bits    = maximum == 0
-                                 ? std::uint16_t{0}
-                                 : f32_to_f16_bits(std::clamp(maximum / 448.0f, 0x1p-24f, 65504.0f));
-        const auto scale   = f16_bits_to_f32(bits);
+        const auto bits  = maximum == 0
+                               ? std::uint16_t{0}
+                               : f32_to_f16_bits(std::clamp(maximum / 448.0f, 0x1p-24f, 65504.0f));
+        const auto scale = f16_bits_to_f32(bits);
         const auto inverse = scale == 0 ? 0.0f : 1.0f / scale;
         store_u16(encoded.scales, 0, bits);
         for (int d = 0; d < kFullHeadDim; ++d)
@@ -773,7 +773,7 @@ int full_prefix_case(int kv_heads, KvCacheStorage storage, int width, int batch,
                         const auto code_offset = full_cache_index(vector.code_extent, 0, head,
                                                                   position, page, kv_heads) *
                                                  dtype_size(vector.code_dtype);
-                        const auto code_bytes = vector.code_extent * dtype_size(vector.code_dtype);
+                        const auto code_bytes  = vector.code_extent * dtype_size(vector.code_dtype);
                         std::copy_n(encoded.data.begin(), code_bytes,
                                     expected[side].begin() + code_offset);
                         if (vector.scale_extent) {

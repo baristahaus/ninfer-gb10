@@ -276,6 +276,7 @@ public:
     // (`acquire_mirror`/`release_mirror`) rather than the wrapper's paired acquire. Unattached is
     // the default, so a family with no peer -- and width 1 -- is unchanged.
     void attach_mirror(tp2::MirroredKVExecutionTables& mirror);
+
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 
 private:

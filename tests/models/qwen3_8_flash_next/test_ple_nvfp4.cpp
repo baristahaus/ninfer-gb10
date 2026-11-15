@@ -16,12 +16,12 @@ namespace {
 // nearest-even BF16 encoder; they share no code with the production decoder.
 double e2m1_value(unsigned code) {
     static constexpr double kMagnitudes[8] = {0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0};
-    const double magnitude = kMagnitudes[code & 7];
+    const double magnitude                 = kMagnitudes[code & 7];
     return (code & 8) ? -magnitude : magnitude;
 }
 
 double e4m3_value(unsigned word) {
-    const double sign = (word & 0x80) ? -1.0 : 1.0;
+    const double sign       = (word & 0x80) ? -1.0 : 1.0;
     const unsigned exponent = (word >> 3) & 0xF;
     const unsigned fraction = word & 7;
     if (exponent == 0) { return sign * static_cast<double>(fraction) * std::exp2(-9.0); }
@@ -33,7 +33,7 @@ std::uint16_t bf16_bits_ne(double value) {
     // value is exactly representable in BF16 here (<= 6 mantissa bits); the
     // round-to-nearest-even reference therefore never loses a bit. Assert the
     // float representation is exact before folding to BF16.
-    const float single = static_cast<float>(value);
+    const float single       = static_cast<float>(value);
     const std::uint32_t word = std::bit_cast<std::uint32_t>(single);
     if ((word & 0x0000FFFFU) != 0) {
         throw std::runtime_error("test value is not exactly representable in float");
@@ -43,9 +43,8 @@ std::uint16_t bf16_bits_ne(double value) {
     return static_cast<std::uint16_t>(rounded >> 16);
 }
 
-void check_row(unsigned scale_word, unsigned nibble, unsigned position,
-               std::span<std::byte> codes, std::span<std::byte> scales,
-               std::span<std::byte> staged) {
+void check_row(unsigned scale_word, unsigned nibble, unsigned position, std::span<std::byte> codes,
+               std::span<std::byte> scales, std::span<std::byte> staged) {
     const int half  = static_cast<int>(position / 2);
     const bool high = (position & 1) != 0;
     codes[half]     = static_cast<std::byte>(high ? nibble << 4 : nibble);
@@ -57,7 +56,7 @@ void check_row(unsigned scale_word, unsigned nibble, unsigned position,
                   << ": " << error.what() << '\n';
         throw;
     }
-    const double value = e2m1_value(nibble) * e4m3_value(scale_word);
+    const double value           = e2m1_value(nibble) * e4m3_value(scale_word);
     const std::uint16_t expected = bf16_bits_ne(value);
     const std::uint16_t actual =
         static_cast<std::uint16_t>(static_cast<unsigned>(staged[2 * position]) |
@@ -97,8 +96,7 @@ int main() {
         try {
             q38::decode_ple_nvfp4_row_bf16(any_codes, nan_scales, staged);
             throw std::runtime_error("a NaN PLE NVFP4 group scale was not rejected");
-        } catch (const std::range_error&) {
-        }
+        } catch (const std::range_error&) {}
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

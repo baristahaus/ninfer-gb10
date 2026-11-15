@@ -19,7 +19,6 @@
 namespace ninfer::flashnext_runtime {
 using namespace ninfer::runtime;
 
-
 // Shared publication is optional. Unlike materialization, its incumbent is always Skip and a
 // target is selectable only when the complete post-state has strictly positive net value.
 template <class ModelContract>
@@ -365,9 +364,9 @@ private:
             saturating_multiply(input.private_baseline_immediate_ns, multiplier);
         const std::uint64_t immediate =
             target_immediate > baseline_immediate ? target_immediate - baseline_immediate : 0;
-        bool saturated = portfolio.saturated ||
-                         target_immediate == std::numeric_limits<std::uint64_t>::max() ||
-                         baseline_immediate == std::numeric_limits<std::uint64_t>::max();
+        bool saturated           = portfolio.saturated ||
+                                   target_immediate == std::numeric_limits<std::uint64_t>::max() ||
+                                   baseline_immediate == std::numeric_limits<std::uint64_t>::max();
         std::uint64_t threshold  = portfolio.baseline_public_value;
         const auto add_threshold = [&](std::uint64_t increment) {
             if (increment > std::numeric_limits<std::uint64_t>::max() - threshold) {

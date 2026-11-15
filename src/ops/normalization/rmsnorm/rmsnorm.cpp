@@ -47,9 +47,8 @@ void sigmoid_gated_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor& 
 // from the device the caller has current when entering the op.
 void rmsnorm(const Tensor& x, const Tensor& weight, float eps, bool unit_offset, Tensor& out,
              cudaStream_t stream) {
-    execute(x, weight, nullptr, eps,
-            unit_offset ? norm::Epilogue::Offset : norm::Epilogue::Plain, out, x.device,
-            current_multiprocessor_count(), stream, "rmsnorm");
+    execute(x, weight, nullptr, eps, unit_offset ? norm::Epilogue::Offset : norm::Epilogue::Plain,
+            out, x.device, current_multiprocessor_count(), stream, "rmsnorm");
 }
 
 void sigmoid_gated_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor& gate, float eps,

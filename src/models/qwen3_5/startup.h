@@ -34,9 +34,8 @@ public:
          std::optional<std::uint32_t> published_tokens = std::nullopt) const;
     // The curve plan() would resolve against, without finalizing a sequence. A group decision needs
     // every rank's curve before either Program exists.
-    [[nodiscard]] runtime::SequenceCapacityCurve capacity_curve(DeviceContext&,
-                                                                const EngineOptions&,
-                                                                WeightPlacement) const;
+    [[nodiscard]] runtime::SequenceCapacityCurve
+    capacity_curve(DeviceContext&, const EngineOptions&, WeightPlacement) const;
     // `rank` selects which of `rank_definitions()` the materialization reads, so a group's rank
     // materializes its own bindings on its own device. Rank 0 is the local rank and the default, so
     // every existing caller is unchanged.
@@ -68,8 +67,8 @@ public:
     std::shared_ptr<const execution::ModelProfile> profile;
 
     // The rows of one column-parallel partial — the residual stream's width — or nullopt for a
-    // family with no two-GPU lane. The startup reads this to size the shared partial pair; the token
-    // capacity comes from the resolved plan, which every family has.
+    // family with no two-GPU lane. The startup reads this to size the shared partial pair; the
+    // token capacity comes from the resolved plan, which every family has.
     [[nodiscard]] std::optional<std::int32_t> sharded_partial_rows() const {
         return profile != nullptr ? std::optional<std::int32_t>(profile->config.text.hidden_size)
                                   : std::nullopt;

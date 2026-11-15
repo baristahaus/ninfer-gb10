@@ -26,8 +26,7 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t
             Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 64, 64, 32, 16, 2, 2>, 640>>(
             operands, output, LinearIdentityEpilogue{}, stream);
     }
-    launch_fp8_a16_mma<
-        Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 128, 64, 64, 16, 2, 2>, 640>>(
+    launch_fp8_a16_mma<Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 128, 64, 64, 16, 2, 2>, 640>>(
         operands, output, LinearIdentityEpilogue{}, stream);
 }
 

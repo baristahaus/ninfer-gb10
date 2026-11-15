@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 TensorFold contributors
 //
-// EXL3 decode-row linear: any codebook, width, 1-128 rows, a row's bits only its own; port of tensorfold's linear.cu.
+// EXL3 decode-row linear: any codebook, width, 1-128 rows, a row's bits only its own; port of
+// tensorfold's linear.cu.
 #include <cstdint>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
@@ -15,23 +16,23 @@ enum DType : int { F16 = 0, BF16 = 1, F32 = 2 };
 __device__ __forceinline__ int imin(int a, int b) { return a < b ? a : b; }
 
 struct LinearArgs {
-    const void* xh;          // fp16 [m, k], the hadamard-rotated inputs
-    const uint32_t* t;       // trellis words
-    long long stride_k;      // words between k tiles
-    long long stride_nb;     // words between 128-column blocks
-    const half* svh;         // fp16 [n], output hadamard scales
-    const half* bias;        // fp16 [n] or null
-    void* y;                 // output
-    float* z;                // fp32 split partials [sk, m, n] or null
-    int* counters;           // per (pass, block) arrival counts, zeroed before the launch
+    const void* xh;      // fp16 [m, k], the hadamard-rotated inputs
+    const uint32_t* t;   // trellis words
+    long long stride_k;  // words between k tiles
+    long long stride_nb; // words between 128-column blocks
+    const half* svh;     // fp16 [n], output hadamard scales
+    const half* bias;    // fp16 [n] or null
+    void* y;             // output
+    float* z;            // fp32 split partials [sk, m, n] or null
+    int* counters;       // per (pass, block) arrival counts, zeroed before the launch
     int y_dtype;
     int n, sk, m, k;
 };
 
 struct RotInArgs {
-    const void* x;           // f16 / bf16 / f32 [m, k]
-    const half* suh;         // fp16 [k], input hadamard scales
-    half* xh;                // fp16 [m, k] out
+    const void* x;   // f16 / bf16 / f32 [m, k]
+    const half* suh; // fp16 [k], input hadamard scales
+    half* xh;        // fp16 [m, k] out
     int x_dtype;
     int m, k;
 };
@@ -39,23 +40,33 @@ struct RotInArgs {
 __device__ __forceinline__ void load4(const void* p, int dtype, size_t i, float (&v)[4]) {
     if (dtype == F32) {
         const float4 u = *reinterpret_cast<const float4*>(static_cast<const float*>(p) + i);
-        v[0] = u.x; v[1] = u.y; v[2] = u.z; v[3] = u.w;
+        v[0]           = u.x;
+        v[1]           = u.y;
+        v[2]           = u.z;
+        v[3]           = u.w;
     } else if (dtype == BF16) {
-        const uint2 u = *reinterpret_cast<const uint2*>(static_cast<const __nv_bfloat16*>(p) + i);
+        const uint2 u  = *reinterpret_cast<const uint2*>(static_cast<const __nv_bfloat16*>(p) + i);
         const float2 a = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&u.x));
         const float2 b = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&u.y));
-        v[0] = a.x; v[1] = a.y; v[2] = b.x; v[3] = b.y;
+        v[0]           = a.x;
+        v[1]           = a.y;
+        v[2]           = b.x;
+        v[3]           = b.y;
     } else {
-        const uint2 u = *reinterpret_cast<const uint2*>(static_cast<const half*>(p) + i);
+        const uint2 u  = *reinterpret_cast<const uint2*>(static_cast<const half*>(p) + i);
         const float2 a = __half22float2(*reinterpret_cast<const half2*>(&u.x));
         const float2 b = __half22float2(*reinterpret_cast<const half2*>(&u.y));
-        v[0] = a.x; v[1] = a.y; v[2] = b.x; v[3] = b.y;
+        v[0]           = a.x;
+        v[1]           = a.y;
+        v[2]           = b.x;
+        v[3]           = b.y;
     }
 }
 
 __device__ __forceinline__ void store4(void* p, int dtype, size_t i, const float (&v)[4]) {
     if (dtype == F32) {
-        *reinterpret_cast<float4*>(static_cast<float*>(p) + i) = make_float4(v[0], v[1], v[2], v[3]);
+        *reinterpret_cast<float4*>(static_cast<float*>(p) + i) =
+            make_float4(v[0], v[1], v[2], v[3]);
     } else if (dtype == BF16) {
         __nv_bfloat162 a = __floats2bfloat162_rn(v[0], v[1]), b = __floats2bfloat162_rn(v[2], v[3]);
         uint2 u;
@@ -65,14 +76,16 @@ __device__ __forceinline__ void store4(void* p, int dtype, size_t i, const float
     } else {
         half2 a = __floats2half2_rn(v[0], v[1]), b = __floats2half2_rn(v[2], v[3]);
         uint2 u;
-        u.x = *reinterpret_cast<uint32_t*>(&a);
-        u.y = *reinterpret_cast<uint32_t*>(&b);
+        u.x                                                  = *reinterpret_cast<uint32_t*>(&a);
+        u.y                                                  = *reinterpret_cast<uint32_t*>(&b);
         *reinterpret_cast<uint2*>(static_cast<half*>(p) + i) = u;
     }
 }
 
-// The finished outputs of one row's 128 columns from their fp32 sums (4 a lane): H / sqrt(128), * svh, + bias.
-__device__ __forceinline__ void finish(float (&v)[4], int lane, const half* svh, const half* bias, int col) {
+// The finished outputs of one row's 128 columns from their fp32 sums (4 a lane): H / sqrt(128), *
+// svh, + bias.
+__device__ __forceinline__ void finish(float (&v)[4], int lane, const half* svh, const half* bias,
+                                       int col) {
     fwht128(v, lane);
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
@@ -83,9 +96,11 @@ __device__ __forceinline__ void finish(float (&v)[4], int lane, const half* svh,
     }
 }
 
-// A k step's words for one lane: the step is 8 tiles back to back, each lane takes the same slice of every tile.
+// A k step's words for one lane: the step is 8 tiles back to back, each lane takes the same slice
+// of every tile.
 template <int K2>
-__device__ __forceinline__ void load_step(const uint32_t* step, int lane, uint32_t (&raw)[8 * lane_words<K2>()]) {
+__device__ __forceinline__ void load_step(const uint32_t* step, int lane,
+                                          uint32_t (&raw)[8 * lane_words<K2>()]) {
     constexpr int TW = tile_words<K2>(), LW = lane_words<K2>();
     int word, offset;
     lane_start<K2>(lane, word, offset);
@@ -119,24 +134,23 @@ extern "C" __global__ void __launch_bounds__(128) tf_exl3_rot_in(RotInArgs a) {
     store4(a.xh, F16, (size_t)row * a.k + k, v);
 }
 
-
 // One program: (N / 128) * SK blocks, split-major like a (N / 128, SK) grid, WK warps each.
 template <int K2, int CB, int WK>
 __device__ __forceinline__ void linear_body(LinearArgs a) {
     constexpr int TW = tile_words<K2>(), LW = lane_words<K2>();
-    constexpr bool PF = K2 <= 12;                             // the next k step's words load while this one decodes
-    constexpr int SR = 8 * LW;
-    extern __shared__ __align__(16) float red[];              // WK * RH * 128 floats
+    constexpr bool PF = K2 <= 12; // the next k step's words load while this one decodes
+    constexpr int SR  = 8 * LW;
+    extern __shared__ __align__(16) float red[]; // WK * RH * 128 floats
     __shared__ int last;
     const int M = a.m, K = a.k, N = a.n, SK = a.sk, NB = N >> 7;
-    const int RH = imin(M, 8);                                // rows of red a warp
+    const int RH = imin(M, 8); // rows of red a warp
     const int nb = (int)blockIdx.x % NB, split = (int)blockIdx.x / NB;
     const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
     const int g = lane >> 2, t = lane & 3;
-    const int per_warp = (K >> 4) / SK / WK;
-    const int kt0 = split * (per_warp * WK) + warp * per_warp;
+    const int per_warp    = (K >> 4) / SK / WK;
+    const int kt0         = split * (per_warp * WK) + warp * per_warp;
     const uint32_t* tiles = a.t + nb * a.stride_nb;
-    const int col0 = nb * 128;
+    const int col0        = nb * 128;
 
     for (int m0 = 0, pass = 0; m0 < M; m0 += 16, ++pass) {
         const int R = imin(16, M - m0);
@@ -149,15 +163,18 @@ __device__ __forceinline__ void linear_body(LinearArgs a) {
 #pragma unroll
                 for (int c = 0; c < 4; ++c) acc[i][h][c] = 0.f;
 
-        // the walk's rows for the mma, clamped so rows past the pass read inside the buffer (their outputs are dropped)
+        // the walk's rows for the mma, clamped so rows past the pass read inside the buffer (their
+        // outputs are dropped)
         const int r0 = m0 + (g < R ? g : R - 1), r1 = m0 + (g + 8 < R ? g + 8 : R - 1);
-        const half* x0 = static_cast<const half*>(a.xh) + (size_t)r0 * K;
-        const half* x1 = static_cast<const half*>(a.xh) + (size_t)r1 * K;
+        const half* x0       = static_cast<const half*>(a.xh) + (size_t)r0 * K;
+        const half* x1       = static_cast<const half*>(a.xh) + (size_t)r1 * K;
         const uint32_t* tile = tiles + (size_t)kt0 * a.stride_k;
         uint32_t cur[PF ? SR : 1], nxt[PF ? SR : 1];
-        if constexpr (PF) load_step<K2>(tile, lane, cur);     // the weights do not wait for the previous kernel
+        if constexpr (PF)
+            load_step<K2>(tile, lane, cur); // the weights do not wait for the previous kernel
 
-        // x's fragments of k step kt: rows g (and g + 8): [0] [2] k 2t.., 2t + 8..; [1] [3] the same of row g + 8
+        // x's fragments of k step kt: rows g (and g + 8): [0] [2] k 2t.., 2t + 8..; [1] [3] the
+        // same of row g + 8
         auto load_x = [&](int kt, uint32_t (&u)[4]) {
             u[0] = __ldg(reinterpret_cast<const uint32_t*>(x0 + kt * 16 + 2 * t));
             u[2] = __ldg(reinterpret_cast<const uint32_t*>(x0 + kt * 16 + 2 * t + 8));
@@ -174,8 +191,10 @@ __device__ __forceinline__ void linear_body(LinearArgs a) {
 #pragma unroll
             for (int j = 0; j < 8; ++j) {
                 uint32_t w[LW];
-                if constexpr (PF) step_lane_words<K2>(cur, j, w);
-                else ldg_lane_words<K2>(tile + (size_t)i * a.stride_k + j * TW, lane, w);
+                if constexpr (PF)
+                    step_lane_words<K2>(cur, j, w);
+                else
+                    ldg_lane_words<K2>(tile + (size_t)i * a.stride_k + j * TW, lane, w);
                 uint32_t b0[2], b1[2];
                 decode_lane<K2, CB>(w, lane, b0, b1);
                 mma16816(acc[j][0], u, b0);
@@ -190,7 +209,7 @@ __device__ __forceinline__ void linear_body(LinearArgs a) {
         // the warps' sums, added in warp order, rows 0-7 of the pass and then rows 8-15
         for (int rlo = 0; rlo < R; rlo += 8) {
             const int rn = imin(R - rlo, 8);
-            __syncthreads();                         // red is reused by every half and pass
+            __syncthreads(); // red is reused by every half and pass
             if (g < RH) {
 #pragma unroll
                 for (int i = 0; i < 8; ++i)
@@ -208,11 +227,18 @@ __device__ __forceinline__ void linear_body(LinearArgs a) {
                 for (int r = warp; r < rn; r += WK) {
                     float v[4];
                     const float4 u = *reinterpret_cast<const float4*>(red + r * 128 + 4 * lane);
-                    v[0] = u.x; v[1] = u.y; v[2] = u.z; v[3] = u.w;
+                    v[0]           = u.x;
+                    v[1]           = u.y;
+                    v[2]           = u.z;
+                    v[3]           = u.w;
 #pragma unroll
                     for (int w = 1; w < WK; ++w) {
-                        const float4 q = *reinterpret_cast<const float4*>(red + (w * RH + r) * 128 + 4 * lane);
-                        v[0] += q.x; v[1] += q.y; v[2] += q.z; v[3] += q.w;
+                        const float4 q =
+                            *reinterpret_cast<const float4*>(red + (w * RH + r) * 128 + 4 * lane);
+                        v[0] += q.x;
+                        v[1] += q.y;
+                        v[2] += q.z;
+                        v[3] += q.w;
                     }
                     finish(v, lane, a.svh, a.bias, col0 + 4 * lane);
                     store4(a.y, a.y_dtype, (size_t)(m0 + rlo + r) * N + col0 + 4 * lane, v);
@@ -223,10 +249,15 @@ __device__ __forceinline__ void linear_body(LinearArgs a) {
                     float4 s = *reinterpret_cast<const float4*>(red + r * 128 + c);
 #pragma unroll
                     for (int w = 1; w < WK; ++w) {
-                        const float4 q = *reinterpret_cast<const float4*>(red + (w * RH + r) * 128 + c);
-                        s.x += q.x; s.y += q.y; s.z += q.z; s.w += q.w;
+                        const float4 q =
+                            *reinterpret_cast<const float4*>(red + (w * RH + r) * 128 + c);
+                        s.x += q.x;
+                        s.y += q.y;
+                        s.z += q.z;
+                        s.w += q.w;
                     }
-                    *reinterpret_cast<float4*>(a.z + ((size_t)split * M + m0 + rlo + r) * N + col0 + c) = s;
+                    *reinterpret_cast<float4*>(a.z + ((size_t)split * M + m0 + rlo + r) * N + col0 +
+                                               c) = s;
                 }
             }
         }
@@ -239,42 +270,56 @@ __device__ __forceinline__ void linear_body(LinearArgs a) {
                 __threadfence();
                 for (int r = warp; r < R; r += WK) {
                     const size_t at = ((size_t)m0 + r) * N + col0 + 4 * lane;
-                    float4 s = __ldcg(reinterpret_cast<const float4*>(a.z + at));
+                    float4 s        = __ldcg(reinterpret_cast<const float4*>(a.z + at));
                     for (int q = 1; q < SK; ++q) {
-                        const float4 u = __ldcg(reinterpret_cast<const float4*>(a.z + (size_t)q * M * N + at));
-                        s.x += u.x; s.y += u.y; s.z += u.z; s.w += u.w;
+                        const float4 u =
+                            __ldcg(reinterpret_cast<const float4*>(a.z + (size_t)q * M * N + at));
+                        s.x += u.x;
+                        s.y += u.y;
+                        s.z += u.z;
+                        s.w += u.w;
                     }
                     float v[4] = {s.x, s.y, s.z, s.w};
                     finish(v, lane, a.svh, a.bias, col0 + 4 * lane);
                     store4(a.y, a.y_dtype, (size_t)(m0 + r) * N + col0 + 4 * lane, v);
                 }
-                if (threadIdx.x == 0) a.counters[pass * NB + nb] = 0;   // every program of the block has arrived
+                if (threadIdx.x == 0)
+                    a.counters[pass * NB + nb] = 0; // every program of the block has arrived
             }
         }
-        __syncthreads();                             // red is reused in the next pass
+        __syncthreads(); // red is reused in the next pass
     }
 }
 
-// One extern "C" kernel per instantiation: the fatbin carries __global__ functions, the host resolves them by name.
-#define TF_EXL3_LINEAR(K2, CB, WK)                                                       \
-    extern "C" __global__ void __launch_bounds__((WK) * 32)                              \
-        tf_exl3_linear_##K2##_##CB##_##WK(tf_exl3::LinearArgs a) {                       \
-        tf_exl3::linear_body<K2, CB, WK>(a);                                             \
+// One extern "C" kernel per instantiation: the fatbin carries __global__ functions, the host
+// resolves them by name.
+#define TF_EXL3_LINEAR(K2, CB, WK)                                                                 \
+    extern "C" __global__ void __launch_bounds__((WK) * 32)                                        \
+        tf_exl3_linear_##K2##_##CB##_##WK(tf_exl3::LinearArgs a) {                                 \
+        tf_exl3::linear_body<K2, CB, WK>(a);                                                       \
     }
 
-// Every width the format serves (linear.cu TF_EXL3_ALL plus 4.5-6.5): whole bits, all codebooks; 7.5 is not a width.
+// Every width the format serves (linear.cu TF_EXL3_ALL plus 4.5-6.5): whole bits, all
+// codebooks; 7.5 is not a width.
+//
+// clang-format cannot lay this region out stably: a second pass re-wraps the same macro
+// invocations differently, so `--dry-run -Werror` never converges and the formatting guard would
+// report this file for ever. The layout is deliberate, so the region is exempt.
+// clang-format off
 #define TF_EXL3_WIDTHS(K2, CB) TF_EXL3_LINEAR(K2, CB, 4) TF_EXL3_LINEAR(K2, CB, 8)
-#define TF_EXL3_CODEBOOK(CB)                                                                                \
-    TF_EXL3_WIDTHS(2, CB) TF_EXL3_WIDTHS(4, CB) TF_EXL3_WIDTHS(6, CB) TF_EXL3_WIDTHS(8, CB)                 \
-    TF_EXL3_WIDTHS(10, CB) TF_EXL3_WIDTHS(12, CB) TF_EXL3_WIDTHS(14, CB) TF_EXL3_WIDTHS(16, CB)
+#define TF_EXL3_CODEBOOK(CB)                                                                       \
+    TF_EXL3_WIDTHS(2, CB)                                                                          \
+    TF_EXL3_WIDTHS(4, CB) TF_EXL3_WIDTHS(6, CB) TF_EXL3_WIDTHS(8, CB) TF_EXL3_WIDTHS(10, CB)       \
+        TF_EXL3_WIDTHS(12, CB) TF_EXL3_WIDTHS(14, CB) TF_EXL3_WIDTHS(16, CB)
 TF_EXL3_CODEBOOK(2) // mul1
-TF_EXL3_WIDTHS(3, 2) TF_EXL3_WIDTHS(5, 2) TF_EXL3_WIDTHS(7, 2) TF_EXL3_WIDTHS(9, 2)
-TF_EXL3_WIDTHS(11, 2) TF_EXL3_WIDTHS(13, 2)
-TF_EXL3_CODEBOOK(1) // mcg
-TF_EXL3_CODEBOOK(0) // inst3
+TF_EXL3_WIDTHS(3, 2)
+TF_EXL3_WIDTHS(5, 2) TF_EXL3_WIDTHS(7, 2) TF_EXL3_WIDTHS(9, 2) TF_EXL3_WIDTHS(11, 2)
+    TF_EXL3_WIDTHS(13, 2) TF_EXL3_CODEBOOK(1) // mcg
+    TF_EXL3_CODEBOOK(0)                       // inst3
 #undef TF_EXL3_CODEBOOK
 #undef TF_EXL3_WIDTHS
-}  // namespace tf_exl3
+// clang-format on
+} // namespace tf_exl3
 
 // ---------------------------------------------------------------------------
 // NInfer host launcher (added for the NInfer integration; the kernels above
@@ -288,27 +333,32 @@ namespace tf_exl3 {
 inline void launch_linear(int k2, int codebook, int wk, dim3 grid, size_t shmem,
                           cudaStream_t stream, LinearArgs a) {
     if (wk != 8) { throw std::invalid_argument("tf exl3 linear: only the 8-warp form is wired"); }
-#define TF_EXL3_LAUNCH(K2, CB)                                                              \
-    if (k2 == (K2) && codebook == (CB)) {                                                   \
-        cudaFuncSetAttribute(tf_exl3_linear_##K2##_##CB##_8,                                \
-                             cudaFuncAttributeMaxDynamicSharedMemorySize,                   \
-                             static_cast<int>(shmem));                                      \
-        tf_exl3_linear_##K2##_##CB##_8<<<grid, 8 * 32, shmem, stream>>>(a);                 \
-        return;                                                                             \
+// Same reason as the instantiation block above: the layout of these macro invocations does not
+// converge under a second pass.
+// clang-format off
+#define TF_EXL3_LAUNCH(K2, CB)                                                                     \
+    if (k2 == (K2) && codebook == (CB)) {                                                          \
+        cudaFuncSetAttribute(tf_exl3_linear_##K2##_##CB##_8,                                       \
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,                          \
+                             static_cast<int>(shmem));                                             \
+        tf_exl3_linear_##K2##_##CB##_8<<<grid, 8 * 32, shmem, stream>>>(a);                        \
+        return;                                                                                    \
     }
 #define TF_NF_WIDTHS(K2, CB) TF_EXL3_LAUNCH(K2, CB)
-    TF_NF_WIDTHS(2, 2) TF_NF_WIDTHS(4, 2) TF_NF_WIDTHS(6, 2) TF_NF_WIDTHS(8, 2)
-    TF_NF_WIDTHS(10, 2) TF_NF_WIDTHS(12, 2) TF_NF_WIDTHS(14, 2) TF_NF_WIDTHS(16, 2)
-    TF_NF_WIDTHS(3, 2) TF_NF_WIDTHS(5, 2) TF_NF_WIDTHS(7, 2) TF_NF_WIDTHS(9, 2)
-    TF_NF_WIDTHS(11, 2) TF_NF_WIDTHS(13, 2)
-    TF_NF_WIDTHS(2, 1) TF_NF_WIDTHS(4, 1) TF_NF_WIDTHS(6, 1) TF_NF_WIDTHS(8, 1)
-    TF_NF_WIDTHS(10, 1) TF_NF_WIDTHS(12, 1) TF_NF_WIDTHS(14, 1) TF_NF_WIDTHS(16, 1)
+    TF_NF_WIDTHS(2, 2)
+    TF_NF_WIDTHS(4, 2) TF_NF_WIDTHS(6, 2) TF_NF_WIDTHS(8, 2) TF_NF_WIDTHS(10, 2) TF_NF_WIDTHS(12, 2)
+        TF_NF_WIDTHS(14, 2) TF_NF_WIDTHS(16, 2) TF_NF_WIDTHS(3, 2) TF_NF_WIDTHS(5, 2) TF_NF_WIDTHS(
+            7, 2) TF_NF_WIDTHS(9, 2) TF_NF_WIDTHS(11, 2) TF_NF_WIDTHS(13, 2) TF_NF_WIDTHS(2, 1)
+            TF_NF_WIDTHS(4, 1) TF_NF_WIDTHS(6, 1) TF_NF_WIDTHS(8, 1) TF_NF_WIDTHS(10, 1)
+                TF_NF_WIDTHS(12, 1) TF_NF_WIDTHS(14, 1) TF_NF_WIDTHS(16, 1)
 #undef TF_NF_WIDTHS
 #undef TF_EXL3_LAUNCH
-    throw std::invalid_argument("tf exl3 linear: unregistered width or codebook");
+        // clang-format on
+
+        throw std::invalid_argument("tf exl3 linear: unregistered width or codebook");
 }
 
-}  // namespace tf_exl3
+} // namespace tf_exl3
 
 // ---------------------------------------------------------------------------
 // NInfer integration adapter (2026-10-28). Bridges NInfer's exl3_dense_v1
@@ -325,24 +375,23 @@ inline void launch_linear(int k2, int codebook, int wk, dim3 grid, size_t shmem,
 // NInfer out tensor is [N, tokens]. Tiled bf16 transpose from the scratch
 // y plane to the out view.
 __global__ void exl3_dense_y_transpose(const void* y, void* out, int n, int t) {
-  const int nn = static_cast<int>(blockIdx.x) * 32 + static_cast<int>(threadIdx.x);
-  const int tt = static_cast<int>(blockIdx.y) * 32 + static_cast<int>(threadIdx.y);
-  if (nn < n && tt < t) {
-    reinterpret_cast<__nv_bfloat16*>(out)[static_cast<std::size_t>(nn) * t + tt] =
-        reinterpret_cast<const __nv_bfloat16*>(y)[static_cast<std::size_t>(tt) * n + nn];
-  }
+    const int nn = static_cast<int>(blockIdx.x) * 32 + static_cast<int>(threadIdx.x);
+    const int tt = static_cast<int>(blockIdx.y) * 32 + static_cast<int>(threadIdx.y);
+    if (nn < n && tt < t) {
+        reinterpret_cast<__nv_bfloat16*>(out)[static_cast<std::size_t>(nn) * t + tt] =
+            reinterpret_cast<const __nv_bfloat16*>(y)[static_cast<std::size_t>(tt) * n + nn];
+    }
 }
 
 namespace ninfer_tf {
 
-void exl3_dense_launch_nf(const void* x, const void* payload,
-                                 std::size_t trellis_offset, std::size_t suh_offset,
-                                 std::size_t svh_offset, int n, int k, int tokens,
-                                 int codebook, int k2, int t_n, void* y, unsigned char* scratch,
-                                 cudaStream_t stream) {
+void exl3_dense_launch_nf(const void* x, const void* payload, std::size_t trellis_offset,
+                          std::size_t suh_offset, std::size_t svh_offset, int n, int k, int tokens,
+                          int codebook, int k2, int t_n, void* y, unsigned char* scratch,
+                          cudaStream_t stream) {
     const std::uint32_t tw = static_cast<std::uint32_t>(4 * k2);
-    const int nb = n >> 7;
-    const int sk = 8;
+    const int nb           = n >> 7;
+    const int sk           = 8;
     if ((k >> 4) % (sk * 8) != 0) {
         throw std::invalid_argument("tf exl3 linear: k does not divide into the split");
     }
@@ -350,11 +399,12 @@ void exl3_dense_launch_nf(const void* x, const void* payload,
     auto* xh = reinterpret_cast<half*>(scratch);
     // Then the arrival counters, zeroed for this launch: one [nb] block per 16-row tile.
     const int tiles = (tokens + 15) / 16;
-    auto* counters = reinterpret_cast<int*>(scratch + ((static_cast<std::size_t>(tokens) * k * 2 + 15) & ~std::size_t{15}));
+    auto* counters  = reinterpret_cast<int*>(
+        scratch + ((static_cast<std::size_t>(tokens) * k * 2 + 15) & ~std::size_t{15}));
     // Then the fp32 split-K partials, past every tile's counter block.
-    auto* z = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(counters) +
-                                       (((static_cast<std::size_t>(tiles) * nb * 4 + 15) &
-                                         ~std::size_t{15})));
+    auto* z = reinterpret_cast<float*>(
+        reinterpret_cast<unsigned char*>(counters) +
+        (((static_cast<std::size_t>(tiles) * nb * 4 + 15) & ~std::size_t{15})));
 
     // The kernel's validated token domain is one 16-row tile per launch; the record rounds at
     // width x batch beyond 16 tokens launch once per tile. Tiles are independent: each owns its
@@ -362,15 +412,16 @@ void exl3_dense_launch_nf(const void* x, const void* payload,
     // token-major [tokens, n] output plane, so plain pointer offsets place every tile.
     for (int tile = 0; tile < tiles; ++tile) {
         const auto base = static_cast<std::size_t>(tile) * 16;
-        const int m = std::min(16, tokens - static_cast<int>(base));
+        const int m     = std::min(16, tokens - static_cast<int>(base));
 
         tf_exl3::RotInArgs rot;
         rot.x = static_cast<const unsigned char*>(x) + base * k * 2;
-        rot.suh = reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + suh_offset);
-        rot.xh  = xh + base * k;
+        rot.suh =
+            reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + suh_offset);
+        rot.xh      = xh + base * k;
         rot.x_dtype = 1; /* bf16 */
-        rot.m = m;
-        rot.k = k;
+        rot.m       = m;
+        rot.k       = k;
         const dim3 rot_grid(static_cast<unsigned>((k + 511) / 512), static_cast<unsigned>(m));
         tf_exl3::tf_exl3_rot_in<<<rot_grid, 128, 0, stream>>>(rot);
     }
@@ -379,27 +430,28 @@ void exl3_dense_launch_nf(const void* x, const void* payload,
 
     for (int tile = 0; tile < tiles; ++tile) {
         const auto base = static_cast<std::size_t>(tile) * 16;
-        const int m = std::min(16, tokens - static_cast<int>(base));
+        const int m     = std::min(16, tokens - static_cast<int>(base));
         tf_exl3::LinearArgs args;
         args.xh = xh + base * k;
-        args.t = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(payload) +
-                                                        trellis_offset);
-        args.stride_k = static_cast<long long>(t_n) * tw;
+        args.t  = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(payload) +
+                                                         trellis_offset);
+        args.stride_k  = static_cast<long long>(t_n) * tw;
         args.stride_nb = static_cast<long long>(8) * tw;
-        args.svh = reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + svh_offset);
-        args.bias = nullptr;
-        args.y = static_cast<unsigned char*>(y) + base * n * 2;
-        args.z = z + base * n * 8;
-        args.counters = counters + static_cast<std::ptrdiff_t>(tile) * nb;
-        args.y_dtype = 1; /* bf16 */
-        args.n = n;
-        args.sk = sk;
-        args.m = m;
-        args.k = k;
+        args.svh =
+            reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + svh_offset);
+        args.bias               = nullptr;
+        args.y                  = static_cast<unsigned char*>(y) + base * n * 2;
+        args.z                  = z + base * n * 8;
+        args.counters           = counters + static_cast<std::ptrdiff_t>(tile) * nb;
+        args.y_dtype            = 1; /* bf16 */
+        args.n                  = n;
+        args.sk                 = sk;
+        args.m                  = m;
+        args.k                  = k;
         const std::size_t shmem = 8 * 8 * 128 * sizeof(float);
         tf_exl3::launch_linear(k2, codebook, 8, dim3(static_cast<unsigned>(nb * sk)), shmem, stream,
                                args);
     }
 }
 
-}  // namespace ninfer_tf
+} // namespace ninfer_tf

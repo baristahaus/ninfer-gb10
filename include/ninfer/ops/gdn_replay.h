@@ -55,7 +55,8 @@ public:
 
     // Pool form: the caller carries the resident linear-attention pool; the plan drops the pool
     // slot count and keeps the per-layer geometry the fold reads.
-    GdnReplayFoldPlan(const GdnReplayRecords& records, LinearAttentionStatePoolAllLayersView states);
+    GdnReplayFoldPlan(const GdnReplayRecords& records,
+                      LinearAttentionStatePoolAllLayersView states);
 
     void execute(std::span<const GdnReplayFoldRow> rows, CudaExecutionView execution) const;
 

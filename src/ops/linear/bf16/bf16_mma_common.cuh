@@ -1,7 +1,7 @@
 #pragma once
 #include "core/device.h"
 
-#include "ops/common/host/launch.h"#include "ops/common/mma.cuh"
+#include "ops/common/host/launch.h" #include "ops/common/mma.cuh"
 #include "ops/linear/bf16/bf16_schedule.cuh"
 #include "ops/linear/common/epilogue.cuh"
 
@@ -10,9 +10,7 @@ namespace ninfer::ops::detail {
 template <int Bytes, auto Kernel>
 int bf16_prepare_shared() {
     static_assert(Bytes <= 99 * 1024);
-    if constexpr (Bytes > 48 * 1024) {
-        common::set_max_dynamic_shared<Kernel>(Bytes);
-    }
+    if constexpr (Bytes > 48 * 1024) { common::set_max_dynamic_shared<Kernel>(Bytes); }
     return Bytes;
 }
 
@@ -76,7 +74,7 @@ bf16_mma_compute_stage(const __nv_bfloat16* As, const __nv_bfloat16* Bs,
     const int a_row_offset = a_inner_row + ((a_matrix & 1) << 3);
     const int a_col_offset = (a_matrix >> 1) << 3;
     const int b_inner_row = lane & 7, b_k_offset = ((lane >> 3) & 1) << 3;
-    auto load_fragments = [&](int k_step, unsigned(&a_frag)[MT][4], unsigned(&b_frag)[NT][2]) {
+    auto load_fragments = [&](int k_step, unsigned (&a_frag)[MT][4], unsigned (&b_frag)[NT][2]) {
 #pragma unroll
         for (int mi = 0; mi < MT; ++mi) {
             const int row = wm * WM + mi * 16 + a_row_offset;

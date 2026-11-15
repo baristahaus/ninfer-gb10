@@ -6,10 +6,10 @@ namespace {
 using Geometry = Fp8Geometry<5120, 17408>;
 using Gemv     = Fp8A16GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
 using Tma32x64 = Fp8A8TmaMmaSchedule<32, 64, 128, 1, 2, 3, 2>;
-using Small = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<64, 128, 128, 2, 4, 3, 1>, 170, 4, 8>;
-using Mid = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 128, 128, 2, 4, 3, 1>, 170, 4, 8>;
-using Wide = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<192, 128, 128, 3, 4, 2, 1>, 170, 4, 8>;
-using Bulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 1>, 170, 4, 8>;
+using Small    = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<64, 128, 128, 2, 4, 3, 1>, 170, 4, 8>;
+using Mid      = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 128, 128, 2, 4, 3, 1>, 170, 4, 8>;
+using Wide     = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<192, 128, 128, 3, 4, 2, 1>, 170, 4, 8>;
+using Bulk     = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 1>, 170, 4, 8>;
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const int tokens = x.ne[1];
@@ -36,12 +36,9 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t
 void launch_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Workspace scratch,
                cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens <= 64)
-        return launch_fp8_a8_tma<Geometry, Tma32x64>(x, weight, out, scratch, stream);
-    if (tokens <= 128)
-        return launch_fp8_a8_tma<Geometry, Small>(x, weight, out, scratch, stream);
-    if (tokens <= 256)
-        return launch_fp8_a8_tma<Geometry, Mid>(x, weight, out, scratch, stream);
+    if (tokens <= 64) return launch_fp8_a8_tma<Geometry, Tma32x64>(x, weight, out, scratch, stream);
+    if (tokens <= 128) return launch_fp8_a8_tma<Geometry, Small>(x, weight, out, scratch, stream);
+    if (tokens <= 256) return launch_fp8_a8_tma<Geometry, Mid>(x, weight, out, scratch, stream);
     // Wider token tiles avoid an extra wave in the gaps between the bulk anchors.
     if (tokens <= 384 || (tokens > 512 && tokens <= 768))
         return launch_fp8_a8_tma<Geometry, Wide>(x, weight, out, scratch, stream);

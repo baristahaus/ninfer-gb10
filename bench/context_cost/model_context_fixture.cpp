@@ -252,9 +252,9 @@ void measure_geometry(DeviceContext& device, const GeometryCase& fixture,
         timer.start();
         if (test.direction == TransferDirection::DeviceToHost) {
             const auto source = select_runs(handles, 0, test.pages, test.runs);
-            work              = pool.copy_to_host(source,
-                                                  host.span().subspan(0, test.pages * host_layout.page_stride),
-                                                  host_layout, device.transfer_view());
+            work = pool.copy_to_host(source,
+                                     host.span().subspan(0, test.pages * host_layout.page_stride),
+                                     host_layout, device.transfer_view());
         } else if (test.direction == TransferDirection::HostToDevice) {
             const auto destination = select_runs(handles, region_pages, test.pages, test.runs);
             work = pool.copy_from_host(host.span().subspan(0, test.pages * host_layout.page_stride),
@@ -355,8 +355,8 @@ void measure_contiguous_d2d(DeviceContext& device, const MeasurementOptions& opt
     for (std::size_t index = 0; index < cases.size(); ++index) {
         const ContiguousCase& test = cases[index];
         output.push_back(TransferMeasurement{
-            .label = "contiguous-d2d-b" + std::to_string(test.payload_bytes) + "-o" +
-                     std::to_string(test.copy_operations),
+            .label     = "contiguous-d2d-b" + std::to_string(test.payload_bytes) + "-o" +
+                         std::to_string(test.copy_operations),
             .direction = TransferDirection::DeviceToDevice,
             .work = {.payload_bytes = test.payload_bytes, .copy_operations = test.copy_operations},
             .page_count      = 0,

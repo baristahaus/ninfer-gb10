@@ -386,9 +386,9 @@ int split_case(std::int32_t C, std::int32_t q_dim, std::int32_t k_dim, std::int3
         }
         cuda_synchronize(execution.stream());
 
-        const std::string tag = "causal_conv1d_silu_split C=" + std::to_string(C) +
-                                " T=" + std::to_string(T) + (alias_state ? " alias" : "") +
-                                (offset_pairs ? " offset" : "");
+        const std::string tag     = "causal_conv1d_silu_split C=" + std::to_string(C) +
+                                    " T=" + std::to_string(T) + (alias_state ? " alias" : "") +
+                                    (offset_pairs ? " offset" : "");
         const std::size_t q_count = static_cast<std::size_t>(q_dim) * static_cast<std::size_t>(T);
         const std::size_t k_count = static_cast<std::size_t>(k_dim) * static_cast<std::size_t>(T);
         const std::size_t v_count =
@@ -465,7 +465,7 @@ int ordinary_case(std::int32_t C, std::int32_t T, StateCall call, std::uint32_t 
 
     const std::string tag = "causal_conv1d_silu C=" + std::to_string(C) +
                             " T=" + std::to_string(T) + " " + call_name(call);
-    int failures = 0;
+    int failures          = 0;
     failures += verify_output(tag + " output", from_device_bf16(output.data(), x_bits.size()),
                               oracle.output);
     failures += verify_bits(tag + " final state",
@@ -536,7 +536,7 @@ int continuation_slot_case(std::int32_t C, std::int32_t T, std::int32_t slots,
 
     const std::string tag = "causal_conv1d_silu continuation C=" + std::to_string(C) +
                             " T=" + std::to_string(T) + " read_slot=" + std::to_string(read_slot);
-    int failures = 0;
+    int failures          = 0;
     failures += verify_output(tag + " output", from_device_bf16(output.data(), x_bits.size()),
                               oracle.output);
     failures += verify_bits(tag + " all state slots", state.data(), expected_bits);
@@ -607,7 +607,7 @@ int snapshot_case(std::int32_t C, std::int32_t T, std::int32_t slots, std::int32
                             " T=" + std::to_string(T) + " slots=" + std::to_string(slots) +
                             " initial_slot=" + std::to_string(initial_slot) +
                             " snapshot_base_slot=" + std::to_string(snapshot_base_slot);
-    int failures = 0;
+    int failures          = 0;
     failures += verify_output(tag + " output", from_device_bf16(output.data(), x_bits.size()),
                               oracle.output);
     history.copy_back();
@@ -710,7 +710,7 @@ int batched_snapshot_case(std::int32_t C, std::int32_t width,
     const std::string tag = "causal_conv1d_silu batched snapshot C=" + std::to_string(C) +
                             " W=" + std::to_string(width) + " B=" + std::to_string(batch) +
                             (masked ? " masked" : " dense");
-    int failures = 0;
+    int failures          = 0;
     failures += verify_output(tag + " output", from_device_bf16(output.data(), x_bits.size()),
                               expected_output);
     history.copy_back();

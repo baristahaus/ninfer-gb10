@@ -682,8 +682,8 @@ parse_function_tool(const Json& item, std::optional<std::string> wire_namespace,
                                                    .wire_namespace = std::move(wire_namespace)};
     ParsedFunctionTool parsed;
     parsed.definition.schema_param = std::move(schema_param);
-    parsed.engine_name     = lower_function_identity(identity, identities, "tools");
-    parsed.definition.name = parsed.engine_name;
+    parsed.engine_name             = lower_function_identity(identity, identities, "tools");
+    parsed.definition.name         = parsed.engine_name;
 
     std::string function_description;
     if (item.contains("description") && !item.at("description").is_null()) {
@@ -1193,8 +1193,7 @@ OpenAIResponsesCreateRequest parse_openai_responses_create_request(const Json& b
         // reasoning and the client only echoes what a response actually carried, so the request is
         // served without it. Every other include value still has no available representation.
         for (const Json& entry : body.at("include")) {
-            if (!entry.is_string() ||
-                entry.get<std::string>() != "reasoning.encrypted_content") {
+            if (!entry.is_string() || entry.get<std::string>() != "reasoning.encrypted_content") {
                 bad_request("the requested additional response fields have no available response "
                             "representation",
                             "include", "include_not_supported");

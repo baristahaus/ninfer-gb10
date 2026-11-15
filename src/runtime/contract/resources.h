@@ -141,10 +141,10 @@ enum class ContextResourceClass : std::uint8_t {
 };
 
 struct ContextTransferObservation {
-    ContextResourceClass resource        = ContextResourceClass::State;
-    ContextTransferDirection direction   = ContextTransferDirection::DeviceToHost;
-    std::uint64_t units                  = 0; // State images for State; bytes for typed KV.
-    std::uint32_t page_count             = 0;
+    ContextResourceClass resource      = ContextResourceClass::State;
+    ContextTransferDirection direction = ContextTransferDirection::DeviceToHost;
+    std::uint64_t units                = 0; // State images for State; bytes for typed KV.
+    std::uint32_t page_count           = 0;
     TransferWork work;
     std::uint64_t elapsed_ns = 0;
 };
@@ -173,7 +173,7 @@ struct SequenceCapacityCurve {
     std::uint32_t main_page_tokens                   = 0;
     std::uint32_t minimum_main_page_groups           = 0;
     std::uint32_t maximum_main_page_groups           = 0;
-    std::size_t minimum_device_reservation_bytes        = 0;
+    std::size_t minimum_device_reservation_bytes     = 0;
     std::size_t bytes_per_additional_main_page_group = 0;
 
     [[nodiscard]] std::size_t reservation_bytes(std::uint32_t main_page_groups) const;
@@ -181,19 +181,18 @@ struct SequenceCapacityCurve {
 };
 
 struct KvCapacityResolution {
-    KvCapacityMode mode                                 = KvCapacityMode::Explicit;
+    KvCapacityMode mode                              = KvCapacityMode::Explicit;
     std::uint32_t main_page_groups                   = 0;
     std::uint32_t maximum_main_page_groups           = 0;
-    std::uint32_t resolved_tokens                       = 0;
-    std::size_t minimum_runtime_reservation_bytes       = 0;
+    std::uint32_t resolved_tokens                    = 0;
+    std::size_t minimum_runtime_reservation_bytes    = 0;
     std::size_t bytes_per_additional_main_page_group = 0;
-    std::size_t runtime_reservation_bytes               = 0;
-    std::size_t available_after_weights_bytes           = 0;
-    std::size_t available_after_startup_bytes           = 0;
-    std::size_t automatic_headroom_bytes                = 0;
-    std::size_t planned_slack_bytes                     = 0;
+    std::size_t runtime_reservation_bytes            = 0;
+    std::size_t available_after_weights_bytes        = 0;
+    std::size_t available_after_startup_bytes        = 0;
+    std::size_t automatic_headroom_bytes             = 0;
+    std::size_t planned_slack_bytes                  = 0;
 };
-
 
 // Direction order: DeviceToHost, HostToDevice, DeviceToDevice, HostToSpill, SpillToHost.
 inline constexpr std::size_t kContextTransferDirectionCount = 5;

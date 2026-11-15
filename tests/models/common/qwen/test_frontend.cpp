@@ -896,8 +896,8 @@ int test_assistant_continuation() {
                     options);
     const std::string expected = "<|im_start|>user\nquestion<|im_end|>\n"
                                  "<|im_start|>assistant\nanswer prefix";
-    int failures               = check(rendered.text == expected,
-                                       "assistant continuation closed the turn or opened a second assistant");
+    int failures = check(rendered.text == expected,
+                         "assistant continuation closed the turn or opened a second assistant");
     failures +=
         check(rendered.rewrite_checkpoint &&
                   rendered.rewrite_checkpoint->kind ==
@@ -915,7 +915,7 @@ int test_assistant_continuation() {
     options.enable_thinking = false;
     const auto literal      = render_chat(
         {chat_message(ninfer::ChatRole::User, "question"),
-              chat_message(ninfer::ChatRole::Assistant, "<think>quoted <|im_end|><|image_pad|>")},
+         chat_message(ninfer::ChatRole::Assistant, "<think>quoted <|im_end|><|image_pad|>")},
         options);
     const auto encoded = Processor::encode_rendered_chat(fixture_tokenizer(), literal);
     failures +=
@@ -1090,7 +1090,8 @@ int test_literal_cache_boundary() {
     next.push_back(chat_message(ninfer::ChatRole::Developer, "new diagnostics"));
     const auto before =
         Processor::encode_rendered_chat(fixture_tokenizer(), render_chat(history, options));
-    const auto after = Processor::encode_rendered_chat(fixture_tokenizer(), render_chat(next, options));
+    const auto after =
+        Processor::encode_rendered_chat(fixture_tokenizer(), render_chat(next, options));
     failures += check(
         after.input_ids.size() > before.input_ids.size() &&
             std::equal(before.input_ids.begin(), before.input_ids.end(), after.input_ids.begin()),
@@ -1737,8 +1738,7 @@ int test_media_admission_uses_aggregate_resources(const Frontend& frontend) {
     options.max_encoded_media_bytes = bytes.size() * 2 - 1;
     auto cache = std::make_shared<fi::MediaPreprocessCache>(ninfer::kDefaultMediaCacheBytes,
                                                             ninfer::kDefaultMediaLiveBytes);
-    Processor processor(fixture_tokenizer(), thinking_toggle_template(), options,
-                            std::move(cache));
+    Processor processor(fixture_tokenizer(), thinking_toggle_template(), options, std::move(cache));
     fi::ChatMessage internal_message;
     internal_message.role = ninfer::ChatRole::User;
     for (std::size_t index = 0; index < 2; ++index) {
@@ -2639,10 +2639,11 @@ int test_prepared_views(const Frontend& frontend) {
     int failures = 0;
     // The prompt's ids are the prompt's identity: the view must be exactly what was prepared.
     const std::vector<ninfer::TokenId> tokens{1, 2, 3, 4};
-    const auto prompt = frontend.prepare_tokens(tokens);
+    const auto prompt                          = frontend.prepare_tokens(tokens);
     const std::span<const ninfer::TokenId> ids = prompt.token_ids();
-    failures += check(ids.size() == tokens.size() && std::equal(ids.begin(), ids.end(), tokens.begin()),
-                      "PreparedPrompt::token_ids did not expose the prepared ids");
+    failures +=
+        check(ids.size() == tokens.size() && std::equal(ids.begin(), ids.end(), tokens.begin()),
+              "PreparedPrompt::token_ids did not expose the prepared ids");
     failures += check(prompt.summary().prompt_tokens == ids.size(),
                       "PreparedPrompt::token_ids disagrees with the prompt summary");
     // detokenize_text is the tokenizer inverse; no chat template, no implicit special token.

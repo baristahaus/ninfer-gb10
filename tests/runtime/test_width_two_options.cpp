@@ -43,12 +43,12 @@ void expect_accepted(ninfer::EngineOptions options, const char* option) {
 }
 
 // The lane's own configuration: CUDA graph capture is refused at width 2 before the option rows are
-// reached, so a width-2 engine must be configured eager. Leaving the default on would test the graph
-// refusal seven times instead of the table.
+// reached, so a width-2 engine must be configured eager. Leaving the default on would test the
+// graph refusal seven times instead of the table.
 ninfer::EngineOptions two_devices() {
     ninfer::EngineOptions options;
-    options.devices               = {0, 1};
-    options.use_cuda_graph        = false;
+    options.devices        = {0, 1};
+    options.use_cuda_graph = false;
     // The context cache is on by default and is itself an unvalidated width-2 combination, so it
     // would refuse first for every other row. Each case turns off the rows it is not testing.
     options.context_cache.enabled = false;
@@ -65,22 +65,22 @@ ninfer::EngineOptions one_device() {
 
 int main() {
     {
-        auto options = two_devices();
+        auto options                = two_devices();
         options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
         expect_refusal(options, "--spec mtp");
     }
     {
-        auto options = two_devices();
+        auto options                = two_devices();
         options.speculative.backend = ninfer::SpeculativeBackend::DFlash;
         expect_refusal(options, "--spec dflash");
     }
     {
-        auto options = two_devices();
+        auto options                = two_devices();
         options.speculative.backend = ninfer::SpeculativeBackend::DFlash2;
         expect_refusal(options, "--spec dflash2");
     }
     {
-        auto options   = two_devices();
+        auto options    = two_devices();
         options.purpose = ninfer::EnginePurpose::CausalScoring;
         expect_refusal(options, "--causal-scoring");
     }
@@ -90,39 +90,39 @@ int main() {
         expect_refusal(options, "prefix reuse / context cache");
     }
     {
-        auto options      = two_devices();
+        auto options     = two_devices();
         options.kv_cache = ninfer::KvCacheStorage::Fp8E4M3Row256;
         expect_refusal(options, "--kv-dtype (any quantized KV)");
     }
     {
-        auto options        = two_devices();
+        auto options          = two_devices();
         options.enable_vision = true;
         expect_refusal(options, "--vision");
     }
 
     // Width 1 keeps every one of those options: the gate lives inside the width>1 branch.
     {
-        auto options = one_device();
+        auto options                = one_device();
         options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
         expect_accepted(options, "--spec mtp");
     }
     {
-        auto options = one_device();
+        auto options                = one_device();
         options.speculative.backend = ninfer::SpeculativeBackend::DFlash2;
         expect_accepted(options, "--spec dflash2");
     }
     {
-        auto options            = one_device();
+        auto options                  = one_device();
         options.context_cache.enabled = true;
         expect_accepted(options, "prefix reuse / context cache");
     }
     {
-        auto options      = one_device();
+        auto options     = one_device();
         options.kv_cache = ninfer::KvCacheStorage::Fp8E4M3Row256;
         expect_accepted(options, "--kv-dtype (any quantized KV)");
     }
     {
-        auto options        = one_device();
+        auto options          = one_device();
         options.enable_vision = true;
         expect_accepted(options, "--vision");
     }

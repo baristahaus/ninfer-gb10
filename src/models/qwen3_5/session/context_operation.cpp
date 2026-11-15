@@ -117,11 +117,10 @@ void SessionImpl::abort_context() noexcept {
                         }
                     }
                     for (const auto& [page, extent] : action.consumed_page_spill) {
-                        auto& pages = page.pool_id == kTextKvPool.index ? *text_kv_pages
-                                                                        : *backend_kv_pages;
+                        auto& pages =
+                            page.pool_id == kTextKvPool.index ? *text_kv_pages : *backend_kv_pages;
                         if (pages.spill_host_replica(page, extent)) {
-                            std::array<context::HostPageRelease, 1> release{
-                                {&pages, page}};
+                            std::array<context::HostPageRelease, 1> release{{&pages, page}};
                             (void)host_kv_extents->release_page_replicas(release);
                         }
                     }

@@ -54,7 +54,7 @@ struct ParameterShard {
 // One rank's logical ranges for `shard` at `width`, one block per segment. A segmented parameter
 // gives several disjoint ranges, which is why the resolver takes a range list.
 [[nodiscard]] std::vector<artifact::ShardRange> ranges_for(const ParameterShard& shard, int width,
-                                                          int rank);
+                                                           int rank);
 
 [[nodiscard]] std::span<const ParameterShard> parameter_shards() noexcept;
 
@@ -67,8 +67,8 @@ struct ParameterShard {
 // Throws std::invalid_argument when the table names the parameter but its binding does not cover
 // the extents the table declares: that is a mismatch between the artifact and the model, and
 // clipping it silently would give a rank fewer elements than its kernels expect.
-[[nodiscard]] artifact::ParameterReference shard_parameter(
-    const artifact::ParameterReference& reference, int width, int rank);
+[[nodiscard]] artifact::ParameterReference
+shard_parameter(const artifact::ParameterReference& reference, int width, int rank);
 
 // `rank`'s placement policy as the binder's transform, so a caller that binds one plan per rank
 // asks the model for the policy and never names a shard axis itself.

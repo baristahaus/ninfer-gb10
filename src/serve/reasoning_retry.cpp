@@ -23,9 +23,12 @@ bool contains(std::span<const TokenId> haystack, std::span<const TokenId> needle
 
 const char* reasoning_retry_trigger_name(ReasoningRetryTrigger trigger) noexcept {
     switch (trigger) {
-    case ReasoningRetryTrigger::None: return "none";
-    case ReasoningRetryTrigger::StopInReasoning: return "stop_in_reasoning";
-    case ReasoningRetryTrigger::EmptyAfterClose: return "empty_after_close";
+    case ReasoningRetryTrigger::None:
+        return "none";
+    case ReasoningRetryTrigger::StopInReasoning:
+        return "stop_in_reasoning";
+    case ReasoningRetryTrigger::EmptyAfterClose:
+        return "empty_after_close";
     }
     return "none";
 }
@@ -54,8 +57,8 @@ ReasoningRetryPlan plan_reasoning_retry(const ReasoningRetryInput& input,
         plan.remaining_output_tokens =
             static_cast<std::uint32_t>(input.requested_output_tokens - used);
     }
-    plan.trigger = closed ? ReasoningRetryTrigger::EmptyAfterClose
-                          : ReasoningRetryTrigger::StopInReasoning;
+    plan.trigger =
+        closed ? ReasoningRetryTrigger::EmptyAfterClose : ReasoningRetryTrigger::StopInReasoning;
     plan.appended.assign(kept.begin(), kept.end());
     if (!closed) {
         plan.appended.insert(plan.appended.end(), tokens.close_suffix.begin(),

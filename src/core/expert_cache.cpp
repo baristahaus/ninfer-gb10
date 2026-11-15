@@ -438,14 +438,14 @@ struct ExpertCache::Impl {
         const auto& source = sources[entry.key.bank.index];
         const auto& layout = requirements.banks[entry.key.bank.index];
         const auto matrix  = [&](const WeightBankView& bank, CudaHostView upload,
-                                const ExpertMatrixEntryLayout& image) {
+                                 const ExpertMatrixEntryLayout& image) {
             const std::array input{bank.layout.codes, bank.layout.high, bank.layout.scales};
             const std::array output{image.codes, image.high, image.scales};
             for (std::size_t p = 0; p < input.size(); ++p) {
                 if (!input[p].expert_bytes) { continue; }
                 const auto offset = input[p].offset + entry.key.expert * input[p].expert_stride;
                 visit(upload, offset, input[p].expert_bytes, input[p].expert_stride,
-                       output[p].offset);
+                      output[p].offset);
             }
         };
         matrix(source.gate_up, source.gate_up_upload, layout.gate_up);

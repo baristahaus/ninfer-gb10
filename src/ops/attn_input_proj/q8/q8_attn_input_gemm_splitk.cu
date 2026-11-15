@@ -25,7 +25,7 @@ constexpr int kLastCompanionExactCols = 32;
 using TargetOutput                    = LinearBf16SegmentedOutput<4096, 512, 4096, 512>;
 using CompanionOutput                 = LinearBf16SegmentedOutput<4096, 1024, 1024>;
 using TargetLauncher    = void (*)(const Tensor&, const Weight&, Tensor&, Tensor&, Tensor&, Tensor&,
-                                cudaStream_t);
+                                   cudaStream_t);
 using CompanionLauncher = void (*)(const Tensor&, const Weight&, Tensor&, Tensor&, Tensor&,
                                    cudaStream_t);
 

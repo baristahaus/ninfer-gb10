@@ -14,9 +14,9 @@ using Gemv = Bf16KvIndexSplitSchedule<Bf16ScheduleInstance<
     2560>>;
 template <int Stages>
 using Hot32  = Bf16KvIndexSplitSchedule<Bf16ScheduleInstance<
-     Bf16A16MmaSchedule<32, 32, 128, 16, 8, Stages, 1, Cache::cg, Cache::cg,
-                        Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
-     2560>>;
+    Bf16A16MmaSchedule<32, 32, 128, 16, 8, Stages, 1, Cache::cg, Cache::cg,
+                       Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
+    2560>>;
 using HotTma = Bf16KvIndexSplitSchedule<
     Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<64, 32, 64, 16, 16, 3, 2>, 2560>>;
 using Mid48 = Bf16KvIndexSplitSchedule<

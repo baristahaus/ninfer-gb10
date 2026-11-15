@@ -107,7 +107,7 @@ SessionPlan plan_session(const SequencePlan& sequence) {
     std::size_t minimum_kv_stride = std::numeric_limits<std::size_t>::max();
     const auto histories = checked(4ULL * logical_states + 3ULL * source.max_concurrency + 2);
     const auto add_pool  = [&](runtime::KvPoolId id, std::string_view label,
-                              const PagedKVCacheLayout& layout) {
+                               const PagedKVCacheLayout& layout) {
         const auto host_layout = plan_host_kv_page_layout(layout.pages.spec.geometry);
         const auto stride      = host_layout.page_stride;
         minimum_stride         = std::min(minimum_stride, stride);

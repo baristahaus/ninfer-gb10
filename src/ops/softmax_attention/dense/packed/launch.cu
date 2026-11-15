@@ -6,9 +6,9 @@ void launch_packed_attention(const Tensor& q, const Tensor& k, const Tensor& v,
                              const Tensor& cu_seqlens, Tensor* tiles, Tensor& out,
                              cudaStream_t stream) {
     const bool packed_segments = tiles != nullptr;
-    const int max_tiles        = packed_segments
-                                     ? tiles->ne[1]
-                                     : (q.ne[2] + kPackedDescriptorRows - 1) / kPackedDescriptorRows;
+    const int max_tiles = packed_segments
+                              ? tiles->ne[1]
+                              : (q.ne[2] + kPackedDescriptorRows - 1) / kPackedDescriptorRows;
     if (packed_segments) {
         packed_attention_prepare_tiles_kernel<kPackedDescriptorRows><<<1, 256, 0, stream>>>(
             static_cast<const std::int32_t*>(cu_seqlens.data), cu_seqlens.ne[0] - 1,

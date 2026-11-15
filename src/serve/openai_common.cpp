@@ -15,9 +15,7 @@ namespace {
 
 // Identifiers are drawn from the kernel CSPRNG, not from a seeded PRNG: a client that observes
 // one identifier must not be able to predict the next.
-std::string chat_identifier(std::string_view prefix) {
-    return std::string(prefix) + secure_hex(8);
-}
+std::string chat_identifier(std::string_view prefix) { return std::string(prefix) + secure_hex(8); }
 
 std::string responses_identifier(std::string_view prefix) {
     return std::string(prefix) + "_" + secure_hex(16);

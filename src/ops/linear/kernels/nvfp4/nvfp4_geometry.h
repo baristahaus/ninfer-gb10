@@ -37,17 +37,17 @@ using Nvfp4N34816K5120 = Nvfp4Geometry<34816, 5120>;
 using Nvfp4N5120K6144  = Nvfp4Geometry<5120, 6144>;
 using Nvfp4N5120K17408 = Nvfp4Geometry<5120, 17408>;
 // mlp/down at tensor-parallel width 2: the Columns shard over 17408 halves K.
-using Nvfp4N5120K8704  = Nvfp4Geometry<5120, 8704>;
+using Nvfp4N5120K8704 = Nvfp4Geometry<5120, 8704>;
 
 using Nvfp4Activation5120Geometry  = Nvfp4ActivationGeometry<5120>;
 using Nvfp4Activation6144Geometry  = Nvfp4ActivationGeometry<6144>;
 using Nvfp4Activation17408Geometry = Nvfp4ActivationGeometry<17408>;
-// mlp/down at tensor-parallel width 2: the Columns shard over 17408 halves K, so the A4 quantizer is
-// asked for 8704 where width 1 asks for 17408. The quantizer switches on K because its kernel is
+// mlp/down at tensor-parallel width 2: the Columns shard over 17408 halves K, so the A4 quantizer
+// is asked for 8704 where width 1 asks for 17408. The quantizer switches on K because its kernel is
 // templated on the geometry for addressing (groups per row, code bytes per row, scale tiles per
 // row), so this has to be a registered geometry rather than a supported-K predicate. 544 groups per
 // row is a whole number of 4-group scale tiles, so the tiled scale plane is available.
-using Nvfp4Activation8704Geometry  = Nvfp4ActivationGeometry<8704>;
+using Nvfp4Activation8704Geometry = Nvfp4ActivationGeometry<8704>;
 
 enum class Nvfp4GeometryId : std::uint8_t {
     N14336K5120,
@@ -87,8 +87,7 @@ inline Nvfp4GeometryId resolve_nvfp4_geometry(std::int32_t output_rows, std::int
     if (output_rows == Nvfp4N8704K5120::kOutputRows && input_rows == Nvfp4N8704K5120::kInputRows) {
         return Nvfp4GeometryId::N8704K5120;
     }
-    if (output_rows == Nvfp4N5120K8704::kOutputRows &&
-        input_rows == Nvfp4N5120K8704::kInputRows) {
+    if (output_rows == Nvfp4N5120K8704::kOutputRows && input_rows == Nvfp4N5120K8704::kInputRows) {
         return Nvfp4GeometryId::N5120K8704;
     }
     throw std::invalid_argument("unsupported NVFP4 problem N" + std::to_string(output_rows) + "K" +

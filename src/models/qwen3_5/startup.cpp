@@ -48,26 +48,23 @@ Startup::Startup(const artifact::Reader& definition_source, const artifact::Read
 }
 
 runtime::SequenceCapacityCurve Startup::capacity_curve(DeviceContext& device,
-                                                        const EngineOptions& options,
-                                                        WeightPlacement placement) const {
+                                                       const EngineOptions& options,
+                                                       WeightPlacement placement) const {
     if (placement == WeightPlacement::HostExperts) {
         // The host-expert curve is resolved after the offload plan, so it has no curve to offer
         // before that plan exists. A group decision over host experts is not supported.
         throw std::invalid_argument("a host-expert placement has no standalone capacity curve");
     }
-    auto trial      = options;
-    trial.prefill_chunk = std::min(options.max_context, options.prefill_chunk ? options.prefill_chunk
-                                                                              : 1024U);
-    auto planner    = make_sequence_planner(profile, device, trial, nullptr);
+    auto trial = options;
+    trial.prefill_chunk =
+        std::min(options.max_context, options.prefill_chunk ? options.prefill_chunk : 1024U);
+    auto planner = make_sequence_planner(profile, device, trial, nullptr);
     return planner.capacity_curve();
 }
 
-std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
-                                                    const EngineOptions& options,
-                                                    WeightPlacement placement,
-                                                    std::size_t available,
-                                                    std::optional<std::uint32_t>
-                                                        published_tokens) const {
+std::optional<Startup::ExecutionPlan>
+Startup::plan(DeviceContext& device, const EngineOptions& options, WeightPlacement placement,
+              std::size_t available, std::optional<std::uint32_t> published_tokens) const {
     using runtime::resolve_kv_capacity;
     const bool host_experts = placement == WeightPlacement::HostExperts;
     if (host_experts && !offload_) return {};

@@ -16,10 +16,10 @@ struct ScoreWorkMap {
         if (tid < count) {
             const int b = tid / per_row, first = tid % per_row * Tile;
             const int end = min(min(a.width, a.valid[b] - a.begin), first + Tile);
-            visible       = end > first
-                                ? (a.positions[a.begin + end - 1 + std::int64_t(b) * a.tokens] + 1) / 4
-                                : 0;
-            length[tid]   = visible;
+            visible = end > first
+                          ? (a.positions[a.begin + end - 1 + std::int64_t(b) * a.tokens] + 1) / 4
+                          : 0;
+            length[tid] = visible;
         }
         if (!__syncthreads_or(visible > kIndexerSelected)) return false;
         if (tid < 32) {
@@ -77,7 +77,7 @@ __global__ __launch_bounds__(Tile > 16 ? Tile * 8 : 128) void indexer_score_pipe
                 if constexpr (Vector) {
                     if constexpr (RetainKeys)
                         common::cp_async_cache_hint<Cache::cg>(out, in, 16,
-                                                                common::l2_retained_policy());
+                                                               common::l2_retained_policy());
                     else
                         common::cp_async<16, Cache::cg>(out, in);
                 } else {

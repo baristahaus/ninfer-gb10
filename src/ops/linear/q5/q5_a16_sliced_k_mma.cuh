@@ -186,12 +186,12 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void q5_a16_sli
 #pragma unroll
         for (int mi = 0; mi < MT; ++mi) {
             const bool valid_group = Full || tile * W + warp < groups;
-            const float top        = !valid_group ? 0.0f
-                                                  : __half2float(__ushort_as_half(
+            const float top = !valid_group ? 0.0f
+                                           : __half2float(__ushort_as_half(
                                                  shared.staging.scales[slot][mi * 16 + gid][warp]));
-            const float bottom     = !valid_group
-                                         ? 0.0f
-                                         : __half2float(__ushort_as_half(
+            const float bottom = !valid_group
+                                     ? 0.0f
+                                     : __half2float(__ushort_as_half(
                                            shared.staging.scales[slot][mi * 16 + gid + 8][warp]));
 #pragma unroll
             for (int ni = 0; ni < NT; ++ni) {

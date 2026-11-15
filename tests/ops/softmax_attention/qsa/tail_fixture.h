@@ -37,8 +37,8 @@ struct Plane {
         std::size_t span = features + (columns - 1) * (view.nb[1] / sizeof(Word)) +
                            (outer - 1) * (view.nb[2] / sizeof(Word));
         host.resize(leading + span);
-        device    = std::make_unique<GuardedDeviceBuffer>(host.size() * sizeof(Word));
-        view.data = static_cast<Word*>(device->data()) + leading;
+        device      = std::make_unique<GuardedDeviceBuffer>(host.size() * sizeof(Word));
+        view.data   = static_cast<Word*>(device->data()) + leading;
         view.device = device->device();
     }
 

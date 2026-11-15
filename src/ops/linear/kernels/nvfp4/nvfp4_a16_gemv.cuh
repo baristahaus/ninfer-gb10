@@ -188,7 +188,7 @@ compute_nvfp4_rows(const __nv_bfloat16* __restrict__ x, const std::uint8_t* __re
                 phase * (kValuesPerPhase / 2) + lane * Schedule::kPairsPerLane + pair;
             const float2 activation =
                 common::bf16x2_bits_to_float2(activation_pairs[activation_index]);
-            const int group         = ((lane * Schedule::kValuesPerLane & 15) + pair * 2) / 16;
+            const int group = ((lane * Schedule::kValuesPerLane & 15) + pair * 2) / 16;
 #pragma unroll
             for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
                 const std::uint32_t word  = row_codes[local_row].words[pair / 4];

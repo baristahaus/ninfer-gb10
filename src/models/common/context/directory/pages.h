@@ -285,8 +285,7 @@ private:
     // Spill page-in attach: the restored replica may cover more than the page's Device
     // columns (the Device replica does not exist yet); coverage must fit the committed
     // content. Clears the spill record like the ordinary attach.
-    void attach_restored_host_replica(PageId handle, HostPageReplica replica,
-                                      HostDirectory& owner);
+    void attach_restored_host_replica(PageId handle, HostPageReplica replica, HostDirectory& owner);
 
     void rebind_host_replica(PageId handle, HostPageReplica expected,
                              HostPageReplica replacement) noexcept;

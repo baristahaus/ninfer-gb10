@@ -3,7 +3,8 @@
 // tp2 rank-1 mirrors: the physical mutations rank 0 issues on its KV page pool, KV execution
 // tables and StateImage pool are replayed at the same index on rank 1's pool, on rank 1's stream.
 //
-// The contract (capy-flash docs/maintainer/tensor-parallel.md §6, src/core/tp2/paged_kv_cache_tp2.inc):
+// The contract (capy-flash docs/maintainer/tensor-parallel.md §6,
+// src/core/tp2/paged_kv_cache_tp2.inc):
 //
 //   * attach a mirror before the origin's first mutation: both replicas must start from the same
 //     empty addressing, and a mirror is refused while any execution row is bound;
@@ -72,11 +73,12 @@ public:
     MirroredKVPagePool& operator=(const MirroredKVPagePool&) = delete;
 
     [[nodiscard]] const MirrorTarget& target() const noexcept { return where_; }
+
     [[nodiscard]] DeviceKVPagePool& origin_pool() noexcept { return origin_; }
+
     [[nodiscard]] DeviceKVPagePool& mirror_pool() noexcept { return mirror_; }
 
-    void zero_pages(std::span<const DeviceKVPageHandle> pages,
-                    cudaStream_t stream = nullptr) const;
+    void zero_pages(std::span<const DeviceKVPageHandle> pages, cudaStream_t stream = nullptr) const;
     void copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
                    cudaStream_t stream = nullptr) const;
 
@@ -165,14 +167,18 @@ private:
 // from the mirror target.
 class MirroredStateImagePool {
 public:
-    MirroredStateImagePool(StateImageStorage& origin, StateImageStorage& mirror, MirrorTarget where);
+    MirroredStateImagePool(StateImageStorage& origin, StateImageStorage& mirror,
+                           MirrorTarget where);
 
     MirroredStateImagePool(const MirroredStateImagePool&)            = delete;
     MirroredStateImagePool& operator=(const MirroredStateImagePool&) = delete;
 
     [[nodiscard]] const MirrorTarget& target() const noexcept { return where_; }
+
     [[nodiscard]] StateImageStorage& origin_storage() noexcept { return origin_; }
+
     [[nodiscard]] StateImageStorage& mirror_storage() noexcept { return mirror_; }
+
     // Rank 1's execution view for its own stream; the mirror target must be attached.
     [[nodiscard]] CudaExecutionView mirror_execution() const;
 

@@ -34,7 +34,8 @@ void expect_throw(Function&& function, std::string_view message) {
 std::vector<std::byte> pattern(std::size_t bytes, unsigned seed) {
     std::vector<std::byte> result(bytes);
     for (std::size_t index = 0; index < bytes; ++index) {
-        result[index] = static_cast<std::byte>((seed * 131U + static_cast<unsigned>(index)) & 0xffU);
+        result[index] =
+            static_cast<std::byte>((seed * 131U + static_cast<unsigned>(index)) & 0xffU);
     }
     return result;
 }
@@ -76,8 +77,8 @@ void run() {
            "device-resident image spilled without dropping its device replica");
 
     // The caller copies the host bytes into the store, then records the residency.
-    const auto bytes = pattern(image_bytes, 7U);
-    const auto extent = store.write(bytes.data(), bytes.size());
+    const auto bytes          = pattern(image_bytes, 7U);
+    const auto extent         = store.write(bytes.data(), bytes.size());
     const auto spilled_extent = extent;
     expect(states.spill_host_replica(*image, extent), "host-only image refused to spill");
     expect(!states.host_resident(*image) && states.spill_resident(*image) &&
@@ -92,8 +93,7 @@ void run() {
     std::vector<std::byte> back(image_bytes);
     store.read(extent, back.data(), back.size());
     expect(back == bytes, "spill round-trip is not bit-identical");
-    expect(states.publish_spill_page_in(*image, std::move(*reservation)),
-           "page-in publish failed");
+    expect(states.publish_spill_page_in(*image, std::move(*reservation)), "page-in publish failed");
     expect(states.host_resident(*image) && !states.spill_resident(*image) &&
                !states.spill_extent(*image).has_value(),
            "page-in did not restore host residency");
@@ -103,8 +103,7 @@ void run() {
 
     // Abort leaves the image unpinned and the reservation reusable.
     const auto re_spill_extent = store.write(bytes.data(), bytes.size());
-    expect(states.spill_host_replica(*image, re_spill_extent),
-           "re-spill after page-in failed");
+    expect(states.spill_host_replica(*image, re_spill_extent), "re-spill after page-in failed");
     auto aborted = states.reserve_spill_page_in(*image);
     expect(aborted.has_value(), "second page-in reservation failed");
     states.abort_spill_page_in(*image, std::move(*aborted));

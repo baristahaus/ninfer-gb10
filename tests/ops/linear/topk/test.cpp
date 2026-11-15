@@ -187,9 +187,9 @@ std::vector<std::uint16_t> make_hidden() {
     std::vector<std::uint16_t> hidden(static_cast<std::size_t>(kHidden) * kMaxColumns);
     for (std::int32_t column = 0; column < kMaxColumns; ++column) {
         for (std::int32_t k = 0; k < kHidden; ++k) {
-            const float source = 0.25F + static_cast<float>(k & 7) * 0.125F +
-                                 static_cast<float>(column % 17) * 0.0625F;
-            const std::uint16_t bits                               = f32_to_bf16(source);
+            const float source       = 0.25F + static_cast<float>(k & 7) * 0.125F +
+                                       static_cast<float>(column % 17) * 0.0625F;
+            const std::uint16_t bits = f32_to_bf16(source);
             hidden[static_cast<std::size_t>(column) * kHidden + k] = bits;
         }
     }

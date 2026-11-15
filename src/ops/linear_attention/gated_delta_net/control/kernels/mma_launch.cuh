@@ -32,7 +32,7 @@ int residency() {
 template <class Geometry, int Split, int Warps = 8, bool Normalize = false, int Capacity = 0>
 bool launch_mma(const Inputs& in, GdnControlOutputs out, Scratch scratch,
                 CudaExecutionView execution, const Norm* norm = nullptr) {
-    constexpr int tile   = Geometry::kBlockN;
+    constexpr int tile = Geometry::kBlockN;
     // The grid's head dimension is the geometry's padded tile count, the same value the kernel
     // indexes with. Computing it here independently is how a head count that is not a multiple of
     // the 16-head tile loses its remainder.
@@ -41,10 +41,10 @@ bool launch_mma(const Inputs& in, GdnControlOutputs out, Scratch scratch,
     const auto submit    = [&](const Tensor& x, GdnControlOutputs result, Tensor normalized) {
         const int columns = x.ne[1];
         const dim3 grid(static_cast<unsigned>((std::int64_t(columns) + tile - 1) / tile), rows,
-                           Split);
+                        Split);
         const auto invoke = [&]<bool Full>() {
             (void)common::prepare_shared<
-                   shared, mma_kernel<Geometry, Split, Full, Warps, Normalize, Capacity>, true>();
+                shared, mma_kernel<Geometry, Split, Full, Warps, Normalize, Capacity>, true>();
             const auto* gain =
                 norm ? static_cast<const __nv_bfloat16*>(norm->weight.data) : nullptr;
             const float eps = norm ? norm->eps : 0.0F;

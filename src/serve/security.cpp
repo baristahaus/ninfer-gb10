@@ -32,8 +32,8 @@ std::string_view host_without_port(std::string_view host) noexcept {
 // not enough: `127.0.0.1.attacker.example` is a name an attacker controls that starts with `127.`,
 // and accepting it would defeat the rebinding guard.
 bool is_loopback_v4(std::string_view host) noexcept {
-    std::size_t index  = 0;
-    int octets         = 0;
+    std::size_t index = 0;
+    int octets        = 0;
     while (true) {
         std::size_t value  = 0;
         std::size_t digits = 0;
@@ -70,7 +70,7 @@ bool secure_equals(std::string_view a, std::string_view b) noexcept {
     for (std::size_t i = 0; i < length; ++i) {
         const unsigned char left  = i < a.size() ? static_cast<unsigned char>(a[i]) : 0U;
         const unsigned char right = i < b.size() ? static_cast<unsigned char>(b[i]) : 0U;
-        difference = static_cast<unsigned char>(difference | (left ^ right));
+        difference                = static_cast<unsigned char>(difference | (left ^ right));
     }
     difference = static_cast<unsigned char>(difference | (a.size() != b.size() ? 1U : 0U));
     return difference == 0;

@@ -95,8 +95,8 @@ public:
 
     void progress() { implementation.progress(); }
 
-    // Single-rank fixture: no collectives, so the count is always zero. It is part of the executor's
-    // rank contract, so the fake has to provide it.
+    // Single-rank fixture: no collectives, so the count is always zero. It is part of the
+    // executor's rank contract, so the fake has to provide it.
     [[nodiscard]] std::size_t collective_count() const { return 0; }
 
     void supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
@@ -198,7 +198,8 @@ q4::ScoreComplete finish_score(q4::Session& session, runtime::ExecutionTicket ti
 int main() {
     const char* path = std::getenv("NINFER_QWEN4_EXP_TEST_ARTIFACT");
     if (!path || !*path) {
-        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the score-state test did not run. Set it to the Qwen4-exp .ninfer file\n";
+        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the score-state test did "
+                     "not run. Set it to the Qwen4-exp .ninfer file\n";
         return 77;
     }
     try {
@@ -217,7 +218,7 @@ int main() {
         options.max_concurrency = 1;
         options.kv_capacity     = KvCapacityPolicy::explicit_capacity(128);
         options.context_cache   = {
-              .enabled = false, .extra_state_slots = 0, .host_capacity_bytes = 0};
+            .enabled = false, .extra_state_slots = 0, .host_capacity_bytes = 0};
         artifact::Reader reader(path);
         auto definition = q4::read_definition(reader, models::load_options(options));
         auto profile    = q4::execution::describe_model(*definition);
@@ -236,8 +237,8 @@ int main() {
         auto& rank = *instance->program;
         plan.context.pools[0].transfer =
             rank.implementation.resources.main->pages().transfer_profile();
-        auto worker = std::make_unique<runtime::RankWorker<ObservedTypes>>(*device,
-                                                                           std::move(instance));
+        auto worker =
+            std::make_unique<runtime::RankWorker<ObservedTypes>>(*device, std::move(instance));
         std::vector<std::unique_ptr<runtime::RankWorker<ObservedTypes>>> workers;
         workers.push_back(std::move(worker));
         runtime::LocalExecutor<ObservedTypes> executor(std::move(workers), {1});

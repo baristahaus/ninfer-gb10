@@ -46,5 +46,5 @@ bool uses_a4(std::int32_t, std::int32_t) { return true; }
 } // namespace
 
 const Nvfp4LinearShape kNvfp4N8704K5120{8704, 5120, launch_a16, launch_nvfp4_a4<select_a4>,
-                                         uses_a4};
+                                        uses_a4};
 } // namespace ninfer::ops::detail

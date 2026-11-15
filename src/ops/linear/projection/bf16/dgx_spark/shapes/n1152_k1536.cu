@@ -12,9 +12,9 @@ template <class Base>
 using Patch = Bf16VisionPatchSchedule<Bf16ScheduleInstance<Base, 1536>>;
 
 using Tiny    = Bf16VisionPatchSchedule<Bf16ScheduleInstance<
-       Bf16A16SimtSchedule<4, 1, 2, 16, 4, 2, Bf16SimtActivationAccess::WarpPacked,
-                           Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 1, 2>,
-       1536, 4, true>>;
+    Bf16A16SimtSchedule<4, 1, 2, 16, 4, 2, Bf16SimtActivationAccess::WarpPacked,
+                        Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 1, 2>,
+    1536, 4, true>>;
 using Small8  = Patch<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 2>>;
 using Small16 = Patch<Bf16A16SlicedKMmaSchedule<32, 8, 4, 64, 2>>;
 using Middle =

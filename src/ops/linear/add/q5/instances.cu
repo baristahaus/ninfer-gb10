@@ -7,23 +7,33 @@
 
 namespace ninfer::ops::detail {
 
-template void launch_q5_add_sliced<q5_instances::SlicedR16T8W4S2>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_sliced<q5_instances::SlicedR16T16W4S2>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_sliced<q5_instances::SlicedR16T24W4S2>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_sliced<q5_instances::SlicedR32T24W4S2Pairwise>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_sliced<q5_instances::SlicedR32T32W2S2>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_sliced<q5_instances::SlicedR32T32W4S2>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_sliced<q5_instances::SlicedR32T64W2S1>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_collective<q5_instances::MmaR64T128>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
-template void launch_q5_add_pointwise<q5_instances::MmaR32T128>(
-    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR16T8W4S2>(const Tensor& x, const Weight& w,
+                                                                  Tensor& residual,
+                                                                  cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR16T16W4S2>(const Tensor& x, const Weight& w,
+                                                                   Tensor& residual,
+                                                                   cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR16T24W4S2>(const Tensor& x, const Weight& w,
+                                                                   Tensor& residual,
+                                                                   cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR32T24W4S2Pairwise>(const Tensor& x,
+                                                                           const Weight& w,
+                                                                           Tensor& residual,
+                                                                           cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR32T32W2S2>(const Tensor& x, const Weight& w,
+                                                                   Tensor& residual,
+                                                                   cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR32T32W4S2>(const Tensor& x, const Weight& w,
+                                                                   Tensor& residual,
+                                                                   cudaStream_t stream);
+template void launch_q5_add_sliced<q5_instances::SlicedR32T64W2S1>(const Tensor& x, const Weight& w,
+                                                                   Tensor& residual,
+                                                                   cudaStream_t stream);
+template void launch_q5_add_collective<q5_instances::MmaR64T128>(const Tensor& x, const Weight& w,
+                                                                 Tensor& residual,
+                                                                 cudaStream_t stream);
+template void launch_q5_add_pointwise<q5_instances::MmaR32T128>(const Tensor& x, const Weight& w,
+                                                                Tensor& residual,
+                                                                cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

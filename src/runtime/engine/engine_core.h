@@ -344,8 +344,8 @@ private:
     void finish_execution_call(const HostPhaseMeasurement& measurement,
                                CoordinatorCall call) noexcept;
 
-    void record_detail(std::uint64_t RuntimeHostWorkStats::*elapsed_member,
-                       std::uint64_t RuntimeHostWorkStats::*invocation_member,
+    void record_detail(std::uint64_t RuntimeHostWorkStats::* elapsed_member,
+                       std::uint64_t RuntimeHostWorkStats::* invocation_member,
                        Clock::time_point started) noexcept;
 
     class EnginePhaseScope {

@@ -14,7 +14,10 @@ namespace ninfer::models::qwen3_5::execution {
 
 // Weak per-site tag from the launch counter (tests/support/launch_counter.cpp). Null in production.
 extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
-#define NINFER_TAG_SITE(name) do { if (&ninfer_launch_site != nullptr) ninfer_launch_site(name); } while (0)
+#define NINFER_TAG_SITE(name)                                                                      \
+    do {                                                                                           \
+        if (&ninfer_launch_site != nullptr) ninfer_launch_site(name);                              \
+    } while (0)
 
 namespace {
 
@@ -77,10 +80,10 @@ void reduce_partials(std::array<Tensor, 2>& partials, const ShardedCollective& c
 LogitsGatherPlan plan_logits_gather(std::int32_t vocabulary, std::int32_t rank_rows, int rank,
                                     std::int32_t columns, std::size_t slot_bytes) {
     if (vocabulary <= 0 || rank_rows <= 0 || columns <= 0) {
-        throw std::invalid_argument(
-            "logits gather: the extents must be positive; got vocabulary=" +
-            std::to_string(vocabulary) + " rank_rows=" + std::to_string(rank_rows) +
-            " columns=" + std::to_string(columns));
+        throw std::invalid_argument("logits gather: the extents must be positive; got vocabulary=" +
+                                    std::to_string(vocabulary) +
+                                    " rank_rows=" + std::to_string(rank_rows) +
+                                    " columns=" + std::to_string(columns));
     }
     // The gather is the concatenation of exactly two rank halves, so the full buffer has to be two
     // of them. A vocabulary that is not is a shard table and a head that disagree.
@@ -93,7 +96,8 @@ LogitsGatherPlan plan_logits_gather(std::int32_t vocabulary, std::int32_t rank_r
         throw std::invalid_argument("logits gather: the rank is outside [0,2): " +
                                     std::to_string(rank));
     }
-    const std::size_t bytes_per_column = static_cast<std::size_t>(vocabulary) * sizeof(std::uint16_t);
+    const std::size_t bytes_per_column =
+        static_cast<std::size_t>(vocabulary) * sizeof(std::uint16_t);
     // One column is the smallest payload the gather can exchange, and the exchange carries whole
     // 16-byte units only.
     if (bytes_per_column % 16 != 0) {
@@ -110,14 +114,14 @@ LogitsGatherPlan plan_logits_gather(std::int32_t vocabulary, std::int32_t rank_r
             " bytes, vocabulary=" + std::to_string(vocabulary));
     }
     LogitsGatherPlan plan;
-    plan.vocabulary       = vocabulary;
-    plan.rank_rows        = rank_rows;
-    plan.columns          = columns;
+    plan.vocabulary = vocabulary;
+    plan.rank_rows  = rank_rows;
+    plan.columns    = columns;
     // One exchange carries as many whole columns as the slot holds, but never more than the gather
     // itself has: a chunk wider than the call would report a payload no exchange carries.
-    const auto per_slot = static_cast<std::int32_t>(slot_bytes / bytes_per_column);
-    plan.chunk_columns  = std::min(per_slot, columns);
-    plan.exchanges      = (columns + plan.chunk_columns - 1) / plan.chunk_columns;
+    const auto per_slot   = static_cast<std::int32_t>(slot_bytes / bytes_per_column);
+    plan.chunk_columns    = std::min(per_slot, columns);
+    plan.exchanges        = (columns + plan.chunk_columns - 1) / plan.chunk_columns;
     plan.bytes_per_column = bytes_per_column;
     plan.chunk_bytes      = bytes_per_column * static_cast<std::size_t>(plan.chunk_columns);
     return plan;
@@ -154,9 +158,9 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     if (execution.device() != group.execution->device(rank).device()) {
         throw std::invalid_argument("logits gather: the view is not this rank's device");
     }
-    // The destination must be this rank's member of the group pair: the zero-fill and the copy write
-    // `full`, the exchange writes BOTH members of the pair, and if `full` were a different buffer the
-    // copy and the sum would land in different places.
+    // The destination must be this rank's member of the group pair: the zero-fill and the copy
+    // write `full`, the exchange writes BOTH members of the pair, and if `full` were a different
+    // buffer the copy and the sum would land in different places.
     if (full.data != group.logits[static_cast<std::size_t>(rank)].data) {
         throw std::invalid_argument(
             "logits gather: the destination is not this rank's member of the group's logits pair");
@@ -174,22 +178,19 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     // it changed DURING this gather, which is the case a per-rank value cannot explain.
     const auto hang_word = [&](const char* where, const char* site) {
         if (!group.mailbox || !lane_trace()) { return; }
-        // site= makes the offset attributable to a CALL SITE. A counter that says which rank but not
-        // which site can only narrow the question to 'somewhere in this function', which is what
-        // cost the phase seven rounds on the width-2 gather offset.
+        // site= makes the offset attributable to a CALL SITE. A counter that says which rank but
+        // not which site can only narrow the question to 'somewhere in this function', which is
+        // what cost the phase seven rounds on the width-2 gather offset.
         std::timespec ts{};
         (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
-        std::fprintf(stderr,
-                     "[gather-hang] rank=%d at=%s site=%s hang=%d round=%u ns=%lld\n", rank, where,
-                     site, group.mailbox->hang_reported() ? 1 : 0,
+        std::fprintf(stderr, "[gather-hang] rank=%d at=%s site=%s hang=%d round=%u ns=%lld\n", rank,
+                     where, site, group.mailbox->hang_reported() ? 1 : 0,
                      group.mailbox->round_index(),
                      (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
         std::fflush(stderr);
     };
     hang_word("entry", site);
-    if (group.mailbox) {
-        group.mailbox->clear_hang();
-    }
+    if (group.mailbox) { group.mailbox->clear_hang(); }
     const std::int32_t columns = local.ne[1];
     if (full.ne[0] != group.logits[0].ne[0] || local.ne[0] != full.ne[0] / 2) {
         throw std::invalid_argument(
@@ -201,12 +202,11 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
             "logits gather: the gather has more columns than the pair holds; columns=" +
             std::to_string(columns) + " pair columns=" + std::to_string(full.ne[1]));
     }
-    const auto plan = plan_logits_gather(full.ne[0], local.ne[0], rank, columns,
-                                         group.mailbox->max_bytes());
-    if (const char* debug = std::getenv("NINFER_SCORE_DEBUG_GATHER");
-        debug != nullptr && *debug) {
-        // The gather's own plan: a failure that inverts with the column count has to be explained by
-        // these numbers, not by the round or the ring.
+    const auto plan =
+        plan_logits_gather(full.ne[0], local.ne[0], rank, columns, group.mailbox->max_bytes());
+    if (const char* debug = std::getenv("NINFER_SCORE_DEBUG_GATHER"); debug != nullptr && *debug) {
+        // The gather's own plan: a failure that inverts with the column count has to be explained
+        // by these numbers, not by the round or the ring.
         std::fprintf(stderr,
                      "logits gather: round=%u rank=%d columns=%d chunk_columns=%d exchanges=%d "
                      "bytes_per_column=%zu slot_bytes=%zu\n",
@@ -214,14 +214,13 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
                      plan.chunk_columns, plan.exchanges, plan.bytes_per_column,
                      group.mailbox->max_bytes());
     }
-    auto* const destination      = static_cast<std::uint8_t*>(full.data);
-    const auto* const source     = static_cast<const std::uint8_t*>(local.data);
-    const std::size_t row_bytes  = static_cast<std::size_t>(plan.rank_rows) * sizeof(std::uint16_t);
+    auto* const destination     = static_cast<std::uint8_t*>(full.data);
+    const auto* const source    = static_cast<const std::uint8_t*>(local.data);
+    const std::size_t row_bytes = static_cast<std::size_t>(plan.rank_rows) * sizeof(std::uint16_t);
     for (std::int32_t chunk = 0; chunk < plan.exchanges; ++chunk) {
         const std::int32_t first = chunk * plan.chunk_columns;
         const std::int32_t count = std::min(plan.chunk_columns, columns - first);
-        const std::size_t bytes =
-            plan.bytes_per_column * static_cast<std::size_t>(count);
+        const std::size_t bytes  = plan.bytes_per_column * static_cast<std::size_t>(count);
         auto* const base = destination + static_cast<std::size_t>(first) * plan.bytes_per_column;
         // Zero the whole slice first: every row outside this rank's half must be an exact BF16 zero
         // for the sum to be the concatenation. The copy below then writes this rank's half back, so
@@ -233,18 +232,19 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
             // One contiguous copy per column: dim 0 is fastest, so a column's rows are contiguous
             // in both buffers, and the destination's column stride is the full vocabulary.
             NINFER_TAG_SITE("gather.column");
-            // THE STREAM THE COPIES USE. Compared with the exchange's stream above: same pointer means
-            // the stream hypothesis is dead and the next step is cudaStreamQuery; different means the
-            // exchange runs on a stream the copies never touch, which is the defect and a one-argument
-            // fix.
+            // THE STREAM THE COPIES USE. Compared with the exchange's stream above: same pointer
+            // means the stream hypothesis is dead and the next step is cudaStreamQuery; different
+            // means the exchange runs on a stream the copies never touch, which is the defect and a
+            // one-argument fix.
             if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
                 std::fprintf(stderr, "[stream] rank=%d copy=%p\n", rank,
                              static_cast<void*>(execution.stream()));
                 std::fflush(stderr);
             }
-            CUDA_CHECK(cudaMemcpyAsync(half + static_cast<std::size_t>(column) * plan.bytes_per_column,
-                                       source + static_cast<std::size_t>(first + column) * row_bytes,
-                                       row_bytes, cudaMemcpyDeviceToDevice, execution.stream()));
+            CUDA_CHECK(
+                cudaMemcpyAsync(half + static_cast<std::size_t>(column) * plan.bytes_per_column,
+                                source + static_cast<std::size_t>(first + column) * row_bytes,
+                                row_bytes, cudaMemcpyDeviceToDevice, execution.stream()));
         }
         // The pair is built PER CHUNK, at the chunk's offset in both buffers. Building it once
         // outside the loop passed the buffers' bases, so every exchange combined the FIRST chunk's
@@ -253,11 +253,10 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
         // the buffer base and the chunk offset coincide, which is why every single-chunk consumer
         // (the text path at T <= 42, the MTP proposal head) matched while the scoring path, the
         // first consumer wider than one chunk, did not.
-        std::array<void*, 2> pair{
-            static_cast<std::uint8_t*>(group.logits[0].data) +
-                static_cast<std::size_t>(first) * plan.bytes_per_column,
-            static_cast<std::uint8_t*>(group.logits[1].data) +
-                static_cast<std::size_t>(first) * plan.bytes_per_column};
+        std::array<void*, 2> pair{static_cast<std::uint8_t*>(group.logits[0].data) +
+                                      static_cast<std::size_t>(first) * plan.bytes_per_column,
+                                  static_cast<std::uint8_t*>(group.logits[1].data) +
+                                      static_cast<std::size_t>(first) * plan.bytes_per_column};
         ops::allreduce_sum_rank(*group.execution, *group.mailbox, rank,
                                 group.mailbox->slot_for(slot, bytes), pair, bytes, site);
         ++slot;
@@ -265,9 +264,8 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
 }
 
 void sharded_project_columns(const Tensor& input, const LinearParameters& p,
-                             std::array<Tensor, 2>& partials,
-                             const ShardedCollective& collective, MemoryArena& workspace,
-                             CudaExecutionView execution) {
+                             std::array<Tensor, 2>& partials, const ShardedCollective& collective,
+                             MemoryArena& workspace, CudaExecutionView execution) {
     require_two_ranks(collective);
     const int rank = collective.rank;
     require_partial_pair(partials, collective.execution, p.weight.n, input.ne[1]);

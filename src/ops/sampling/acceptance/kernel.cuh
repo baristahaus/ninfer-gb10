@@ -150,9 +150,9 @@ speculative_sparse_warp_accept(Workspace workspace, const int* drafts, const int
             weight       = workspace.dist_prob[at];
             if (a < extent) {
                 const int q_at = (row * k + a) * kSparseSpeculativeCandidates;
-                weight         = fmaxf(weight - speculative_sparse_probability(candidate_ids + q_at,
-                                                                               proposal_q + q_at, token),
-                                       0.0f);
+                weight = fmaxf(weight - speculative_sparse_probability(candidate_ids + q_at,
+                                                                       proposal_q + q_at, token),
+                               0.0f);
             }
         }
         float cdf = weight;
@@ -213,11 +213,11 @@ __launch_bounds__(S::kSamplerBlock) __global__ void speculative_sampling_partial
         for (int item = 0; item < S::kSamplerItemsPerThread; ++item) {
             const int tile_index = item * blockDim.x + threadIdx.x;
             const int v          = tile_start + tile_index;
-            keys[item]           = (v < token_domain &&
+            keys[item] = (v < token_domain &&
                           (!cfg.mask.words ||
                            (cfg.mask.words[col * cfg.mask.stride + v / 32] & (1u << (v % 32)))))
-                                       ? sampling_bf16_tile_sort_key<S>(logits[base + v], tile_index)
-                                       : 0u;
+                             ? sampling_bf16_tile_sort_key<S>(logits[base + v], tile_index)
+                             : 0u;
         }
         sampling_store_bf16_tile_topk<S>(keys, cap, tile_start, workspace, col, partial,
                                          topk_storage.bf16);
@@ -462,8 +462,8 @@ __launch_bounds__(S::kSamplerGroupBlock) __global__ void speculative_sampling_gr
                                 break;
                             }
                         }
-                        const float u           = sampling_uniform(cfg.seed, L + i + 1,
-                                                                   kSamplePurposeSpeculativeAccept, 0u);
+                        const float u = sampling_uniform(cfg.seed, L + i + 1,
+                                                         kSamplePurposeSpeculativeAccept, 0u);
                         const bool accept_draft = u < pd;
                         if (accept_draft) {
                             a = i + 1;

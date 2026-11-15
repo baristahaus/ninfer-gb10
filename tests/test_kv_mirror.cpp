@@ -32,7 +32,8 @@ int fail(const std::string& message) {
 }
 
 // A host with no driver, or one linked against the toolkit's stub, has no device to run on. The
-// stub case matters: it is how a GPU-less CI builder links at all, so it must skip rather than fail.
+// stub case matters: it is how a GPU-less CI builder links at all, so it must skip rather than
+// fail.
 bool cuda_unavailable(cudaError_t err) {
     return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
            err == cudaErrorStubLibrary;
@@ -74,7 +75,7 @@ HostImage make_host_image(std::int32_t slots, int extra_fields) {
     (void)builder.add(ninfer::DType::BF16, {4}, 1, "field");
     if (extra_fields > 0) { (void)builder.add(ninfer::DType::BF16, {4}, 1, "extra"); }
     HostImage image;
-    image.layout = builder.finish(backing, slots);
+    image.layout            = builder.finish(backing, slots);
     const std::size_t bytes = image.layout.storage.bytes;
     void* memory            = std::aligned_alloc(256, (bytes + 255) / 256 * 256);
     if (memory == nullptr) { throw std::bad_alloc(); }
@@ -85,31 +86,23 @@ HostImage make_host_image(std::int32_t slots, int extra_fields) {
 }
 
 int exercise_state_image_contract() {
-    int failures = 0;
+    int failures     = 0;
     HostImage origin = make_host_image(2, 0);
     HostImage same   = make_host_image(2, 0);
     HostImage wider  = make_host_image(3, 0);
     HostImage extra  = make_host_image(2, 1);
 
     failures += expect_ok(
-        [&] {
-            ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *same.storage);
-        },
+        [&] { ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *same.storage); },
         "matching StateImage mirror");
     failures += expect_throws<std::invalid_argument>(
-        [&] {
-            ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *origin.storage);
-        },
+        [&] { ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *origin.storage); },
         "StateImage mirror of itself");
     failures += expect_throws<std::invalid_argument>(
-        [&] {
-            ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *wider.storage);
-        },
+        [&] { ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *wider.storage); },
         "StateImage mirror with another slot count");
     failures += expect_throws<std::invalid_argument>(
-        [&] {
-            ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *extra.storage);
-        },
+        [&] { ninfer::tp2::require_matching_state_image_mirror(*origin.storage, *extra.storage); },
         "StateImage mirror with another field inventory");
 
     // The wrapper refuses an unattached target before it reaches any CUDA call, so a host-backed
@@ -140,14 +133,14 @@ struct HostPool {
 
 HostPool make_host_pool(std::uint32_t pages, std::int32_t heads, std::int32_t leading,
                         ninfer::PagedKVPlaneOrder order) {
-    const ninfer::KVPageGeometry geometry{
-        .page_tokens        = static_cast<std::uint32_t>(ninfer::kPagedKVPageSize),
-        .device_plane_order = order,
-        .planes             = {{.dtype           = ninfer::DType::I8,
-                                .leading_extent  = leading,
-                                .head_extent     = heads,
-                                .alignment       = 256,
-                                .tokens_per_row  = 1}}};
+    const ninfer::KVPageGeometry geometry{.page_tokens =
+                                              static_cast<std::uint32_t>(ninfer::kPagedKVPageSize),
+                                          .device_plane_order = order,
+                                          .planes             = {{.dtype          = ninfer::DType::I8,
+                                                                  .leading_extent = leading,
+                                                                  .head_extent    = heads,
+                                                                  .alignment      = 256,
+                                                                  .tokens_per_row = 1}}};
     ninfer::LayoutBuilder builder;
     HostPool pool;
     pool.layout = ninfer::plan_device_kv_page_pool(
@@ -165,9 +158,9 @@ int exercise_kv_geometry_contract() {
     int failures = 0;
 
     // HeadMajor is the Flash-Next plane order: [leading, page tokens, physical pages, heads].
-    // Rank 1 carries its own KV-head shard, so its plane holds half the heads and its page stride halves
-    // with them. The contract must accept that pair — comparing the head extent here would refuse
-    // exactly the mirror a tp 2 load needs.
+    // Rank 1 carries its own KV-head shard, so its plane holds half the heads and its page stride
+    // halves with them. The contract must accept that pair — comparing the head extent here would
+    // refuse exactly the mirror a tp 2 load needs.
     {
         HostPool origin = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
         HostPool shard  = make_host_pool(4, 1, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
@@ -175,12 +168,12 @@ int exercise_kv_geometry_contract() {
         HostPool wider  = make_host_pool(8, 2, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
         HostPool lead   = make_host_pool(4, 2, 2, ninfer::PagedKVPlaneOrder::HeadMajor);
 
-        failures += expect_ok(
-            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *shard.pool); },
-            "head-major mirror with half the heads (the tp 2 shard)");
-        failures += expect_ok(
-            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *same.pool); },
-            "head-major mirror with the same heads");
+        failures +=
+            expect_ok([&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *shard.pool); },
+                      "head-major mirror with half the heads (the tp 2 shard)");
+        failures +=
+            expect_ok([&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *same.pool); },
+                      "head-major mirror with the same heads");
         failures += expect_throws<std::invalid_argument>(
             [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *origin.pool); },
             "head-major mirror of itself");
@@ -199,9 +192,9 @@ int exercise_kv_geometry_contract() {
         HostPool origin = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::PageMajor);
         HostPool same   = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::PageMajor);
         HostPool lead   = make_host_pool(4, 2, 2, ninfer::PagedKVPlaneOrder::PageMajor);
-        failures += expect_ok(
-            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *same.pool); },
-            "page-major mirror with the same geometry");
+        failures +=
+            expect_ok([&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *same.pool); },
+                      "page-major mirror with the same geometry");
         failures += expect_throws<std::invalid_argument>(
             [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *lead.pool); },
             "page-major mirror with another page stride");
@@ -248,21 +241,19 @@ std::vector<std::byte> read_bytes(const void* device, std::size_t bytes) {
 
 int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceContext& rank1) {
     int failures = 0;
-    const ninfer::KVPageGeometry geometry{
-        .planes = {{.dtype = ninfer::DType::I8,
-                    .leading_extent = 4,
-                    .head_extent = 2,
-                    .alignment = 256,
-                    .tokens_per_row = 4}}};
+    const ninfer::KVPageGeometry geometry{.planes = {{.dtype          = ninfer::DType::I8,
+                                                      .leading_extent = 4,
+                                                      .head_extent    = 2,
+                                                      .alignment      = 256,
+                                                      .tokens_per_row = 4}}};
     const PlannedPools plan = plan_pools(2, 4, 1, geometry);
 
     ninfer::DeviceBuffer origin_arena(rank0.device(), plan.bytes);
     ninfer::DeviceBuffer mirror_arena(rank1.device(), plan.bytes);
     ninfer::DeviceKVPagePool origin(origin_arena.span(), plan.pages);
     ninfer::DeviceKVPagePool mirror(mirror_arena.span(), plan.pages);
-    const ninfer::tp2::MirrorTarget where{.device = &rank1,
-                                          .stream = rank1.stream(),
-                                          .transfer_stream = rank1.transfer_stream()};
+    const ninfer::tp2::MirrorTarget where{
+        .device = &rank1, .stream = rank1.stream(), .transfer_stream = rank1.transfer_stream()};
     ninfer::tp2::MirroredKVPagePool mirrored(origin, mirror, where);
 
     // Both replicas start empty; two pages are materialized on rank 0 only.
@@ -278,7 +269,7 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
     mirrored.zero_pages(handles, rank0.stream());
     rank0.synchronize();
     rank1.synchronize();
-    const std::size_t page_bytes = static_cast<std::size_t>(origin.plane(0).nb[3]);
+    const std::size_t page_bytes        = static_cast<std::size_t>(origin.plane(0).nb[3]);
     const std::vector<std::byte> zeroed = read_bytes(mirror.plane(0).data, 2 * page_bytes);
     failures += (std::any_of(zeroed.begin(), zeroed.end(),
                              [](std::byte value) { return value != std::byte{0}; })
@@ -287,8 +278,8 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
 
     // The contract is index-identical, not byte-identical: each rank copies its OWN page 0 into its
     // page 1. Seeding only rank 0 and then comparing rank 1 to rank 0's pattern is the mistake the
-    // first two-GPU run made, so each rank gets a different pattern and each destination is compared
-    // to its own rank's source.
+    // first two-GPU run made, so each rank gets a different pattern and each destination is
+    // compared to its own rank's source.
     const auto fill_pattern = [page_bytes](unsigned char seed) {
         std::vector<std::byte> bytes(page_bytes);
         for (std::size_t index = 0; index < bytes.size(); ++index) {
@@ -307,10 +298,10 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
     mirrored.copy_page(handles[0], handles[1], rank0.stream());
     rank0.synchronize();
     rank1.synchronize();
-    const std::vector<std::byte> copied_rank0 = read_bytes(
-        static_cast<const std::byte*>(origin.plane(0).data) + page_bytes, page_bytes);
-    const std::vector<std::byte> copied_rank1 = read_bytes(
-        static_cast<const std::byte*>(mirror.plane(0).data) + page_bytes, page_bytes);
+    const std::vector<std::byte> copied_rank0 =
+        read_bytes(static_cast<const std::byte*>(origin.plane(0).data) + page_bytes, page_bytes);
+    const std::vector<std::byte> copied_rank1 =
+        read_bytes(static_cast<const std::byte*>(mirror.plane(0).data) + page_bytes, page_bytes);
     failures += (copied_rank0 == pattern_rank0 ? 0 : fail("replayed page copy differs on rank 0"));
     failures += (copied_rank1 == pattern_rank1 ? 0 : fail("replayed page copy differs on rank 1"));
     // A cross-rank copy would make the two destinations equal; the contract forbids it.
@@ -337,14 +328,12 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
                      : fail("mirror execution row was not replayed"));
 
     failures += (tables.release(std::move(row)) ? 0 : fail("mirrored row release failed"));
-    failures += expect_throws<std::logic_error>(
-        [&] { (void)tables.mirror_row(0); }, "released mirror row stayed readable");
+    failures += expect_throws<std::logic_error>([&] { (void)tables.mirror_row(0); },
+                                                "released mirror row stayed readable");
 
     // tp 2 has no Host tier: the wrapper refuses instead of half-copying.
     failures += expect_throws<std::logic_error>(
-        [&] {
-            mirrored.copy_to_host(handles, ninfer::HostKVAllocationView{}, rank0.stream());
-        },
+        [&] { mirrored.copy_to_host(handles, ninfer::HostKVAllocationView{}, rank0.stream()); },
         "mirrored KV Host copy");
     failures += expect_throws<std::logic_error>(
         [&] {
@@ -366,9 +355,8 @@ int exercise_state_image_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCont
     ninfer::DeviceBuffer mirror_arena(rank1.device(), bytes);
     ninfer::StateImageStorage origin(origin_arena.span(), layout);
     ninfer::StateImageStorage mirror(mirror_arena.span(), layout);
-    const ninfer::tp2::MirrorTarget where{.device = &rank1,
-                                          .stream = rank1.stream(),
-                                          .transfer_stream = rank1.transfer_stream()};
+    const ninfer::tp2::MirrorTarget where{
+        .device = &rank1, .stream = rank1.stream(), .transfer_stream = rank1.transfer_stream()};
     ninfer::tp2::MirroredStateImagePool mirrored(origin, mirror, where);
 
     const std::size_t image_bytes = layout.image_stride;
@@ -415,7 +403,8 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; the replay cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the replay cases did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {

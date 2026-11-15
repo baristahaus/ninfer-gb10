@@ -206,13 +206,12 @@ std::string Metrics::render(const EngineSnapshot& snapshot, bool ready) const {
     COUNTER(checkpoint_selections, "checkpoint_selections_total",
             "Initial bindings with checkpoint reuse.");
     {
-        const std::string backend =
-            product::speculative_backend_name(options_.speculative.backend);
+        const std::string backend = product::speculative_backend_name(options_.speculative.backend);
         const auto labeled_counter = [&](std::string_view name, auto current, auto base,
                                          std::string_view help) {
             header(name, "counter", help);
-            out << "ninfer_" << name << "{speculative_backend=\"" << escape_label(backend)
-                << "\"} " << current - base << '\n';
+            out << "ninfer_" << name << "{speculative_backend=\"" << escape_label(backend) << "\"} "
+                << current - base << '\n';
         };
         labeled_counter("spec_decode_rounds_total", stats.speculative_rounds,
                         baseline.speculative_rounds, "Native speculative verification rounds.");
@@ -235,8 +234,8 @@ std::string Metrics::render(const EngineSnapshot& snapshot, bool ready) const {
                "Draft tokens attempted by block position.");
         header("spec_decode_accepted_per_position_total", "counter",
                "Draft tokens accepted by block position.");
-        const std::size_t window = std::min<std::size_t>(
-            options_.speculative.draft_tokens, kSpeculativePositions);
+        const std::size_t window =
+            std::min<std::size_t>(options_.speculative.draft_tokens, kSpeculativePositions);
         for (std::size_t i = 0; i < window; ++i) {
             out << "ninfer_spec_decode_attempted_per_position_total{position=\"" << i << "\"} "
                 << requests.spec_attempted_per_position[i] << '\n';

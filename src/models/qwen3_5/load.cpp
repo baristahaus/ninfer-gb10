@@ -12,12 +12,11 @@ namespace ninfer::models::qwen3_5 {
 ResolvedLoadPlan::ResolvedLoadPlan(const artifact::Reader& reader,
                                    std::shared_ptr<const ModelDefinition> definition,
                                    artifact::MaterializationPlan materialization,
-                                   std::vector<WeightBinding> bindings,
-                                   std::vector<Device> devices, std::vector<Device> bank_devices)
+                                   std::vector<WeightBinding> bindings, std::vector<Device> devices,
+                                   std::vector<Device> bank_devices)
     : reader_(&reader), definition_(std::move(definition)),
       materialization_(std::move(materialization)), bindings_(std::move(bindings)),
       devices_(std::move(devices)), bank_devices_(std::move(bank_devices)) {}
-
 
 namespace {
 
@@ -32,13 +31,13 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
     // `shape[0]` rows. Reading `shape.back()` as the column count would make a 1-D parameter look
     // like a single row of `shape[0]` columns, so the coverage check below would compare one row
     // against the whole extent.
-    const auto k = reference.shape.size() > 1 ? reference.shape.back() : 1;
-    const auto n = weight_element_count(reference.shape) / k;
+    const auto k                     = reference.shape.size() > 1 ? reference.shape.back() : 1;
+    const auto n                     = weight_element_count(reference.shape) / k;
     std::uint64_t destination_row    = 0;
     std::uint64_t destination_column = 0;
     bool saw_column_slice            = false;
     for (std::size_t next = 0; next < reference.binding.parts.size(); ++next) {
-        const auto& part   = reference.binding.parts[next];
+        const auto& part  = reference.binding.parts[next];
         const auto extent = part.end - part.begin;
         if (extent == 0) { continue; }
         const auto parent = reader.geometry(part.object).shape;
@@ -89,8 +88,8 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
                 last_consumed = j;
             }
             next = last_consumed;
-            slices.push_back({part.object, 0, column, rows, segment_columns, 0,
-                              destination_column});
+            slices.push_back(
+                {part.object, 0, column, rows, segment_columns, 0, destination_column});
             destination_column += segment_columns;
             saw_column_slice = true;
         }
@@ -146,16 +145,15 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
         // it is sharded. So the binding is uniform -- the request, from 0 to the rank's element
         // count -- and it is what the object handle cannot express.
         const auto request_index = requests.size();
-        const auto& reference = definition->parameter({i});
-        const auto access     = devices[i] == Device::cpu() ? artifact::HostAccess::CudaTransfer
-                                                            : artifact::HostAccess::CpuOnly;
+        const auto& reference    = definition->parameter({i});
+        const auto access        = devices[i] == Device::cpu() ? artifact::HostAccess::CudaTransfer
+                                                               : artifact::HostAccess::CpuOnly;
         if (reference.binding.whole_object) {
             for (const auto& part : reference.binding.parts) {
-                requests.push_back({artifact::whole_tensor(reader, part.object), devices[i],
-                                    access});
+                requests.push_back(
+                    {artifact::whole_tensor(reader, part.object), devices[i], access});
             }
-            bindings.push_back({artifact::StorageId{request_index}, 0,
-                                reference.binding.elements});
+            bindings.push_back({artifact::StorageId{request_index}, 0, reference.binding.elements});
             continue;
         }
         const auto slices = matrix_slices(reader, reference);
@@ -165,28 +163,33 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
                          (unsigned long long)(reference.shape.size() > 1 ? reference.shape[1] : 0),
                          slices.size());
             for (const auto& sl : slices) {
-                std::fprintf(stderr, "  obj=%d row=%llu col=%llu rows=%llu cols=%llu drow=%llu dcol=%llu\n",
-                             sl.object.index, (unsigned long long)sl.row, (unsigned long long)sl.column,
-                             (unsigned long long)sl.rows, (unsigned long long)sl.columns,
-                             (unsigned long long)sl.destination_row, (unsigned long long)sl.destination_column);
+                std::fprintf(stderr,
+                             "  obj=%d row=%llu col=%llu rows=%llu cols=%llu drow=%llu dcol=%llu\n",
+                             sl.object.index, (unsigned long long)sl.row,
+                             (unsigned long long)sl.column, (unsigned long long)sl.rows,
+                             (unsigned long long)sl.columns, (unsigned long long)sl.destination_row,
+                             (unsigned long long)sl.destination_column);
             }
         }
         try {
-            requests.push_back({artifact::slice_tensor(reader, reference.shape, slices), devices[i],
-                                access});
+            requests.push_back(
+                {artifact::slice_tensor(reader, reference.shape, slices), devices[i], access});
         } catch (const std::exception& error) {
             // The slicer has no parameter name, so a rejection there is anonymous. Name it here.
             throw artifact::ArtifactError(reference.name + ": " + error.what());
         }
-        bindings.push_back({artifact::StorageId{request_index}, 0,
-                            reference.binding.elements});
+        bindings.push_back({artifact::StorageId{request_index}, 0, reference.binding.elements});
     }
     if (bindings.size() != devices.size()) {
         throw artifact::ArtifactError("sharded plan is missing a weight binding");
     }
     auto storage = artifact::plan_materialization(reader, requests);
-    return {reader, std::move(definition), std::move(storage), std::move(bindings),
-            std::move(devices), std::move(banks)};
+    return {reader,
+            std::move(definition),
+            std::move(storage),
+            std::move(bindings),
+            std::move(devices),
+            std::move(banks)};
 }
 
 std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceContext& device,
@@ -226,8 +229,8 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
     if (definition->weights().mtp) {
         const auto& mixer = definition->weights().mtp->layer.mixer;
         if (const auto* attention = std::get_if<AttentionWeights>(&mixer)) {
-            fused.push_back({{attention->query, attention->key, attention->gate,
-                              attention->value}});
+            fused.push_back(
+                {{attention->query, attention->key, attention->gate, attention->value}});
         } else if (const auto* gdn = std::get_if<GdnWeights>(&mixer)) {
             add_gdn(*gdn);
         }

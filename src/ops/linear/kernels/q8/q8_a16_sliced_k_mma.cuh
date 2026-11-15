@@ -86,11 +86,11 @@ __device__ __forceinline__ void q8_a16_sliced_k_mma(Q8LinearOperands operands, O
     static_assert(sizeof(SharedStorage) == Schedule::kSharedBytes);
     auto& shared =
         *reinterpret_cast<SharedStorage*>(common::shared_storage<sizeof(SharedStorage)>());
-    const int tid  = static_cast<int>(threadIdx.x);
-    const int warp = tid >> 5;
-    const int lane = tid & 31;
-    const int gid  = lane >> 2;
-    const int lid  = lane & 3;
+    const int tid     = static_cast<int>(threadIdx.x);
+    const int warp    = tid >> 5;
+    const int lane    = tid & 31;
+    const int gid     = lane >> 2;
+    const int lid     = lane & 3;
     const int k_split = warp;
 
     const int cta_row0 = static_cast<int>(blockIdx.x) * RowPolicy::kOutputRowsPerCta;
@@ -267,9 +267,12 @@ __device__ __forceinline__ void q8_a16_sliced_k_mma(Q8LinearOperands operands, O
                         *reinterpret_cast<const unsigned short*>(&code_shared[code_row][offset]));
                 };
                 const unsigned af0 = common::int8x2_to_bf16x2_bits(load_code_pair(gid, code_col));
-                const unsigned af1 = common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
-                const unsigned af2 = common::int8x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
-                const unsigned af3 = common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
+                const unsigned af1 =
+                    common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
+                const unsigned af2 =
+                    common::int8x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
+                const unsigned af3 =
+                    common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
 #pragma unroll
                 for (int ni = 0; ni < kNt; ++ni) {
                     unsigned bf0, bf1;
@@ -365,7 +368,7 @@ __device__ __forceinline__ void q8_a16_sliced_k_mma(Q8LinearOperands operands, O
             } else if constexpr (requires {
                                      epilogue.apply_row(
                                          output, cta_row0, column_offset,
-                                         *reinterpret_cast<const float(*)[ActiveCols]>(partial),
+                                         *reinterpret_cast<const float (*)[ActiveCols]>(partial),
                                          live_columns);
                                  }) {
                 if (col0 < ActiveCols) {
@@ -391,9 +394,10 @@ __device__ __forceinline__ void q8_a16_sliced_k_mma(Q8LinearOperands operands, O
             }
         }
         if constexpr (requires {
-                          epilogue.apply_row(output, cta_row0, column_offset,
-                                             *reinterpret_cast<const float(*)[ActiveCols]>(partial),
-                                             live_columns);
+                          epilogue.apply_row(
+                              output, cta_row0, column_offset,
+                              *reinterpret_cast<const float (*)[ActiveCols]>(partial),
+                              live_columns);
                       }) {
             __syncwarp();
             if (lane < kRowsPerCta && (FullWeights || cta_row0 + lane < operands.rows)) {

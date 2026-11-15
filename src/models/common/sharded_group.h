@@ -6,14 +6,14 @@
 // WHY ONE OWNER. A mailbox owns a pinned host slab and per-device arrival/epoch words; two of them
 // would never rendezvous, because a rank's exchange kernel would wait for a peer that never writes
 // to the same slab. The partial pair has the same shape of requirement: the combine reads and
-// writes BOTH buffers, so both Programs must pass the same pair. Both therefore belong to the group,
-// not to a Program.
+// writes BOTH buffers, so both Programs must pass the same pair. Both therefore belong to the
+// group, not to a Program.
 //
 // LIFETIME, which is the part that bites. The owner is constructed once, after the execution group
 // exists and before the first Program, and it must outlive every Program and every graph capture
 // that baked in the mailbox slab and the partial addresses. In the engine that means `BuiltModel`
-// owns it: declared after `execution` (the devices) and before `instance`/`peers` (the Programs), so
-// it is destroyed after the Programs and before the devices. A Program borrowing it must not
+// owns it: declared after `execution` (the devices) and before `instance`/`peers` (the Programs),
+// so it is destroyed after the Programs and before the devices. A Program borrowing it must not
 // outlive it — the borrow is a raw pointer by design, because the owner is the only thing that can
 // outlive the Programs.
 //
@@ -55,8 +55,8 @@ struct ShardedGroup {
 // tile of score targets per call rather than a decode round's columns; the tile is the frame's
 // `kScoreTile` (models/qwen3_5/program/frames.cpp). It is named here because the owner sizes ONE
 // buffer for both callers, and a scoring call has to stay a single projection: slicing it to the
-// one-column width a scoring lane's frame declares would re-read the whole 124160x5120 head once per
-// column. If the frame's tile changes, this must change with it.
+// one-column width a scoring lane's frame declares would re-read the whole 124160x5120 head once
+// per column. If the frame's tile changes, this must change with it.
 inline constexpr std::int32_t kShardedScoreTile = 1024;
 
 // The rank of `device_index` in a group whose members are `device_indices`, or -1 when it is not a
@@ -67,13 +67,13 @@ inline constexpr std::int32_t kShardedScoreTile = 1024;
 // Owns the group's mailbox and its two partial buffers. Constructed once for the whole group.
 class ShardedGroupOwner {
 public:
-    // `rows` x `columns` is one full-width BF16 partial (for the 27B: hidden_size x the plan's token
-    // capacity). `output_rows` x `logits_columns` is one full-vocabulary BF16 logits buffer (for the
-    // 27B: vocab_size x the widest round's columns). The logits pair is built only when both extents
-    // are positive; zero for both builds none, and the Program refuses to gather without it rather
-    // than gathering into an absent buffer. Throws std::invalid_argument for a group that is not
-    // exactly two ranks, for one logits extent given without the other, and propagates the mailbox's
-    // allocation errors.
+    // `rows` x `columns` is one full-width BF16 partial (for the 27B: hidden_size x the plan's
+    // token capacity). `output_rows` x `logits_columns` is one full-vocabulary BF16 logits buffer
+    // (for the 27B: vocab_size x the widest round's columns). The logits pair is built only when
+    // both extents are positive; zero for both builds none, and the Program refuses to gather
+    // without it rather than gathering into an absent buffer. Throws std::invalid_argument for a
+    // group that is not exactly two ranks, for one logits extent given without the other, and
+    // propagates the mailbox's allocation errors.
     ShardedGroupOwner(const ExecutionContext& execution, std::int32_t rows, std::int32_t columns,
                       std::int32_t output_rows = 0, std::int32_t logits_columns = 0);
     ~ShardedGroupOwner();

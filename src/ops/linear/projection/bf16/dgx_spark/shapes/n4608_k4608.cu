@@ -35,11 +35,11 @@ using S6        = Bf16VisionMergerFc1Schedule<Original6, 6>;
 using S7        = Bf16VisionMergerFc1Schedule<Original7, 7>;
 using S8        = Bf16VisionMergerFc1Schedule<Original8, 8>;
 using Small     = Bf16VisionMergerFc1Schedule<
-        Bf16ScheduleInstance<
-            Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
-                               Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
-            4608>,
-        20>;
+    Bf16ScheduleInstance<
+        Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
+                           Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
+        4608>,
+    20>;
 using Medium = Bf16VisionMergerFc1Schedule<
     Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<192, 128, 64, 64, 32, 2, 1>, 4608>, 21>;
 using Wide = Bf16VisionMergerFc1Schedule<

@@ -37,10 +37,9 @@ void require_weight_shape(const Tensor& weight, std::int32_t C) {
 void require_state_shape(const Tensor& conv_state, std::int32_t C) {
     if (conv_state.ne[0] != C || conv_state.ne[1] != 3 || conv_state.ne[2] != 1 ||
         conv_state.ne[3] != 1) {
-        throw std::invalid_argument(
-            "causal_conv1d: conv_state must have shape [C,3]; got [" +
-            std::to_string(conv_state.ne[0]) + "," + std::to_string(conv_state.ne[1]) +
-            "], C=" + std::to_string(C));
+        throw std::invalid_argument("causal_conv1d: conv_state must have shape [C,3]; got [" +
+                                    std::to_string(conv_state.ne[0]) + "," +
+                                    std::to_string(conv_state.ne[1]) + "], C=" + std::to_string(C));
     }
 }
 
@@ -278,8 +277,8 @@ namespace {
 void causal_conv1d_silu_snapshot_impl(const Tensor& x, const Tensor& weight, Tensor& conv_states,
                                       const Tensor& valid_columns,
                                       const Tensor& initial_state_slots,
-                                      const Tensor& snapshot_base_slots, Tensor& out,
-                                      Device device, cudaStream_t stream) {
+                                      const Tensor& snapshot_base_slots, Tensor& out, Device device,
+                                      cudaStream_t stream) {
     const bool masked = valid_columns.data != nullptr;
     if (x.dtype != DType::BF16 || weight.dtype != DType::BF16 || conv_states.dtype != DType::BF16 ||
         out.dtype != DType::BF16) {
@@ -309,8 +308,7 @@ void causal_conv1d_silu_snapshot_impl(const Tensor& x, const Tensor& weight, Ten
     if (n == 0) { return; }
 
     for (const Tensor* tensor : std::initializer_list<const Tensor*>{&x, &weight, &out})
-        common::operand::contiguous_nonnull(*tensor, "causal_conv1d", "operand",
-                                            device);
+        common::operand::contiguous_nonnull(*tensor, "causal_conv1d", "operand", device);
     common::operand::slotted_tensor(conv_states, DType::BF16, {x.ne[0], 3, conv_states.ne[2]}, 2, 2,
                                     "causal_conv1d", "states", device);
     if (masked) {
@@ -352,9 +350,8 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
                                      snapshot_base_slots, out, x.device, stream);
 }
 
-void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots,
-                             Tensor& scratch, Tensor& record_slots, std::int32_t width,
-                             cudaStream_t stream) {
+void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots, Tensor& scratch,
+                             Tensor& record_slots, std::int32_t width, cudaStream_t stream) {
     if (conv_states.dtype != DType::BF16 || scratch.dtype != DType::BF16 ||
         source_slots.dtype != DType::I32) {
         throw std::invalid_argument("causal_conv1d: history gather tensors must be BF16/I32");
@@ -363,8 +360,7 @@ void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slo
         throw std::invalid_argument("causal_conv1d: history gather state shape mismatch");
     }
     const std::int32_t batch = source_slots.ne[0];
-    if (static_cast<std::int64_t>(scratch.ne[2]) !=
-        static_cast<std::int64_t>(batch) * width) {
+    if (static_cast<std::int64_t>(scratch.ne[2]) != static_cast<std::int64_t>(batch) * width) {
         throw std::invalid_argument("causal_conv1d: history gather scratch slot count mismatch");
     }
     detail::launch_causal_conv_history_gather(conv_states, source_slots, scratch, record_slots,

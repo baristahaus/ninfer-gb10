@@ -1470,11 +1470,9 @@ public:
         const std::uint32_t target = pages_for_tokens(tokens);
         if (target > entitlement(address)) {
             throw std::invalid_argument(
-                "KV materialization exceeds active entitlement: target=" +
-                std::to_string(target) + " pages, entitlement=" +
-                std::to_string(entitlement(address)) + " pages, mapped=" +
-                std::to_string(address.page_count) + " pages, tokens=" +
-                std::to_string(tokens));
+                "KV materialization exceeds active entitlement: target=" + std::to_string(target) +
+                " pages, entitlement=" + std::to_string(entitlement(address)) + " pages, mapped=" +
+                std::to_string(address.page_count) + " pages, tokens=" + std::to_string(tokens));
         }
         // A target at or below the mapped count is already satisfied: the partial-prefix-reuse
         // admission may map one page more than the decode round's exact watermark.
@@ -1904,7 +1902,7 @@ private:
 
     LogicalKVPageStore* pages_ = nullptr;
     tp2::KVTableOperations table_operations_;
-    std::uint32_t page_capacity_  = 0;
+    std::uint32_t page_capacity_ = 0;
     std::vector<Address> addresses_;
     std::vector<std::uint32_t> free_;
     std::vector<LogicalKVPageHandle> memberships_;

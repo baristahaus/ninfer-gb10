@@ -67,7 +67,8 @@ void linear_pair(const Tensor& x, const Weight& first, const Weight& second, Ten
     require_matrix(x, first.k, x.ne[1], execution);
     // The outputs are the weights' own row count. `first.n` and `second.n` are equal by the pair
     // contract that `validate_pair_weights` checks below, and both the MMA and the SIMT arm derive
-    // their row extent from the weight/output, so this holds for 1024 at width 1 and 512 at width 2.
+    // their row extent from the weight/output, so this holds for 1024 at width 1 and 512 at
+    // width 2.
     require_matrix(first_out, first.n, x.ne[1], execution);
     require_matrix(second_out, first.n, x.ne[1], execution);
     detail::validate_pair_weights(first, second, x.ne[1]);

@@ -63,8 +63,8 @@ double relative_error(double got, double want) {
 // yarn.h. `dim` is the full rotary width; the returned table holds dim/2 pair-space entries.
 struct Oracle {
     std::vector<double> inv_freq;
-    double low  = 0.0;
-    double high = 0.0;
+    double low    = 0.0;
+    double high   = 0.0;
     double mscale = 1.0;
 };
 
@@ -78,11 +78,11 @@ Oracle oracle_yarn(double factor, int dim, double base, double original_max_posi
                    double beta_fast, double beta_slow) {
     Oracle out;
     const int half = dim / 2;
-    out.low  = std::max(0.0, std::floor(
-                                 oracle_correction_dim(beta_fast, dim, base, original_max_position)));
-    out.high = std::min(static_cast<double>(dim - 1),
-                        std::ceil(oracle_correction_dim(beta_slow, dim, base,
-                                                        original_max_position)));
+    out.low        = std::max(
+        0.0, std::floor(oracle_correction_dim(beta_fast, dim, base, original_max_position)));
+    out.high =
+        std::min(static_cast<double>(dim - 1),
+                 std::ceil(oracle_correction_dim(beta_slow, dim, base, original_max_position)));
     if (out.high - out.low < 1e-3) { out.high = out.low + 1e-3; }
     out.mscale = factor > 1.0 ? 0.1 * std::log(factor) + 1.0 : 1.0;
     out.inv_freq.resize(static_cast<std::size_t>(half));
@@ -93,8 +93,8 @@ Oracle oracle_yarn(double factor, int dim, double base, double original_max_posi
         // `_yarn_linear_ramp_mask` is the interpolation weight: 0 at `low`, 1 at `high`.
         double ramp = (static_cast<double>(i) - out.low) / (out.high - out.low);
         ramp        = std::min(1.0, std::max(0.0, ramp));
-        out.inv_freq[static_cast<std::size_t>(i)] = interpolation * ramp +
-                                                    extrapolation * (1.0 - ramp);
+        out.inv_freq[static_cast<std::size_t>(i)] =
+            interpolation * ramp + extrapolation * (1.0 - ramp);
     }
     return out;
 }
@@ -111,7 +111,7 @@ void check_shipped_table_matches_math() {
     double worst = 0.0;
     for (int i = 0; i < 32; ++i) {
         const double want = std::pow(1.0e7, -2.0 * i / 64.0);
-        worst = std::max(worst, relative_error(kShipped[i], want));
+        worst             = std::max(worst, relative_error(kShipped[i], want));
     }
     std::printf("  worst relative error of the transcribed shipped table vs 1e7^(-2i/64): %.3e\n",
                 worst);
@@ -127,8 +127,8 @@ void check_disabled_is_untouched() {
         for (int i = 0; i < 32; ++i) {
             const double got = yarn_inv_frequency(p, i);
             worst_table      = std::max(worst_table, relative_error(got, kShipped[i]));
-            worst_math       = std::max(worst_math,
-                                        relative_error(got, std::pow(1.0e7, -2.0 * i / 64.0)));
+            worst_math =
+                std::max(worst_math, relative_error(got, std::pow(1.0e7, -2.0 * i / 64.0)));
         }
         std::printf("  factor %.1f: worst rel. error vs shipped table %.3e, vs double %.3e\n",
                     factor, worst_table, worst_math);
@@ -143,9 +143,9 @@ void check_disabled_is_untouched() {
 // ------------------------------------------------------------------ the enabled path
 void check_enabled_matches_oracle() {
     for (double factor : {2.0, 4.0}) {
-        const YarnParams p    = params_for(factor);
-        const Oracle oracle   = oracle_yarn(factor, 64, 1.0e7, 262144.0, 32.0, 1.0);
-        const YarnRamp ramp   = yarn_ramp(p);
+        const YarnParams p  = params_for(factor);
+        const Oracle oracle = oracle_yarn(factor, 64, 1.0e7, 262144.0, 32.0, 1.0);
+        const YarnRamp ramp = yarn_ramp(p);
         check(ramp.low == oracle.low && ramp.high == oracle.high,
               "ramp boundaries equal the reference in PAIR space");
         std::printf("  factor %.1f: ramp [%.0f, %.0f]\n", factor, ramp.low, ramp.high);
@@ -211,7 +211,7 @@ void check_known_factor_and_position() {
             // actually degrades retrieval, and it grows with position.
             worst_angle = std::max(worst_angle, std::fabs(got_angle - want_angle) /
                                                     std::max(1.0, std::fabs(want_angle)));
-            worst_cos   = std::max(worst_cos, std::fabs(std::cos(got_angle) - std::cos(want_angle)));
+            worst_cos = std::max(worst_cos, std::fabs(std::cos(got_angle) - std::cos(want_angle)));
         }
         std::printf("  position %7lld: worst angle error %.3e rad, worst |dcos| %.3e\n", position,
                     worst_angle, worst_cos);
@@ -222,18 +222,16 @@ void check_known_factor_and_position() {
 // ------------------------------------------------------------------ degenerate inputs
 void check_degenerate_ramp() {
     YarnParams p;
-    p.factor     = 2.0F;
-    p.beta_fast  = 1.0F;  // both bounds land on the same pair: high - low collapses
-    p.beta_slow  = 1.0F;
+    p.factor            = 2.0F;
+    p.beta_fast         = 1.0F; // both bounds land on the same pair: high - low collapses
+    p.beta_slow         = 1.0F;
     const YarnRamp ramp = yarn_ramp(p);
-    bool finite         = std::isfinite(ramp.low) && std::isfinite(ramp.high) &&
-                  ramp.high > ramp.low;
+    bool finite = std::isfinite(ramp.low) && std::isfinite(ramp.high) && ramp.high > ramp.low;
     for (int i = 0; i < 32; ++i) {
         if (!std::isfinite(yarn_inv_frequency(p, ramp, i))) { finite = false; }
     }
     check(finite, "a collapsed ramp stays finite and keeps high > low");
 }
-
 
 // ------------------------------------------------------------------ launch resolution
 // The launcher resolves the Op's request into the per-launch device struct
@@ -264,8 +262,9 @@ void check_resolution_enabled_matches_oracle() {
         const Oracle oracle = oracle_yarn(factor, 64, 1.0e7, 262144.0, 32.0, 1.0);
         double worst        = 0.0;
         for (int pair = 0; pair < 32; ++pair) {
-            worst = std::max(worst, relative_error(device.inv_frequency[pair],
-                                                   oracle.inv_freq[static_cast<std::size_t>(pair)]));
+            worst =
+                std::max(worst, relative_error(device.inv_frequency[pair],
+                                               oracle.inv_freq[static_cast<std::size_t>(pair)]));
         }
         std::printf("  factor %.1f: resolved table worst rel. error %.3e, scale %.9f\n", factor,
                     worst, static_cast<double>(device.scale));
@@ -295,7 +294,7 @@ void check_resolution_rejects_unsupported() {
           "Text MRoPE is accepted");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     std::printf("YaRN frequency math (host, double-precision oracle)\n");

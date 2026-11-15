@@ -117,8 +117,8 @@ void require_exl3_bank(const Weight& weight, std::int32_t experts, std::int32_t 
     if (weight.qtype != QType::EXL3 || weight.layout != QuantLayout::Exl3ExpertBank ||
         weight.ndim != 2 || weight.payload == nullptr || weight.exl3_experts != experts ||
         weight.exl3_rows_per_expert != rows_per_expert || weight.n != experts * rows_per_expert ||
-        weight.k != k || weight.exl3_codebook > 2 ||
-        weight.exl3_trellis_offset % 256 != 0 || !aligned_to(weight.payload, 256)) {
+        weight.k != k || weight.exl3_codebook > 2 || weight.exl3_trellis_offset % 256 != 0 ||
+        !aligned_to(weight.payload, 256)) {
         throw std::invalid_argument(std::string("sparse_moe: invalid EXL3 bank ") + name);
     }
     ranges.push_back(address_range(weight.payload, weight.payload_bytes, name));
@@ -156,12 +156,8 @@ void require_quantized(const Weight& weight, std::int32_t n, std::int32_t k, con
 // directory; exactly the two contract geometries are admitted.
 SparseMoeShape resolve_exl3_shape(const SparseMoeWeights& weights) {
     const int experts = weights.exl3_routed_gate.exl3_experts;
-    if (experts == kSparseMoe35B.experts) {
-        return kSparseMoe35B;
-    }
-    if (experts == kSparseMoe125B.experts) {
-        return kSparseMoe125B;
-    }
+    if (experts == kSparseMoe35B.experts) { return kSparseMoe35B; }
+    if (experts == kSparseMoe125B.experts) { return kSparseMoe125B; }
     throw std::invalid_argument("sparse_moe: unsupported EXL3 expert count " +
                                 std::to_string(experts) + " (admitted: 256, 512)");
 }
@@ -172,8 +168,8 @@ void require_fp8_shared(const Weight& weight, std::int32_t n, std::int32_t k, co
     const detail::Fp8WeightGeometry geometry = detail::validate_fp8_weight(weight, name);
     ranges.push_back(
         address_range(weight.qdata, geometry.code_plane_bytes, std::string(name) + " code"));
-    ranges.push_back(address_range(weight.scales, geometry.scale_plane_bytes,
-                                   std::string(name) + " scales"));
+    ranges.push_back(
+        address_range(weight.scales, geometry.scale_plane_bytes, std::string(name) + " scales"));
 }
 
 void validate_weights(const SparseMoeWeights& weights, std::vector<AddressRange>& ranges,
@@ -184,7 +180,8 @@ void validate_weights(const SparseMoeWeights& weights, std::vector<AddressRange>
     // SP-7 EXL3 route: a non-null gate bank payload marks the route; the fused and warm
     // banks stay null, and the route is untiered until the SP-4 variable-extent change.
     if (exl3_route) {
-        if (weights.routed_gate_up.qdata != nullptr || weights.warm_routed_gate_up.qdata != nullptr ||
+        if (weights.routed_gate_up.qdata != nullptr ||
+            weights.warm_routed_gate_up.qdata != nullptr ||
             weights.warm_routed_down.qdata != nullptr || weights.tiered_hot_experts != 0) {
             throw std::invalid_argument(
                 "sparse_moe: the EXL3 route keeps the fused and warm banks null and untiered");
@@ -194,8 +191,8 @@ void validate_weights(const SparseMoeWeights& weights, std::vector<AddressRange>
             throw std::invalid_argument(
                 "sparse_moe: 3INST EXL3 banks are refused until a qualified route exists");
         }
-        require_exl3_bank(weights.exl3_routed_gate, shape.experts, shape.intermediate,
-                          shape.hidden, "exl3_routed_gate", ranges);
+        require_exl3_bank(weights.exl3_routed_gate, shape.experts, shape.intermediate, shape.hidden,
+                          "exl3_routed_gate", ranges);
         require_exl3_bank(weights.exl3_routed_up, shape.experts, shape.intermediate, shape.hidden,
                           "exl3_routed_up", ranges);
         require_exl3_bank(weights.routed_down, shape.experts, shape.hidden, shape.intermediate,
@@ -244,8 +241,8 @@ void validate_weights(const SparseMoeWeights& weights, std::vector<AddressRange>
     // in expert order. An untiered bank keeps full-bank device shapes and null warm twins.
     const auto warm_gate_up_null = weights.warm_routed_gate_up.qdata == nullptr &&
                                    weights.warm_routed_gate_up.scales == nullptr;
-    const auto warm_down_null    = weights.warm_routed_down.qdata == nullptr &&
-                                  weights.warm_routed_down.scales == nullptr;
+    const auto warm_down_null =
+        weights.warm_routed_down.qdata == nullptr && weights.warm_routed_down.scales == nullptr;
     if (weights.tiered_hot_experts == 0) {
         if (!warm_gate_up_null || !warm_down_null) {
             throw std::invalid_argument("sparse_moe: warm twins require a tiered boundary");
@@ -264,8 +261,7 @@ void validate_weights(const SparseMoeWeights& weights, std::vector<AddressRange>
     if (warm_gate_up_null || warm_down_null) {
         throw std::invalid_argument("sparse_moe: tiered banks require warm twins");
     }
-    require_quantized(weights.routed_gate_up, hot * kExpertRows, kHidden, "routed_gate_up",
-                      ranges);
+    require_quantized(weights.routed_gate_up, hot * kExpertRows, kHidden, "routed_gate_up", ranges);
     require_quantized(weights.routed_down, hot * kHidden, kIntermediate, "routed_down", ranges);
     require_quantized(weights.warm_routed_gate_up, warm * kExpertRows, kHidden,
                       "warm_routed_gate_up", ranges);
@@ -327,8 +323,8 @@ void sparse_moe(const Tensor& x, const SparseMoeWeights& weights, SparseMoeEpilo
     if (epilogue != SparseMoeEpilogue::AddResidual) {
         throw std::invalid_argument("sparse_moe: unsupported epilogue");
     }
-    const bool exl3_route = weights.exl3_routed_gate.payload != nullptr;
-    SparseMoeShape shape = exl3_route ? resolve_exl3_shape(weights) : kSparseMoe35B;
+    const bool exl3_route     = weights.exl3_routed_gate.payload != nullptr;
+    SparseMoeShape shape      = exl3_route ? resolve_exl3_shape(weights) : kSparseMoe35B;
     const std::int32_t tokens = require_tensor(x, "x", shape.hidden);
     if (require_tensor(destination, "destination", shape.hidden) != tokens) {
         throw std::invalid_argument("sparse_moe: x and destination token counts must match");
@@ -361,10 +357,11 @@ void sparse_moe(const Tensor& x, const SparseMoeWeights& weights, SparseMoeEpilo
                                                            weights.routed_down.qtype)
                        .workspace_bytes;
     } else {
-        required = detail::resolve_sparse_moe_decode_plan(
-                       exl3_route ? QType::EXL3 : weights.routed_gate_up.qtype,
-                       exl3_route ? QType::EXL3 : weights.routed_down.qtype, SparseMoeHints{}, shape)
-                       .workspace_bytes;
+        required =
+            detail::resolve_sparse_moe_decode_plan(
+                exl3_route ? QType::EXL3 : weights.routed_gate_up.qtype,
+                exl3_route ? QType::EXL3 : weights.routed_down.qtype, SparseMoeHints{}, shape)
+                .workspace_bytes;
     }
     if (workspace.storage().data == nullptr || workspace.capacity() < required ||
         workspace.used() > workspace.capacity() - required) {

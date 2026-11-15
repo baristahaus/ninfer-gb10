@@ -25,11 +25,10 @@ inline bool mxfp8_block_weight(const Weight& weight) {
 
 inline void require_weight(const Weight& weight, int rows, int columns, const char* label,
                            WeightFormats formats = WeightFormats::Bf16) {
-    const bool bf16 = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
-    const bool allowed =
-        bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight)) ||
-        (formats == WeightFormats::Bf16Fp8OrMxfp8 &&
-         (fp8_row_weight(weight) || mxfp8_block_weight(weight)));
+    const bool bf16    = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
+    const bool allowed = bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight)) ||
+                         (formats == WeightFormats::Bf16Fp8OrMxfp8 &&
+                          (fp8_row_weight(weight) || mxfp8_block_weight(weight)));
     if (!allowed || weight.qdata == nullptr || weight.n != rows || weight.k != columns) {
         throw std::invalid_argument(label);
     }

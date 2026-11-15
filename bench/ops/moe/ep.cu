@@ -155,11 +155,11 @@ int main(int argc, char** argv) try {
                     const bool has_shared = o.operation != "routed";
                     auto bytes            = has_shared
                                                 ? ops::routed_swiglu_workspace_capacity_bytes(
-                                           profile.routed, profile.shared, weights.subset().kind,
-                                           DType::BF16, ops::MoeEpilogue::Write, m, m)
+                                                      profile.routed, profile.shared, weights.subset().kind,
+                                                      DType::BF16, ops::MoeEpilogue::Write, m, m)
                                                 : ops::routed_swiglu_workspace_capacity_bytes(
-                                           profile.routed, weights.subset().kind, DType::BF16,
-                                           ops::MoeEpilogue::Write, m, m);
+                                                      profile.routed, weights.subset().kind, DType::BF16,
+                                                      ops::MoeEpilogue::Write, m, m);
                     if (o.operation == "complete")
                         bytes = ops::topk_softmax_swiglu_moe_workspace_capacity_bytes(
                             profile, weights.subset().kind, ops::MoeEpilogue::Write, m, m);

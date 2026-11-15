@@ -137,9 +137,9 @@ void causal_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
  * Read-only single-sequence causal attention over an already populated cache.
  *
  * q/out are contiguous BF16 [256,24|16,T], positions is contiguous sequential device I32 [T],
- * and cache geometry, visible rows, scale, numerical semantics, envelope, alias, and workspace rules
- * are the same as causal_softmax_attention. The Op accepts no new K/V and leaves every cache byte
- * unchanged; out is completely overwritten.
+ * and cache geometry, visible rows, scale, numerical semantics, envelope, alias, and workspace
+ * rules are the same as causal_softmax_attention. The Op accepts no new K/V and leaves every cache
+ * byte unchanged; out is completely overwritten.
  */
 void causal_softmax_attention_cached(const Tensor& q, const Tensor& positions,
                                      AttentionHeadGeometry geometry, float scale,

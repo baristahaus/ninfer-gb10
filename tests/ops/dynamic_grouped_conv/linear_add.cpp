@@ -77,8 +77,8 @@ std::vector<std::uint16_t> make_base_kernel(std::int32_t h) {
                 const float center =
                     side == 1 ? (tap == 0 ? 0.375F : -0.15625F) : (tap == 0 ? -0.25F : 0.0625F);
                 const float variation =
-                    signed_pattern(static_cast<std::uint32_t>((side * kTaps + tap) * h + row),
-                                   211U, 1.0F / 32768.0F);
+                    signed_pattern(static_cast<std::uint32_t>((side * kTaps + tap) * h + row), 211U,
+                                   1.0F / 32768.0F);
                 result[static_cast<std::size_t>(side * kTaps + tap) * h + row] =
                     f32_to_bf16(center + variation);
             }
@@ -125,8 +125,8 @@ std::vector<std::int32_t> sampled_rows(std::int32_t h) {
 }
 
 std::vector<double> projection_oracle(const quantized_weight::PackedWeight& weight,
-                                      const std::vector<float>& activation,
-                                      std::int32_t input_rows, std::int32_t h) {
+                                      const std::vector<float>& activation, std::int32_t input_rows,
+                                      std::int32_t h) {
     const auto rows = sampled_rows(h);
     std::vector<double> projection(rows.size() * kMaximumCols);
     for (std::size_t sample = 0; sample < rows.size(); ++sample) {
@@ -172,11 +172,11 @@ std::vector<double> result_oracle(std::int32_t h, const std::vector<double>& pro
     return result;
 }
 
-std::vector<double> gather_actual(std::int32_t h, const void* device, std::int32_t width, std::int32_t batch_size) {
-    const std::int32_t cols = width * batch_size;
-    const std::vector<double> full =
-        from_device_bf16(device, static_cast<std::size_t>(h) * cols);
-    const auto rows = sampled_rows(h);
+std::vector<double> gather_actual(std::int32_t h, const void* device, std::int32_t width,
+                                  std::int32_t batch_size) {
+    const std::int32_t cols        = width * batch_size;
+    const std::vector<double> full = from_device_bf16(device, static_cast<std::size_t>(h) * cols);
+    const auto rows                = sampled_rows(h);
     std::vector<double> result;
     result.reserve(rows.size() * static_cast<std::size_t>(cols));
     for (const std::int32_t row : rows) {
@@ -187,7 +187,8 @@ std::vector<double> gather_actual(std::int32_t h, const void* device, std::int32
     return result;
 }
 
-int run_profile(std::int32_t input_rows, std::int32_t h, std::span<const std::pair<int, int>> cases) {
+int run_profile(std::int32_t input_rows, std::int32_t h,
+                std::span<const std::pair<int, int>> cases) {
     const std::vector<float> activation = make_activation(input_rows);
     std::vector<std::uint16_t> activation_bits(activation.size());
     std::transform(activation.begin(), activation.end(), activation_bits.begin(), f32_to_bf16);
@@ -207,7 +208,7 @@ int run_profile(std::int32_t input_rows, std::int32_t h, std::span<const std::pa
     DeviceBuffer activation_device = to_device(activation_bits);
     DeviceBuffer base_device       = to_device(base_kernel);
     DeviceBuffer delta_device      = to_device(finish_delta);
-    const std::size_t capacity = ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
+    const std::size_t capacity     = ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
         input_rows, 2, 16, 1, kMaximumBatch);
 
     Tensor base(base_device.span(), DType::BF16, {h, kTaps, kSides});
@@ -233,7 +234,7 @@ int run_profile(std::int32_t input_rows, std::int32_t h, std::span<const std::pa
         const auto verify     = [&](const std::string& label) {
             failures +=
                 verify_reduction(label, gather_actual(h, residual_device.data(), width, batch_size),
-                                     expected, kCriterion);
+                                 expected, kCriterion);
             failures += residual_device.verify_guards(label);
             failures += scratch.verify_guards(label + " workspace");
             if (workspace.used() != 0 || workspace.peak_used() > exact) {
@@ -304,11 +305,10 @@ void add_linear_conv_add_cases(ninfer::test::OpSuite& suite) {
                                      "/b" + std::to_string(batch),
                                  {{"execution", graph ? "graph" : "eager"}, {"format", "q8"}}});
             }
-        suite.add(std::move(cases),
-                  [shapes = std::move(shapes), input_rows, h](auto selected) {
-                      std::vector<std::pair<int, int>> cases;
-                      for (auto i : selected) cases.push_back(shapes[i]);
-                      return run_profile(input_rows, h, cases);
-                  });
+        suite.add(std::move(cases), [shapes = std::move(shapes), input_rows, h](auto selected) {
+            std::vector<std::pair<int, int>> cases;
+            for (auto i : selected) cases.push_back(shapes[i]);
+            return run_profile(input_rows, h, cases);
+        });
     }
 }

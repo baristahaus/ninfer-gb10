@@ -280,7 +280,8 @@ int run_shape(std::string_view label, ActivationCompute activation_compute,
     const std::vector<std::uint16_t> activation_bits =
         make_activation(shape.k, maximum->t, shape.seed + 1U, activation_compute);
 
-    DeviceBuffer device_activation(cuda_environment().context.device(), activation_bits.size() * sizeof(std::uint16_t));
+    DeviceBuffer device_activation(cuda_environment().context.device(),
+                                   activation_bits.size() * sizeof(std::uint16_t));
     device_activation.copy_from_host(activation_bits.data(), device_activation.size());
     DeviceBuffer device_weight(cuda_environment().context.device(), host_weight.payload.size());
     device_weight.copy_from_host(host_weight.payload.data(), device_weight.size());
@@ -311,10 +312,10 @@ int run_shape(std::string_view label, ActivationCompute activation_compute,
         DecodeGraphDefinition graph_definition;
         DecodeGraphExecutable graph;
         if (invocation.graph_replay) graph_context = std::make_unique<DeviceContext>();
-        const auto execution = graph_context ? graph_context->execution_view()
-                                            : cuda_environment().default_execution;
+        const auto execution =
+            graph_context ? graph_context->execution_view() : cuda_environment().default_execution;
         const cudaStream_t stream = execution.stream();
-const auto launch         = [&] {
+        const auto launch         = [&] {
             if (invocation.call_form == CallForm::A16Convenience) {
                 ops::linear(input, weight, destination, stream);
             } else {

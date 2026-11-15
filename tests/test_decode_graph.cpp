@@ -97,7 +97,6 @@ int check_child_graph(ninfer::DeviceContext& device) {
     return failures;
 }
 
-
 // A topology change is refused in place by CUDA (cudaGraphExecUpdateErrorTopologyChanged), and a
 // changed kernel-node parameter set is refused with cudaGraphExecUpdateErrorParametersChanged. Both
 // are documented as recoverable: the caller instantiates a new executable. This case proves the
@@ -122,8 +121,9 @@ int check_reinstantiate(ninfer::DeviceContext& device) {
     device.synchronize();
     failures += expect_value(storage.data(), 0x11111111U, "graph before re-instantiation");
 
-    // The fix: an update CUDA refuses in place rebuilds the executable. Before the fix this threw and
-    // the caller's engine died; the launch below is the proof that a usable executable came back.
+    // The fix: an update CUDA refuses in place rebuilds the executable. Before the fix this threw
+    // and the caller's engine died; the launch below is the proof that a usable executable came
+    // back.
     executable.update(pair);
     executable.launch(device.stream());
     device.synchronize();
@@ -138,8 +138,8 @@ int check_reinstantiate(ninfer::DeviceContext& device) {
     return failures;
 }
 
-// Report which update results this driver produces for the mutations a re-instantiation must survive,
-// so a passing run says which recoverable code was actually exercised.
+// Report which update results this driver produces for the mutations a re-instantiation must
+// survive, so a passing run says which recoverable code was actually exercised.
 int probe_update_results(ninfer::DeviceContext& device) {
     ninfer::DeviceBuffer storage(device.device(), sizeof(std::uint32_t));
     ninfer::PinnedHostBuffer host(sizeof(std::uint32_t));
@@ -163,13 +163,14 @@ int probe_update_results(ninfer::DeviceContext& device) {
         cudaGraphExecUpdateResultInfo info{};
         const cudaError_t err = cudaGraphExecUpdate(exec, graphs[target], &info);
         const int code        = static_cast<int>(info.result);
-        std::cout << "update to mutation " << target << ": " << cudaGetErrorName(err)
-                  << ", result " << code << '\n';
+        std::cout << "update to mutation " << target << ": " << cudaGetErrorName(err) << ", result "
+                  << code << '\n';
         // A refusal is reported as cudaErrorGraphExecUpdateFailure *with* a non-success result —
         // that is precisely the recoverable case the caller must handle by re-instantiating.
-        // Requiring `err == cudaSuccess` here, as the first version did, meant a refusal could never
-        // be counted: the driver refused mutation 2 with result 2 (TopologyChanged) and the probe
-        // still reported that nothing had been refused, which is the opposite of its own output.
+        // Requiring `err == cudaSuccess` here, as the first version did, meant a refusal could
+        // never be counted: the driver refused mutation 2 with result 2 (TopologyChanged) and the
+        // probe still reported that nothing had been refused, which is the opposite of its own
+        // output.
         if (err == cudaErrorGraphExecUpdateFailure) {
             ++recoverable;
         } else {
@@ -180,7 +181,8 @@ int probe_update_results(ninfer::DeviceContext& device) {
     }
     for (auto& graph : graphs) { CUDA_CHECK(cudaGraphDestroy(graph)); }
     if (recoverable == 0) {
-        std::cerr << "this driver refused no mutation in place; the recoverable path was not exercised\n";
+        std::cerr
+            << "this driver refused no mutation in place; the recoverable path was not exercised\n";
         return -1;
     }
     return 0;
@@ -192,7 +194,8 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err) || (count_err == cudaSuccess && count == 0)) {
-        std::cerr << "SKIP: no usable CUDA device; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; supply one with CUDA_VISIBLE_DEVICES (sm_121a "
+                     "on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     if (count_err != cudaSuccess) {

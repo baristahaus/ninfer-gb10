@@ -137,8 +137,7 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
     if (fp8_weight) {
         (void)common::validate_fp8_weight(gate_up_weight, "fp8 linear_swiglu");
         if (w.n == 1280 && w.k == 2560) {
-            detail::fp8_linear_swiglu_flash_next_launch(x, gate_up_weight, out,
-                                                        execution.stream());
+            detail::fp8_linear_swiglu_flash_next_launch(x, gate_up_weight, out, execution.stream());
             return;
         }
         detail::fp8_linear_swiglu_dispatch(x, gate_up_weight, out, policy, ws, execution.stream());
@@ -166,7 +165,7 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
         if (w.layout != QuantLayout::Exl3Dense) {
             throw std::invalid_argument("linear_swiglu: EXL3 requires the dense layout");
         }
-        auto scope = ws.scope();
+        auto scope           = ws.scope();
         const auto gate_span = ws.alloc_bytes(
             static_cast<std::size_t>(out.ne[0]) * static_cast<std::size_t>(t) * 2, 256);
         const auto up_span = ws.alloc_bytes(
@@ -174,7 +173,7 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
         Tensor gate_out(gate_span.data, execution.device(), DType::BF16, {out.ne[0], t});
         Tensor up_out(up_span.data, execution.device(), DType::BF16, {out.ne[0], t});
         const Weight gate_half = detail::exl3_dense_slice(gate_up_weight, 0, out.ne[0]);
-        const Weight up_half = detail::exl3_dense_slice(gate_up_weight, out.ne[0], out.ne[0]);
+        const Weight up_half   = detail::exl3_dense_slice(gate_up_weight, out.ne[0], out.ne[0]);
         linear(x, gate_half, gate_out, policy, ws, execution);
         linear(x, up_half, up_out, policy, ws, execution);
         silu_mul(gate_out, up_out, out, execution);

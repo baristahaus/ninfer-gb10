@@ -23,6 +23,7 @@ struct Shape {
         return {hidden, groups, groups * kTaps * kSides};
     }
 };
+
 inline constexpr const char* kPrepareOp = "dynamic grouped conv prepare";
 inline constexpr const char* kAddOp     = "linear dynamic grouped conv add";
 

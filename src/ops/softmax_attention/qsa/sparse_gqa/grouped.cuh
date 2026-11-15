@@ -6,7 +6,7 @@
 namespace ninfer::ops::detail::qsa {
 template <KvCacheStorage Storage, int N, int Parts, int Queries, bool Vector, SparseGqaLoad Load,
           int KvHeads>
-__global__ __launch_bounds__(Queries* Parts * 24) void sparse_gqa_grouped_kernel(
+__global__ __launch_bounds__(Queries * Parts * 24) void sparse_gqa_grouped_kernel(
     const __grid_constant__ SparseGqaKernelArguments<KvHeads> a) {
     static_assert(Queries % 4 == 0 && N % 16 == 0 && 256 % (Parts * 8) == 0);
     // Twelve heads per query occupy consecutive MMA rows, without per-query padding.

@@ -40,7 +40,7 @@ using Hot =
 using PrefillVector = Bf16PleKvSchedule<Bf16ScheduleInstance<
     Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::TokenFast, 1, 3>, 2560>>;
 using WarpLarge     = Bf16PleKvSchedule<Bf16ScheduleInstance<
-        Bf16A16TmaMmaSchedule<256, 128, 64, 128, 32, 2, 1, Bf16MmaRaster::Grouped, 5, 1>, 2560>>;
+    Bf16A16TmaMmaSchedule<256, 128, 64, 128, 32, 2, 1, Bf16MmaRaster::Grouped, 5, 1>, 2560>>;
 
 void launch_prefill_vector(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
     launch_bf16_a16_tma_mma<PrefillVector>(

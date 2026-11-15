@@ -52,7 +52,7 @@ int test_mixed(Fixture& fixture, CudaExecutionView execution, CpuExecutionView c
         const auto reference = fixture.contribution(batch, ExpertSubsetKind::All, {}, true, true);
         const auto actual    = from_device_bf16(destination.data, reference.size());
         const auto label     = "CPU/GPU routed + shared + residual T=" + std::to_string(tokens) +
-                           " partition=" + std::to_string(partition);
+                               " partition=" + std::to_string(partition);
         failures += verify_reduction(label, actual, reference, kContributionA16);
         failures += output.verify_guards(label) + gpu_scratch.verify_guards(label) +
                     cpu_contribution.verify_guards(label) + gpu_contribution.verify_guards(label);

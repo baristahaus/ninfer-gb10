@@ -1,12 +1,12 @@
 // The row-parallel head's gather: rank r's block of the vocabulary is zero-padded into the full
 // buffer, and the cross-rank sum turns the two padded blocks into the concatenation of the halves.
 //
-// The arithmetic is exact by construction — the exchange stores RNE_bf16(float(x) + 0.0f), and a BF16
-// value round-trips through float and back unchanged — so the host cases below check the LAYOUT:
-// which rows each rank writes, which rows it must leave zero, and how the gather splits into
-// exchanges that fit the mailbox slot. They use an independent BF16 round-to-nearest-even conversion
-// rather than the exchange's own, because a layout check that borrows the implementation's rounding
-// can agree with a layout that is wrong.
+// The arithmetic is exact by construction — the exchange stores RNE_bf16(float(x) + 0.0f), and a
+// BF16 value round-trips through float and back unchanged — so the host cases below check the
+// LAYOUT: which rows each rank writes, which rows it must leave zero, and how the gather splits
+// into exchanges that fit the mailbox slot. They use an independent BF16 round-to-nearest-even
+// conversion rather than the exchange's own, because a layout check that borrows the
+// implementation's rounding can agree with a layout that is wrong.
 //
 // The device cases run the real gather between two devices and are skipped when the machine has
 // fewer. The refusal cases are host-only: they are the plan's, and the plan is pure.
@@ -82,8 +82,8 @@ std::size_t offset_of(const LogitsGatherPlan& plan, int rank, int row_in_block, 
            static_cast<std::size_t>(row_in_block);
 }
 
-// One rank's zero-fill-then-copy into its own full buffer: the buffer starts zeroed, the rank writes
-// only its block, so every other row is an exact BF16 zero for the sum that follows.
+// One rank's zero-fill-then-copy into its own full buffer: the buffer starts zeroed, the rank
+// writes only its block, so every other row is an exact BF16 zero for the sum that follows.
 std::vector<std::uint16_t> padded_full(const LogitsGatherPlan& plan, int rank,
                                        const std::vector<std::uint16_t>& local) {
     std::vector<std::uint16_t> full(
@@ -106,9 +106,8 @@ std::vector<std::uint16_t> concatenation(const LogitsGatherPlan& plan,
         for (int column = 0; column < plan.columns; ++column) {
             for (int row = 0; row < plan.rank_rows; ++row) {
                 expected[offset_of(plan, rank, row, column)] =
-                    local[static_cast<std::size_t>(rank)][static_cast<std::size_t>(column) *
-                                                              plan.rank_rows +
-                                                          row];
+                    local[static_cast<std::size_t>(rank)]
+                         [static_cast<std::size_t>(column) * plan.rank_rows + row];
             }
         }
     }
@@ -120,16 +119,15 @@ std::vector<std::uint16_t> concatenation(const LogitsGatherPlan& plan,
 std::array<std::vector<std::uint16_t>, 2> distinct_halves(const LogitsGatherPlan& plan) {
     std::array<std::vector<std::uint16_t>, 2> local;
     for (int rank = 0; rank < 2; ++rank) {
-        local[static_cast<std::size_t>(rank)].resize(
-            static_cast<std::size_t>(plan.rank_rows) * static_cast<std::size_t>(plan.columns));
+        local[static_cast<std::size_t>(rank)].resize(static_cast<std::size_t>(plan.rank_rows) *
+                                                     static_cast<std::size_t>(plan.columns));
         for (int column = 0; column < plan.columns; ++column) {
             for (int row = 0; row < plan.rank_rows; ++row) {
                 // Small integers: exact in BF16, and distinct across rank, row and column.
                 const int value = 1 + rank * 100 + column * 10 + row;
-                local[static_cast<std::size_t>(rank)][static_cast<std::size_t>(column) *
-                                                           plan.rank_rows +
-                                                       row] =
-                    bf16_rne(static_cast<float>(value));
+                local[static_cast<std::size_t>(rank)]
+                     [static_cast<std::size_t>(column) * plan.rank_rows + row] =
+                         bf16_rne(static_cast<float>(value));
             }
         }
     }
@@ -146,32 +144,37 @@ int exercise_plan() {
                       "the plan does not carry the extents it was given");
     failures += check(plan.bytes_per_column == 16, "a column of 8 BF16 rows is not 16 bytes");
     failures += check(plan.chunk_columns == 3, "the plan splits a gather the slot can carry whole");
-    failures += check(plan.exchanges == 1, "a gather that fits one slot needs more than one exchange");
-    failures += check(plan.chunk_bytes == 48, "one exchange's payload is not 3 columns of 16 bytes");
+    failures +=
+        check(plan.exchanges == 1, "a gather that fits one slot needs more than one exchange");
+    failures +=
+        check(plan.chunk_bytes == 48, "one exchange's payload is not 3 columns of 16 bytes");
 
     // The same gather through a 32-byte slot: two whole columns per exchange, so 3 columns take 2.
     const auto split = plan_logits_gather(8, 4, 0, 3, 32);
     failures += check(split.chunk_columns == 2, "a 32-byte slot carries two 16-byte columns");
-    failures += check(split.exchanges == 2, "3 columns through a 2-column chunk is not 2 exchanges");
+    failures +=
+        check(split.exchanges == 2, "3 columns through a 2-column chunk is not 2 exchanges");
     failures += check(split.chunk_bytes == 32, "the widest split exchange is not 32 bytes");
 
     // A slot that is not a whole multiple of a column still carries whole columns only.
     const auto ragged = plan_logits_gather(8, 4, 1, 5, 40);
-    failures += check(ragged.chunk_columns == 2, "a 40-byte slot carries more than two 16-byte columns");
-    failures += check(ragged.exchanges == 3, "5 columns through a 2-column chunk is not 3 exchanges");
+    failures +=
+        check(ragged.chunk_columns == 2, "a 40-byte slot carries more than two 16-byte columns");
+    failures +=
+        check(ragged.exchanges == 3, "5 columns through a 2-column chunk is not 3 exchanges");
     return failures;
 }
 
 // --- host-only: the padded sum is the concatenation --------------------------------------
 
 int exercise_padded_sum(const std::size_t slot_bytes, const char* label) {
-    int failures = 0;
-    const auto plan = plan_logits_gather(8, 4, 0, 3, slot_bytes);
-    const auto local = distinct_halves(plan);
+    int failures        = 0;
+    const auto plan     = plan_logits_gather(8, 4, 0, 3, slot_bytes);
+    const auto local    = distinct_halves(plan);
     const auto expected = concatenation(plan, local);
 
-    // Simulate the gather exchange by exchange, exactly as the helper walks it: zero the slice, copy
-    // this rank's block of the slice, sum the two ranks' buffers.
+    // Simulate the gather exchange by exchange, exactly as the helper walks it: zero the slice,
+    // copy this rank's block of the slice, sum the two ranks' buffers.
     std::array<std::vector<std::uint16_t>, 2> full{padded_full(plan, 0, local[0]),
                                                    padded_full(plan, 1, local[1])};
     for (int chunk = 0; chunk < plan.exchanges; ++chunk) {
@@ -181,8 +184,9 @@ int exercise_padded_sum(const std::size_t slot_bytes, const char* label) {
             for (int column = first; column < first + count; ++column) {
                 for (int row = 0; row < plan.rank_rows; ++row) {
                     const auto index = offset_of(plan, rank, row, column);
-                    full[static_cast<std::size_t>(rank)][index] = local[static_cast<std::size_t>(rank)]
-                        [static_cast<std::size_t>(column) * plan.rank_rows + row];
+                    full[static_cast<std::size_t>(rank)][index] =
+                        local[static_cast<std::size_t>(rank)]
+                             [static_cast<std::size_t>(column) * plan.rank_rows + row];
                 }
             }
         }
@@ -190,9 +194,9 @@ int exercise_padded_sum(const std::size_t slot_bytes, const char* label) {
         // peer's rows hold this rank's zeros, and this rank's rows hold the peer's zeros.
         for (int column = first; column < first + count; ++column) {
             for (int row = 0; row < plan.vocabulary; ++row) {
-                const auto index = static_cast<std::size_t>(column) *
-                                       static_cast<std::size_t>(plan.vocabulary) +
-                                   static_cast<std::size_t>(row);
+                const auto index =
+                    static_cast<std::size_t>(column) * static_cast<std::size_t>(plan.vocabulary) +
+                    static_cast<std::size_t>(row);
                 const auto sum = bf16_sum(full[0][index], full[1][index]);
                 full[0][index] = sum;
                 full[1][index] = sum;
@@ -206,10 +210,10 @@ int exercise_padded_sum(const std::size_t slot_bytes, const char* label) {
         for (std::size_t index = 0; index < expected.size(); ++index) {
             if (full[static_cast<std::size_t>(rank)][index] != expected[index]) { ++wrong; }
         }
-        failures += check(wrong == 0,
-                          std::string(label) + ": rank " + std::to_string(rank) + " holds " +
-                              std::to_string(wrong) + " of " + std::to_string(expected.size()) +
-                              " elements that are not the concatenation");
+        failures +=
+            check(wrong == 0, std::string(label) + ": rank " + std::to_string(rank) + " holds " +
+                                  std::to_string(wrong) + " of " + std::to_string(expected.size()) +
+                                  " elements that are not the concatenation");
     }
     return failures;
 }
@@ -223,23 +227,21 @@ int exercise_chunked_padded_sum() {
 // --- host-only: the zero-fill leaves the owned block alone -------------------------------
 
 int exercise_owned_block_survives() {
-    int failures = 0;
+    int failures     = 0;
     const auto plan  = plan_logits_gather(8, 4, 0, 3, 1024);
     const auto local = distinct_halves(plan);
     for (int rank = 0; rank < 2; ++rank) {
-        // Zero-fill the whole buffer first, then copy this rank's block back. The copy has to be the
-        // last writer of the owned rows, or the zero-fill would erase them.
-        auto full = padded_full(plan, rank, local[static_cast<std::size_t>(rank)]);
-        std::size_t owned_wrong = 0;
+        // Zero-fill the whole buffer first, then copy this rank's block back. The copy has to be
+        // the last writer of the owned rows, or the zero-fill would erase them.
+        auto full                = padded_full(plan, rank, local[static_cast<std::size_t>(rank)]);
+        std::size_t owned_wrong  = 0;
         std::size_t peer_nonzero = 0;
         for (int column = 0; column < plan.columns; ++column) {
             for (int row = 0; row < plan.rank_rows; ++row) {
                 const auto owned = offset_of(plan, rank, row, column);
                 const auto peer  = offset_of(plan, 1 - rank, row, column);
-                if (full[owned] !=
-                    local[static_cast<std::size_t>(rank)][static_cast<std::size_t>(column) *
-                                                              plan.rank_rows +
-                                                          row]) {
+                if (full[owned] != local[static_cast<std::size_t>(rank)]
+                                        [static_cast<std::size_t>(column) * plan.rank_rows + row]) {
                     ++owned_wrong;
                 }
                 if (full[peer] != 0) { ++peer_nonzero; }
@@ -258,8 +260,8 @@ int exercise_owned_block_survives() {
 int exercise_refusals() {
     int failures = 0;
 
-    // One column does not fit the slot. This is the case chunking cannot fix, and the message has to
-    // name both sizes or the caller cannot tell what to resize.
+    // One column does not fit the slot. This is the case chunking cannot fix, and the message has
+    // to name both sizes or the caller cannot tell what to resize.
     try {
         (void)plan_logits_gather(8, 4, 0, 3, 8);
         failures += check(false, "a slot smaller than one column was accepted");
@@ -272,9 +274,9 @@ int exercise_refusals() {
     }
 
     // The vocabulary is not two rank halves: the concatenation would not cover it.
-    failures += expect_throws<std::invalid_argument>(
-        [] { (void)plan_logits_gather(8, 3, 0, 1, 1024); },
-        "a vocabulary that is not two rank halves");
+    failures +=
+        expect_throws<std::invalid_argument>([] { (void)plan_logits_gather(8, 3, 0, 1, 1024); },
+                                             "a vocabulary that is not two rank halves");
 
     // A column that is not whole 16-byte exchange units cannot be exchanged at all.
     failures += expect_throws<std::invalid_argument>(
@@ -283,8 +285,7 @@ int exercise_refusals() {
 
     // A rank outside the pair.
     failures += expect_throws<std::invalid_argument>(
-        [] { (void)plan_logits_gather(8, 4, 2, 1, 1024); },
-        "a rank outside the pair");
+        [] { (void)plan_logits_gather(8, 4, 2, 1, 1024); }, "a rank outside the pair");
     return failures;
 }
 
@@ -309,9 +310,9 @@ int exercise_device_gather(ninfer::ExecutionContext& context, std::int32_t kColu
     failures += check(group.logits[0].data != group.logits[1].data,
                       "the two ranks share one logits buffer");
 
-    const auto plan = plan_logits_gather(kVocabulary, kRankRows, 0, kColumns,
-                                         group.mailbox->max_bytes());
-    const auto local = distinct_halves(plan);
+    const auto plan =
+        plan_logits_gather(kVocabulary, kRankRows, 0, kColumns, group.mailbox->max_bytes());
+    const auto local    = distinct_halves(plan);
     const auto expected = concatenation(plan, local);
 
     std::array<ninfer::DeviceBuffer, 2> scratch;
@@ -328,13 +329,13 @@ int exercise_device_gather(ninfer::ExecutionContext& context, std::int32_t kColu
     }
 
     // Both ranks issue the gather, each on its own stream, then both are synchronized: the exchange
-    // kernels meet on the mailbox. The slot index is the CALLER's exchange counter and the two ranks
-    // must agree on it, so each rank starts at 0 -- a slot shared across the two calls would start
-    // rank 1 where rank 0 finished and the two would wait on different mailbox slots.
+    // kernels meet on the mailbox. The slot index is the CALLER's exchange counter and the two
+    // ranks must agree on it, so each rank starts at 0 -- a slot shared across the two calls would
+    // start rank 1 where rank 0 finished and the two would wait on different mailbox slots.
     for (int rank = 0; rank < 2; ++rank) {
         const CudaDeviceScope scope(context.device(rank).device());
-        Tensor local_view{scratch[static_cast<std::size_t>(rank)].span(), DType::BF16,
-                          {kRankRows, kColumns}};
+        Tensor local_view{
+            scratch[static_cast<std::size_t>(rank)].span(), DType::BF16, {kRankRows, kColumns}};
         std::size_t slot = 0;
         ninfer::models::qwen3_5::execution::all_gather_logits(
             group, rank, slot, local_view, group.logits[static_cast<std::size_t>(rank)],
@@ -357,17 +358,17 @@ int exercise_device_gather(ninfer::ExecutionContext& context, std::int32_t kColu
         const CudaDeviceScope scope(context.device(rank).device());
         std::vector<std::uint16_t> host(expected.size(), 0);
         failures += check(cudaMemcpy(host.data(), group.logits[static_cast<std::size_t>(rank)].data,
-                                     host.size() * sizeof(std::uint16_t), cudaMemcpyDeviceToHost) ==
-                              cudaSuccess,
+                                     host.size() * sizeof(std::uint16_t),
+                                     cudaMemcpyDeviceToHost) == cudaSuccess,
                           "rank " + std::to_string(rank) + "'s gathered logits could not be read");
         std::size_t wrong = 0;
         for (std::size_t index = 0; index < expected.size(); ++index) {
             if (host[index] != expected[index]) { ++wrong; }
         }
-        failures += check(wrong == 0,
-                          "rank " + std::to_string(rank) + " gathered " + std::to_string(wrong) +
-                              " of " + std::to_string(expected.size()) +
-                              " elements that are not the concatenation of the two halves");
+        failures +=
+            check(wrong == 0, "rank " + std::to_string(rank) + " gathered " +
+                                  std::to_string(wrong) + " of " + std::to_string(expected.size()) +
+                                  " elements that are not the concatenation of the two halves");
     }
     return failures;
 }

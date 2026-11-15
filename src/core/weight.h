@@ -20,9 +20,9 @@ enum class QType : std::uint16_t {
     NF4_G16_E4M3FN               = 9,
     FP8_E4M3FN_BLOCK128X128_BF16 = 10,
     // Raw E4M3FN payload with no per-row or per-block scale plane; the Flash-Next PLE table.
-    FP8_E4M3FN                   = 11,
-    EXL3                         = 12,
-    MXFP8                        = 13,
+    FP8_E4M3FN = 11,
+    EXL3       = 12,
+    MXFP8      = 13,
 };
 
 enum class QuantLayout : std::uint16_t {
@@ -70,10 +70,10 @@ struct Weight {
     // without a directory (trellis at offset 0, `exl3_experts` = 1). Plane offsets are
     // payload-relative; the directory entry is {u64 offset, u32 extent, u8 2K, three zero
     // bytes} per expert.
-    std::uint64_t exl3_trellis_offset = 0;
+    std::uint64_t exl3_trellis_offset  = 0;
     std::uint64_t exl3_suh_offset      = 0;
     std::uint64_t exl3_svh_offset      = 0;
-    std::uint32_t exl3_codebook        = 0;  // 0 = 3inst, 1 = mcg, 2 = mul1
+    std::uint32_t exl3_codebook        = 0; // 0 = 3inst, 1 = mcg, 2 = mul1
     std::uint32_t exl3_experts         = 0;
     std::uint32_t exl3_rows_per_expert = 0;
     // Row-sliced dense views (SP-7 fused mixers): `exl3_row_stride` is the parent's n

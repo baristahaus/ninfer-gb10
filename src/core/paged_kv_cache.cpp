@@ -57,14 +57,14 @@ void validate_geometry(const KVPageGeometry& geometry) {
 
 PagedKVBatchLayerView single_row_paged_kv_batch_view(const PagedKVLayerView& cache) {
     return {
-        .k_pages       = cache.k_pages,
-        .v_pages       = cache.v_pages,
-        .k_scale_pages = cache.k_scale_pages,
-        .v_scale_pages = cache.v_scale_pages,
-        .block_tables  = cache.block_table.view({cache.block_table.ne[0], 1}),
-        .head_dim      = cache.head_dim,
-        .num_kv_heads  = cache.num_kv_heads,
-        .storage       = cache.storage,
+        .k_pages         = cache.k_pages,
+        .v_pages         = cache.v_pages,
+        .k_scale_pages   = cache.k_scale_pages,
+        .v_scale_pages   = cache.v_scale_pages,
+        .block_tables    = cache.block_table.view({cache.block_table.ne[0], 1}),
+        .head_dim        = cache.head_dim,
+        .num_kv_heads    = cache.num_kv_heads,
+        .storage         = cache.storage,
         .auxiliary_pages = cache.auxiliary_pages,
     };
 }

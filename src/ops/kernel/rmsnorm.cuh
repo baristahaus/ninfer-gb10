@@ -27,9 +27,7 @@ __device__ __forceinline__ float rmsnorm_epilogue(float x, float inv, float weig
     if constexpr (Epilogue == RmsEpilogue::Offset) { weight += 1.0f; }
     float value = x * inv * weight;
     if constexpr (Epilogue == RmsEpilogue::Gated) { value *= silu(z); }
-    if constexpr (Epilogue == RmsEpilogue::SigmoidGated) {
-        value *= 1.0F / (1.0F + expf(-z));
-    }
+    if constexpr (Epilogue == RmsEpilogue::SigmoidGated) { value *= 1.0F / (1.0F + expf(-z)); }
     return value;
 }
 

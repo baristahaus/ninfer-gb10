@@ -68,23 +68,23 @@ void run_rank(distributed::WorkerConnection& connection, std::unique_ptr<artifac
         DeviceMemorySnapshot allocation_snapshot{};
         std::size_t opaque_growth = 0;
         const auto describe       = [&] {
-            auto result                                 = preparing->describe();
-            const auto after                            = device_memory_snapshot(device.device());
-            auto& observation                           = result.observation;
-            const auto& identity                        = connection.bootstrap().identity;
-            observation.rank                            = identity.rank;
-            observation.node                            = identity.node;
-            observation.hardware                        = device.properties().name;
-            observation.communication                   = connection.communication().statistics();
-            observation.stamp                           = {0, observation_time_ns()};
-            observation.physical_memory                 = PhysicalMemorySample{after.total_bytes,
-                                                               after.cuda_free_bytes,
-                                                               after.system_total_bytes,
-                                                               after.system_available_bytes,
-                                                               after.shared_physical_memory,
-                                                               observation.stamp.sampled_ns};
-            result.budget.limit_bytes                   = budget.limit();
-            result.budget.headroom_bytes                = budget.headroom();
+            auto result                  = preparing->describe();
+            const auto after             = device_memory_snapshot(device.device());
+            auto& observation            = result.observation;
+            const auto& identity         = connection.bootstrap().identity;
+            observation.rank             = identity.rank;
+            observation.node             = identity.node;
+            observation.hardware         = device.properties().name;
+            observation.communication    = connection.communication().statistics();
+            observation.stamp            = {0, observation_time_ns()};
+            observation.physical_memory  = PhysicalMemorySample{after.total_bytes,
+                                                                after.cuda_free_bytes,
+                                                                after.system_total_bytes,
+                                                                after.system_available_bytes,
+                                                                after.shared_physical_memory,
+                                                                observation.stamp.sampled_ns};
+            result.budget.limit_bytes    = budget.limit();
+            result.budget.headroom_bytes = budget.headroom();
             result.budget.available_after_weights_bytes = after_weights.available_bytes();
             result.budget.available_after_startup_bytes = after.available_bytes();
             result.budget.planned_slack_bytes           = budget.available(after);

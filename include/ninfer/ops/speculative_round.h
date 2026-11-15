@@ -140,11 +140,8 @@ void speculative_accept_greedy_drafts(const Tensor& target_tokens, const Tensor&
 /**
  * Workspace capacity for speculative_accept_greedy_drafts over the given draft and batch range.
  */
-[[nodiscard]] std::size_t
-speculative_accept_greedy_drafts_workspace_capacity_bytes(std::int32_t token_domain,
-                                                          std::int32_t min_drafts,
-                                                          std::int32_t max_drafts,
-                                                          std::int32_t min_batch,
-                                                          std::int32_t max_batch);
+[[nodiscard]] std::size_t speculative_accept_greedy_drafts_workspace_capacity_bytes(
+    std::int32_t token_domain, std::int32_t min_drafts, std::int32_t max_drafts,
+    std::int32_t min_batch, std::int32_t max_batch);
 
 } // namespace ninfer::ops

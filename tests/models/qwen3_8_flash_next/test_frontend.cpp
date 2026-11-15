@@ -75,7 +75,7 @@ void check_tool_call_recovery(const flash::Frontend& frontend) {
                                   "<tool_call>\n<function=bash>\n<parameter=command>\nfirst\n"
                                   "</parameter>\n<parameter=command>\necho ok\n</parameter>\n"
                                   "</function>\n</tool_call>";
-    const auto tokens = frontend.tokenize_text(generated);
+    const auto tokens           = frontend.tokenize_text(generated);
     (void)session.preview_model(tokens, static_cast<std::uint32_t>(tokens.size()),
                                 ninfer::FinishReason::OutputLimit);
     const auto output = session.commit_preview();
@@ -100,7 +100,7 @@ void check_none_effort_with_disabled_thinking(const flash::Frontend& frontend) {
         message.role = ninfer::ChatRole::User;
         message.parts.push_back({.kind = ninfer::MessagePartKind::Text, .text = "x"});
         in.messages.push_back(std::move(message));
-        in.options.enable_thinking = false;
+        in.options.enable_thinking  = false;
         in.options.reasoning_effort = effort;
         return in;
     };
@@ -108,9 +108,7 @@ void check_none_effort_with_disabled_thinking(const flash::Frontend& frontend) {
     bool conflict_rejected = false;
     try {
         (void)frontend.prepare(input(ninfer::ReasoningEffort::Low));
-    } catch (const std::exception&) {
-        conflict_rejected = true;
-    }
+    } catch (const std::exception&) { conflict_rejected = true; }
     require(conflict_rejected, "a real reasoning effort was accepted with disabled thinking");
 }
 
@@ -119,7 +117,7 @@ void check_none_effort_with_disabled_thinking(const flash::Frontend& frontend) {
 void check_prepared_views(const flash::Frontend& frontend) {
     // The prompt's ids are the prompt's identity: the view must be exactly what was prepared.
     const std::vector<ninfer::TokenId> tokens{1, 2, 3, 4};
-    const auto prompt = frontend.prepare_tokens(tokens);
+    const auto prompt                          = frontend.prepare_tokens(tokens);
     const std::span<const ninfer::TokenId> ids = prompt.token_ids();
     require(ids.size() == tokens.size() && std::equal(ids.begin(), ids.end(), tokens.begin()),
             "PreparedPrompt::token_ids did not expose the prepared ids");
@@ -134,7 +132,8 @@ void check_prepared_views(const flash::Frontend& frontend) {
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (!path || !*path) {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the frontend test did not run. Set it to the 125B .ninfer file\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the frontend test did not "
+                     "run. Set it to the 125B .ninfer file\n";
         return 77;
     }
     try {
@@ -184,7 +183,8 @@ int main() {
         check_quoted_reasoning_close(frontend);
         std::cout << "OK Flash-Next quoted reasoning close stays in reasoning\n";
         check_tool_call_recovery(frontend);
-        std::cout << "OK Flash-Next tool-call recovery after quoted marker and repeated parameter\n";
+        std::cout
+            << "OK Flash-Next tool-call recovery after quoted marker and repeated parameter\n";
         check_none_effort_with_disabled_thinking(frontend);
         std::cout << "OK Flash-Next none-effort thinking disable prepares; real efforts conflict\n";
         check_prepared_views(frontend);

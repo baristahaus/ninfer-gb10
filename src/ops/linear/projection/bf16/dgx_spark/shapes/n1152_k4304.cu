@@ -20,10 +20,10 @@ using Tiny8 = Bf16VisionFc2Schedule<
                             Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 1, 2, 8>,
         4304, 8, true>>,
     21>;
-using Slice       = Fc2<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 2>, 22>;
-using Small       = Fc2<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
-                                           Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
-                        23>;
+using Slice = Fc2<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 2>, 22>;
+using Small = Fc2<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
+                                     Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
+                  23>;
 using OriginalHot = Fc2<Bf16A16MmaSchedule<32, 32, 256, 16, 8, 3, 1, Cache::cg, Cache::cg,
                                            Bf16MmaFragmentPipeline::PingPong,
                                            Bf16MmaRaster::TokenFast, Bf16MmaSwizzle::Xor64, 1>,

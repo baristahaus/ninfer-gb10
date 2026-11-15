@@ -222,7 +222,8 @@ void reclaim(q4::detail::SessionImpl& p, Executor& executor) {
 int main() {
     const char* path = std::getenv("NINFER_QWEN4_EXP_TEST_ARTIFACT");
     if (!path || !*path) {
-        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the reclaim test did not run. Set it to the Qwen4-exp .ninfer file\n";
+        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the reclaim test did not "
+                     "run. Set it to the Qwen4-exp .ninfer file\n";
         return 77;
     }
     try {
@@ -257,8 +258,8 @@ int main() {
             std::move(model), profile);
         instance->program =
             std::make_unique<q4::RankProgram>(instance->parameters, std::move(*execution), *device);
-        auto worker = std::make_unique<runtime::RankWorker<q4::RuntimeTypes>>(*device,
-                                                                              std::move(instance));
+        auto worker =
+            std::make_unique<runtime::RankWorker<q4::RuntimeTypes>>(*device, std::move(instance));
         std::vector<std::unique_ptr<runtime::RankWorker<q4::RuntimeTypes>>> workers;
         workers.push_back(std::move(worker));
         Executor executor(std::move(workers), {1});

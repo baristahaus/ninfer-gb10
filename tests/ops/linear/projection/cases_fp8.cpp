@@ -28,10 +28,10 @@ std::vector<Invocation> a16_capacity_calls() {
 }
 
 // THE SHAPES A TENSOR-PARALLEL WIDTH-2 RANK PRESENTS, and the reason they are listed here rather
-// than derived: every one of them is its own schedule set in the FP8 shape table, chosen by hand for
-// its own (n, k). At width 2 the 27B's model-total FP8 objects become one rank's half of each — the
-// row-sharded fused views (7168, 8192, 124160), the per-role splits the execution profile makes of
-// them (3072, 512, 5120, 8704) and the column-sharded outputs, where a Columns shard halves K
+// than derived: every one of them is its own schedule set in the FP8 shape table, chosen by hand
+// for its own (n, k). At width 2 the 27B's model-total FP8 objects become one rank's half of each —
+// the row-sharded fused views (7168, 8192, 124160), the per-role splits the execution profile makes
+// of them (3072, 512, 5120, 8704) and the column-sharded outputs, where a Columns shard halves K
 // instead of the rows (5120x3072, 5120x8704). A schedule derived by scaling a parent's token bands
 // is exactly the kind of change that compiles, links, resolves, and then faults on the device, so
 // each shape runs here through the token bands it can actually be called with.
@@ -42,15 +42,15 @@ struct WidthTwoShape {
 };
 
 constexpr std::array kWidthTwoFp8Shapes{
-    WidthTwoShape{3072, 5120, 871U},    // attention query/gate role, gdn z role
-    WidthTwoShape{512, 5120, 873U},     // attention key/value role
-    WidthTwoShape{5120, 5120, 875U},    // gdn query+key+value role
-    WidthTwoShape{8704, 5120, 877U},    // mlp gate/up role
-    WidthTwoShape{5120, 3072, 879U},    // attention/output and gdn/output (Columns shard halves K)
-    WidthTwoShape{5120, 8704, 881U},    // mlp/down (Columns shard halves K)
-    WidthTwoShape{124160, 5120, 883U},  // text/output_head (Rows shard)
-    WidthTwoShape{7168, 5120, 885U},    // attention qkv+gate fused half
-    WidthTwoShape{8192, 5120, 887U},    // gdn qkvz fused half
+    WidthTwoShape{3072, 5120, 871U},   // attention query/gate role, gdn z role
+    WidthTwoShape{512, 5120, 873U},    // attention key/value role
+    WidthTwoShape{5120, 5120, 875U},   // gdn query+key+value role
+    WidthTwoShape{8704, 5120, 877U},   // mlp gate/up role
+    WidthTwoShape{5120, 3072, 879U},   // attention/output and gdn/output (Columns shard halves K)
+    WidthTwoShape{5120, 8704, 881U},   // mlp/down (Columns shard halves K)
+    WidthTwoShape{124160, 5120, 883U}, // text/output_head (Rows shard)
+    WidthTwoShape{7168, 5120, 885U},   // attention qkv+gate fused half
+    WidthTwoShape{8192, 5120, 887U},   // gdn qkvz fused half
 };
 
 // The shapes the WIDTH-1 reference arm presents and the width-2 lane does not. They surfaced one
@@ -71,18 +71,18 @@ constexpr std::array kWidthTwoFp8Shapes{
 // parent region and the engine takes the two-role form (`ops::projection_region_count` counts byte
 // regions, not element ranges). The NVFP4 table has served the same 17408-row shape all along.
 constexpr std::array kWidthOneFp8Shapes{
-    WidthTwoShape{10240, 5120, 891U},  // GDN qkv parent: query 2048 + key 2048 + value 6144
-    WidthTwoShape{6144, 5120, 893U},   // GDN z parent; also the attention query and gate roles
-    WidthTwoShape{1024, 5120, 895U},   // attention key and value roles: 4 KV heads of width 256
-    WidthTwoShape{17408, 5120, 897U},  // dense MLP gate and up roles: half of the 34816-row parent
+    WidthTwoShape{10240, 5120, 891U}, // GDN qkv parent: query 2048 + key 2048 + value 6144
+    WidthTwoShape{6144, 5120, 893U},  // GDN z parent; also the attention query and gate roles
+    WidthTwoShape{1024, 5120, 895U},  // attention key and value roles: 4 KV heads of width 256
+    WidthTwoShape{17408, 5120, 897U}, // dense MLP gate and up roles: half of the 34816-row parent
 };
 
 // The token extents that cross every band boundary of the width-2 shapes' A8 schedules: the A8
 // threshold at 17, then the 64/128/192/256/384/512/768/1024 tile boundaries and one past each.
 std::vector<Invocation> width_two_a8_calls() {
     std::vector<Invocation> calls;
-    for (int t : {17, 33, 64, 65, 97, 128, 129, 192, 193, 256, 257, 384, 385, 512, 513, 768, 769,
-                  1024, 1025, 2048})
+    for (int t : {17,  33,  64,  65,  97,  128, 129, 192,  193,  256,
+                  257, 384, 385, 512, 513, 768, 769, 1024, 1025, 2048})
         calls.push_back({t, CallForm::Policy, ops::LinearPolicy::AllowA8});
     // The verify round is graph-captured, so the captured form runs too.
     for (int t : {128, 1025})

@@ -8,11 +8,11 @@
 // 8704 and the width-1 parent's 34816, and the parent is the sibling this ladder comes from.
 //
 // That is a derivation rather than a copy: every band is chosen from (n / kBlockRows) *
-// ceil(T / BlockTokens) against the tuned wave, and this shape presents 1088 row tiles -- 6.4 waves at
-// T=1 -- so no band needs a different CTA shape to fill the machine, and K is the parent's 5120, so
-// each CTA walks the same ten 512-wide K tiles. What the parent's ladder contributes beyond the token
-// bands is its larger-row-block MMA fallbacks (r128_t64 above 64 tokens), which suit a shape twice
-// the role split's width better than that sibling's r32_t64.
+// ceil(T / BlockTokens) against the tuned wave, and this shape presents 1088 row tiles -- 6.4 waves
+// at T=1 -- so no band needs a different CTA shape to fill the machine, and K is the parent's 5120,
+// so each CTA walks the same ten 512-wide K tiles. What the parent's ladder contributes beyond the
+// token bands is its larger-row-block MMA fallbacks (r128_t64 above 64 tokens), which suit a shape
+// twice the role split's width better than that sibling's r32_t64.
 
 namespace ninfer::ops::detail {
 namespace {

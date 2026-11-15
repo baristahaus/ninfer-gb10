@@ -155,8 +155,8 @@ __launch_bounds__(S::kLaunchBoundThreads, S::kMinBlocks) __global__
     const int rows[2]   = {row_begin + warp_q * 16 + gid, row_begin + warp_q * 16 + gid + 8};
     const int tokens[2] = {rows[0] / G::GroupSize, rows[1] / G::GroupSize};
     const int qabs[2]   = {tokens[0] < live ? positions[tokens[0]] : -1,
-                         tokens[1] < live ? positions[tokens[1]] : -1};
-    int page_window = -Storage::kPageWindow;
+                           tokens[1] < live ? positions[tokens[1]] : -1};
+    int page_window     = -Storage::kPageWindow;
     for (int k0 = start; k0 < end; k0 += N) {
         const int logical_page = k0 >> kv::kPageShift;
         if (logical_page >= page_window + Storage::kPageWindow) {

@@ -63,10 +63,10 @@ void qsa_sparse_gqa(const Tensor& query, const Tensor& gate, const PagedKVBatchL
     const auto layout = paged_kv_storage_layout(cache.storage, 256);
     const auto plane  = [&](const Tensor& data, const Tensor& scales, PagedKVVectorLayout format) {
         v.plane(data, format.data_dtype, {format.data_leading_extent, 64, kv_heads, pages},
-                 "cache data");
+                "cache data");
         if (format.has_scale())
             v.plane(scales, format.scale_dtype, {format.scale_leading_extent, 64, kv_heads, pages},
-                     "cache scales");
+                    "cache scales");
         else
             v.require(!scales.data, "absent scales");
     };

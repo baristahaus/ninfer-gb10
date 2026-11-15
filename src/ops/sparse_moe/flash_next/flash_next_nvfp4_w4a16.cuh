@@ -29,22 +29,22 @@ struct Nvfp4W4a16GroupedSchedule {
     static_assert((BlockM / WarpsN) % 8 == 0);
     static_assert((BlockN / WarpsM) % 16 == 0);
 
-    static constexpr int kBlockM         = BlockM;  // weight rows per block (gate+up pairs for gate)
-    static constexpr int kBlockN         = BlockN;  // packed tokens per block
+    static constexpr int kBlockM         = BlockM; // weight rows per block (gate+up pairs for gate)
+    static constexpr int kBlockN         = BlockN; // packed tokens per block
     static constexpr int kBlockK         = BlockK;
-    static constexpr int kWarpsM         = WarpsM;  // token warps
-    static constexpr int kWarpsN         = WarpsN;  // weight-row warps
+    static constexpr int kWarpsM         = WarpsM; // token warps
+    static constexpr int kWarpsN         = WarpsN; // weight-row warps
     static constexpr int kMinBlocksPerSm = MinBlocksPerSm;
     static constexpr int kWarps          = WarpsM * WarpsN;
     static constexpr int kThreads        = kWarps * 32;
-    static constexpr int kWarpM          = BlockN / WarpsM;  // tokens per warp
-    static constexpr int kWarpN          = BlockM / WarpsN;  // weight rows per warp
+    static constexpr int kWarpM          = BlockN / WarpsM; // tokens per warp
+    static constexpr int kWarpN          = BlockM / WarpsN; // weight rows per warp
     static constexpr int kMmaM           = kWarpM / 16;
     static constexpr int kMmaN           = kWarpN / 8;
     static constexpr int kCodeRowBytes   = BlockK / 2;
-    static constexpr int kSharedBytes =
-        BlockM * BlockK * static_cast<int>(sizeof(__nv_bfloat16)) +
-        BlockN * BlockK * static_cast<int>(sizeof(__nv_bfloat16)) + BlockM * (BlockK / 2);
+    static constexpr int kSharedBytes = BlockM * BlockK * static_cast<int>(sizeof(__nv_bfloat16)) +
+                                        BlockN * BlockK * static_cast<int>(sizeof(__nv_bfloat16)) +
+                                        BlockM * (BlockK / 2);
 };
 
 // Persistent over (job, row block) work items. `configure` publishes the job's packed-token
@@ -93,7 +93,7 @@ struct Nvfp4W4a16GroupedWork {
         const auto entry = residency[expert];
         const bool warm  = (entry & 0x80000000u) != 0;
         const auto rank  = static_cast<int>(entry & 0x7fffffffu);
-        tier_codes  = static_cast<const std::uint8_t*>(warm ? warm_codes : weight_codes_base);
+        tier_codes       = static_cast<const std::uint8_t*>(warm ? warm_codes : weight_codes_base);
         tier_scales = static_cast<const std::uint8_t*>(warm ? warm_scales : weight_scales_base);
         alpha       = 1.0F / (warm && warm_divisors ? warm_divisors : weight_divisors)[rank];
         rows.expert = rank;
@@ -105,15 +105,19 @@ struct Nvfp4W4a16GroupedWork {
 };
 
 template <class Schedule, class Output, class RowPolicy, class WorkPolicy, bool PairRows>
-__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
-nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_rows,
-                               Output output, RowPolicy row_policy, WorkPolicy work_policy) {
-    constexpr int BM      = Schedule::kBlockM;
-    constexpr int BN      = Schedule::kBlockN;
-    constexpr int BK      = Schedule::kBlockK;
-    constexpr int MT      = Schedule::kMmaM;
-    constexpr int NT      = Schedule::kMmaN;
-    constexpr int THREADS = Schedule::kThreads;
+__global__ __launch_bounds__(
+    Schedule::kThreads,
+    Schedule::
+        kMinBlocksPerSm) void nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x,
+                                                             int input_rows, Output output,
+                                                             RowPolicy row_policy,
+                                                             WorkPolicy work_policy) {
+    constexpr int BM            = Schedule::kBlockM;
+    constexpr int BN            = Schedule::kBlockN;
+    constexpr int BK            = Schedule::kBlockK;
+    constexpr int MT            = Schedule::kMmaM;
+    constexpr int NT            = Schedule::kMmaN;
+    constexpr int THREADS       = Schedule::kThreads;
     constexpr int kRowsPerBlock = PairRows ? BM / 2 : BM;
     constexpr int kOutputStride = BM + 8;
 
@@ -131,27 +135,26 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_ro
     const int lid  = lane & 3;
 
     const int a_matrix     = lane >> 3;
-    const int a_inner_row  = lane & 7;                  // token row inside the 16-token A tile
+    const int a_inner_row  = lane & 7; // token row inside the 16-token A tile
     const int a_row_offset = a_inner_row + ((a_matrix & 1) << 3);
     const int a_col_offset = (a_matrix >> 1) << 3;
-    const int b_row_offset = lane & 7;                  // weight row inside the 8-row B tile
+    const int b_row_offset = lane & 7; // weight row inside the 8-row B tile
     const int b_col_offset = ((lane >> 3) & 1) * 8;
 
-    int work       = WorkPolicy::kPersistent ? static_cast<int>(blockIdx.x) : 0;
-    const int work_limit =
-        WorkPolicy::kPersistent ? work_policy.work_count(kRowsPerBlock) : 1;
+    int work             = WorkPolicy::kPersistent ? static_cast<int>(blockIdx.x) : 0;
+    const int work_limit = WorkPolicy::kPersistent ? work_policy.work_count(kRowsPerBlock) : 1;
 
     while (work < work_limit) {
         int token_begin;
         int token_end;
         int row_begin;
-        float work_alpha = 1.0F;
+        float work_alpha                = 1.0F;
         const std::uint8_t* tier_codes  = nullptr;
         const std::uint8_t* tier_scales = nullptr;
         work_policy.configure(work, kRowsPerBlock, token_begin, token_end, row_begin, work_alpha,
                               row_policy, tier_codes, tier_scales);
 
-        const int k_tiles = input_rows / BK;
+        const int k_tiles             = input_rows / BK;
         float accumulators[MT][NT][4] = {};
 
         for (int k_tile = 0; k_tile < k_tiles; ++k_tile) {
@@ -194,9 +197,9 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_ro
                 const int group      = item - local_row * (BK / 16);
                 const int col        = group * 16;
                 const int weight_row = row_policy.weight_row(row_begin, local_row);
-                const std::uint8_t scale_byte = __ldg(
-                    tier_scales +
-                    nvfp4_scale_byte_offset(weight_row, k_begin / 16 + group, input_rows));
+                const std::uint8_t scale_byte =
+                    __ldg(tier_scales +
+                          nvfp4_scale_byte_offset(weight_row, k_begin / 16 + group, input_rows));
                 const auto* codes = &code_shared[local_row * Schedule::kCodeRowBytes + group * 8];
 #pragma unroll
                 for (int pair = 0; pair < 8; ++pair) {
@@ -216,29 +219,28 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_ro
 #pragma unroll
                 for (int mma_m = 0; mma_m < MT; ++mma_m) {
                     const int token = wm * Schedule::kWarpM + mma_m * 16 + a_row_offset;
-                    ldmatrix_x4(a_fragments[mma_m][0], a_fragments[mma_m][1],
-                                a_fragments[mma_m][2], a_fragments[mma_m][3],
-                                smem_addr(&activation_shared[token * BK +
-                                                             nvfp4_a16_shared_col_64(token, ks + a_col_offset)]));
+                    ldmatrix_x4(
+                        a_fragments[mma_m][0], a_fragments[mma_m][1], a_fragments[mma_m][2],
+                        a_fragments[mma_m][3],
+                        smem_addr(&activation_shared[token * BK + nvfp4_a16_shared_col_64(
+                                                                      token, ks + a_col_offset)]));
                 }
 #pragma unroll
                 for (int mma_n = 0; mma_n < NT; ++mma_n) {
                     const int row = wn * Schedule::kWarpN + mma_n * 8 + b_row_offset;
                     ldmatrix_x2(b_fragments[mma_n][0], b_fragments[mma_n][1],
-                                smem_addr(&weight_shared[row * BK +
-                                                         nvfp4_a16_shared_col_64(row, ks + b_col_offset)]));
+                                smem_addr(&weight_shared[row * BK + nvfp4_a16_shared_col_64(
+                                                                        row, ks + b_col_offset)]));
                 }
 #pragma unroll
                 for (int mma_m = 0; mma_m < MT; ++mma_m) {
 #pragma unroll
                     for (int mma_n = 0; mma_n < NT; ++mma_n) {
-                        mma_bf16(accumulators[mma_m][mma_n][0],
-                                 accumulators[mma_m][mma_n][1],
-                                 accumulators[mma_m][mma_n][2],
-                                 accumulators[mma_m][mma_n][3], a_fragments[mma_m][0],
-                                 a_fragments[mma_m][1], a_fragments[mma_m][2],
-                                 a_fragments[mma_m][3], b_fragments[mma_n][0],
-                                 b_fragments[mma_n][1]);
+                        mma_bf16(accumulators[mma_m][mma_n][0], accumulators[mma_m][mma_n][1],
+                                 accumulators[mma_m][mma_n][2], accumulators[mma_m][mma_n][3],
+                                 a_fragments[mma_m][0], a_fragments[mma_m][1],
+                                 a_fragments[mma_m][2], a_fragments[mma_m][3],
+                                 b_fragments[mma_n][0], b_fragments[mma_n][1]);
                     }
                 }
             }
@@ -260,7 +262,7 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_ro
             for (int mma_n = 0; mma_n < NT; ++mma_n) {
                 const int local_row0 = wn * Schedule::kWarpN + mma_n * 8 + accumulator_col;
                 const auto& v        = accumulators[mma_m][mma_n];
-                auto* destination0 = reinterpret_cast<__nv_bfloat162*>(
+                auto* destination0   = reinterpret_cast<__nv_bfloat162*>(
                     shared_output + (token0 - token_begin) * kOutputStride + local_row0);
                 auto* destination1 = reinterpret_cast<__nv_bfloat162*>(
                     shared_output + (token1 - token_begin) * kOutputStride + local_row0);
@@ -280,8 +282,8 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_ro
                 const uint4 values =
                     load_vec<uint4>(shared_output + token_local * kOutputStride + row_vector * 8);
                 if constexpr (PairRows) {
-                    const uint4 paired = load_vec<uint4>(shared_output + token_local * kOutputStride +
-                                                         kStoredRows + row_vector * 8);
+                    const uint4 paired = load_vec<uint4>(
+                        shared_output + token_local * kOutputStride + kStoredRows + row_vector * 8);
                     output.store_pair_vector(row_begin + row_vector * 8, token, values, paired);
                 } else {
                     output.store_vector(row_begin + row_vector * 8, token, values);

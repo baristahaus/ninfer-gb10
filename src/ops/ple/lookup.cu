@@ -171,8 +171,8 @@ __global__ __launch_bounds__(Warps * 32) void lookup_kernel(const __grid_constan
             const auto& shard = a.shards[owner];
             const auto local  = row - shard.begin;
             encoded           = shard.pages + std::uint64_t(local / kRowsPerPage) * 4096 +
-                      (local % kRowsPerPage) * kRowBytes;
-            decode = shard.decode;
+                                (local % kRowsPerPage) * kRowBytes;
+            decode            = shard.decode;
         }
         for (int pair = lane; pair < kWidth / 2; pair += 32) {
             std::uint32_t value = 0;

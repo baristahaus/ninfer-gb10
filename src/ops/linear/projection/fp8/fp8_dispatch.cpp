@@ -8,19 +8,18 @@
 
 namespace ninfer::ops::detail {
 namespace {
-const std::array kShapes{&kFp8N14336K5120, &kFp8N16384K5120, &kFp8N34816K5120,
-                         &kFp8N5120K6144,  &kFp8N5120K17408, &kFp8N248320K5120,
-                         &kFp8N10240K2560, &kFp8N6144K2560,  &kFp8N2560K6144,
-                         &kFp8N320K10240,  &kFp8N248320K2560, &kFp8ProjN12288K2560,
+const std::array kShapes{&kFp8N14336K5120, &kFp8N16384K5120, &kFp8N34816K5120, &kFp8N5120K6144,
+                         &kFp8N5120K17408, &kFp8N248320K5120, &kFp8N10240K2560, &kFp8N6144K2560,
+                         &kFp8N2560K6144, &kFp8N320K10240, &kFp8N248320K2560, &kFp8ProjN12288K2560,
                          &kFp8ProjN10240K320, &kFp8ProjN2560K640,
                          // The role-split and fused-half shapes a width-2 rank presents. Appended,
                          // never reordered: the lookup is linear first-match, so the fourteen above
                          // resolve exactly as they did.
-                         &kFp8N5120K5120,  &kFp8N3072K5120,  &kFp8N512K5120, &kFp8N8704K5120,
-                         &kFp8N7168K5120,  &kFp8N8192K5120,  &kFp8N124160K5120,
+                         &kFp8N5120K5120, &kFp8N3072K5120, &kFp8N512K5120, &kFp8N8704K5120,
+                         &kFp8N7168K5120, &kFp8N8192K5120, &kFp8N124160K5120,
                          // The column-sharded outputs: the two 5120x6144 projections at half K,
                          // and mlp/down at half K. Appended for the same reason.
-                         &kFp8N5120K3072,  &kFp8N5120K8704,
+                         &kFp8N5120K3072, &kFp8N5120K8704,
                          // The width-1 presentations: the GDN input projection's two parents, the
                          // attention key/value roles, and the dense MLP's two roles.
                          &kFp8N10240K5120, &kFp8N6144K5120, &kFp8N1024K5120, &kFp8N17408K5120};
@@ -32,8 +31,8 @@ const std::array kShapes{&kFp8N14336K5120, &kFp8N16384K5120, &kFp8N34816K5120,
 // identifies which binding it came from when correlated against a binding dump. Printed on the
 // throw, so no environment variable has to be known in advance.
 std::string describe(const Weight& weight) {
-    std::string out = "N" + std::to_string(weight.n) + "K" + std::to_string(weight.k) + " [ndim=" +
-                      std::to_string(weight.ndim) + " shape=";
+    std::string out = "N" + std::to_string(weight.n) + "K" + std::to_string(weight.k) +
+                      " [ndim=" + std::to_string(weight.ndim) + " shape=";
     for (std::uint32_t axis = 0; axis < weight.ndim && axis < 4; ++axis) {
         out += (axis ? "," : "") + std::to_string(weight.shape[axis]);
     }
@@ -41,10 +40,10 @@ std::string describe(const Weight& weight) {
     for (std::uint32_t axis = 0; axis < weight.ndim && axis < 4; ++axis) {
         out += (axis ? "," : "") + std::to_string(weight.padded_shape[axis]);
     }
-    out += " qtype=" + std::to_string(static_cast<int>(weight.qtype)) + " layout=" +
-           std::to_string(static_cast<int>(weight.layout)) + " group=" +
-           std::to_string(weight.group) + " payload_bytes=" +
-           std::to_string(weight.payload_bytes) + " qdata=";
+    out += " qtype=" + std::to_string(static_cast<int>(weight.qtype)) +
+           " layout=" + std::to_string(static_cast<int>(weight.layout)) +
+           " group=" + std::to_string(weight.group) +
+           " payload_bytes=" + std::to_string(weight.payload_bytes) + " qdata=";
     const auto* address = static_cast<const void*>(weight.qdata);
     char text[32];
     std::snprintf(text, sizeof(text), "%p", address);
@@ -73,8 +72,8 @@ std::size_t fp8_linear_workspace_capacity_bytes(std::int32_t n, std::int32_t k, 
     const auto& shape = [&]() -> const Fp8LinearShape& {
         for (const auto* candidate : kShapes)
             if (candidate->n == n && candidate->k == k) return *candidate;
-        throw std::invalid_argument("fp8 linear workspace: unsupported shape N" + std::to_string(n) +
-                                    "K" + std::to_string(k) + " for " +
+        throw std::invalid_argument("fp8 linear workspace: unsupported shape N" +
+                                    std::to_string(n) + "K" + std::to_string(k) + " for " +
                                     (tag.empty() ? std::string("<untagged>") : std::string(tag)));
     }();
     return allows_a8(policy) && shape.uses_a8(min_tokens, max_tokens)

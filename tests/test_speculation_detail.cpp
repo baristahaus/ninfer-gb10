@@ -31,10 +31,10 @@ ninfer::product::ServeOptions parse(std::vector<std::string> arguments) {
 
 Json done_json(const ninfer::RequestStats& stats) {
     GenerationOutcome outcome;
-    outcome.prompt_tokens   = 10;
+    outcome.prompt_tokens     = 10;
     outcome.completion_tokens = 5;
-    outcome.finish_reason   = ninfer::FinishReason::StopToken;
-    outcome.stats           = stats;
+    outcome.finish_reason     = ninfer::FinishReason::StopToken;
+    outcome.stats             = stats;
     RequestLogContext context;
     context.id       = 1;
     context.protocol = "openai_chat_completions";
@@ -48,10 +48,10 @@ Json detail_of(const ninfer::RequestStats& stats) {
 
 ninfer::RequestStats recorded() {
     ninfer::RequestStats stats;
-    stats.speculative.backend       = ninfer::SpeculativeBackend::Mtp;
-    stats.speculative.draft_window  = 3;
-    stats.speculative.rounds        = 3;
-    stats.speculative.fallback_steps = 1;
+    stats.speculative.backend          = ninfer::SpeculativeBackend::Mtp;
+    stats.speculative.draft_window     = 3;
+    stats.speculative.rounds           = 3;
+    stats.speculative.fallback_steps   = 1;
     stats.speculative.accepted_lengths = {2, 3, ninfer::kSpeculativeFallbackStep, 0};
     return stats;
 }
@@ -76,11 +76,12 @@ int main() {
 
     const auto enabled = parse({"ninfer-serve", "model.ninfer", "--log-speculation-detail",
                                 "--request-log-jsonl", "requests.jsonl"});
-    failures += check(enabled.log_speculation_detail && enabled.speculation_detail_max_steps == 4096,
-                      "the enabled option did not keep its default bound");
-    const auto capped = parse({"ninfer-serve", "model.ninfer", "--log-speculation-detail",
-                               "--request-log-jsonl", "requests.jsonl",
-                               "--log-speculation-detail-max-steps", "7"});
+    failures +=
+        check(enabled.log_speculation_detail && enabled.speculation_detail_max_steps == 4096,
+              "the enabled option did not keep its default bound");
+    const auto capped =
+        parse({"ninfer-serve", "model.ninfer", "--log-speculation-detail", "--request-log-jsonl",
+               "requests.jsonl", "--log-speculation-detail-max-steps", "7"});
     failures += check(capped.speculation_detail_max_steps == 7, "the step bound was not applied");
 
     // A request that recorded nothing emits null: this is the budget-0 case, and it is what every
@@ -99,18 +100,18 @@ int main() {
                       "a complete sequence was marked truncated");
 
     // A sequence shorter than the request's decode steps was cut by the bound.
-    auto truncated                  = recorded();
-    truncated.speculative.rounds    = 300;
+    auto truncated                       = recorded();
+    truncated.speculative.rounds         = 300;
     truncated.speculative.fallback_steps = 2;
     failures += check(detail_of(truncated).at("accepted_lengths_truncated") == true,
                       "a capped sequence was not marked truncated");
 
     // A length beyond the draft window is not a value any backend produces; the detail is dropped
     // rather than reported as a wrong digit.
-    auto impossible                     = recorded();
+    auto impossible                         = recorded();
     impossible.speculative.accepted_lengths = {4};
-    failures += check(detail_of(impossible).is_null(),
-                      "a length beyond the draft window was reported");
+    failures +=
+        check(detail_of(impossible).is_null(), "a length beyond the draft window was reported");
 
     // The rest of the speculative block is unchanged by the detail.
     const auto full = done_json(recorded()).at("speculative");

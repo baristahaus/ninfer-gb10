@@ -163,9 +163,8 @@ std::size_t merger_hidden_bytes(std::size_t merged_tokens) {
         merged_tokens > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
         throw std::invalid_argument("Vision merger hidden extent must fit positive int32");
     }
-    Tensor tensor =
-        Tensor::metadata(DType::BF16,
-                         {VisionScheduleConfig::merger_hidden, static_cast<std::int32_t>(merged_tokens)});
+    Tensor tensor = Tensor::metadata(DType::BF16, {VisionScheduleConfig::merger_hidden,
+                                                   static_cast<std::int32_t>(merged_tokens)});
     return tensor.bytes();
 }
 
@@ -285,9 +284,9 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
     if (layout.bytes > plan.encode_peak_bytes || backing.bytes < plan.capacity_bytes) {
         throw std::invalid_argument("Vision workspace capacity is too small for request");
     }
-    const auto patches  = static_cast<std::int32_t>(patches64);
-    const auto tokens   = static_cast<std::int32_t>(tokens64);
-    cudaStream_t stream = ctx_.stream();
+    const auto patches          = static_cast<std::int32_t>(patches64);
+    const auto tokens           = static_cast<std::int32_t>(tokens64);
+    cudaStream_t stream         = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
 
     Tensor position_ids = layout.position_ids.bind(backing);
@@ -334,11 +333,11 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
                 Tensor q(qkv.data, qkv.device, DType::BF16,
                          {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads, patches});
                 Tensor k(static_cast<unsigned char*>(qkv.data) + plane_bytes, qkv.device,
-                         DType::BF16, {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads,
-                                       patches});
+                         DType::BF16,
+                         {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads, patches});
                 Tensor v(static_cast<unsigned char*>(qkv.data) + 2 * plane_bytes, qkv.device,
-                         DType::BF16, {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads,
-                                       patches});
+                         DType::BF16,
+                         {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads, patches});
                 q.nb[2] = qkv.nb[1];
                 k.nb[2] = qkv.nb[1];
                 v.nb[2] = qkv.nb[1];

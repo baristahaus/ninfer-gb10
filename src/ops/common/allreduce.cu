@@ -95,8 +95,8 @@ void enqueue_exchange(const ExecutionContext& ec, PeerMailbox& mailbox, int rank
     const int device = ec.device(rank).device().index();
     // THE STREAM THE EXCHANGE IS ENQUEUED ON, printed beside the device it claims to belong to. A
     // launch into a stream belonging to a DIFFERENT device reports success and never executes, and
-    // the phase has verified device INDICES but never the stream's own device. The width-1 arm is the
-    // known-good control: same prints, and the pointers can be compared in one line each.
+    // the phase has verified device INDICES but never the stream's own device. The width-1 arm is
+    // the known-good control: same prints, and the pointers can be compared in one line each.
     if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
         std::fprintf(stderr, "[stream] rank=%d exchange=%p device=%d site=%s\n", rank,
                      static_cast<void*>(ec.device(rank).stream()), device, site);
@@ -110,14 +110,12 @@ void enqueue_exchange(const ExecutionContext& ec, PeerMailbox& mailbox, int rank
 
 } // namespace
 
-void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox,
-                   std::span<void* const> data, std::size_t bytes) {
+void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox, std::span<void* const> data,
+                   std::size_t bytes) {
     validate_reduce(ec, mailbox, data, bytes, "allreduce_sum");
     // The single-owner form: one slot, both ranks' exchanges. Unchanged behaviour.
     const int slot = mailbox.take_capture_slot(bytes);
-    for (int rank = 0; rank < 2; ++rank) {
-        enqueue_exchange(ec, mailbox, rank, slot, data, bytes);
-    }
+    for (int rank = 0; rank < 2; ++rank) { enqueue_exchange(ec, mailbox, rank, slot, data, bytes); }
 }
 
 void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
@@ -126,9 +124,7 @@ void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int ra
     if (rank < 0 || rank >= 2) {
         throw std::invalid_argument("allreduce_sum_rank: rank outside [0,2)");
     }
-    if (slot < 0) {
-        throw std::invalid_argument("allreduce_sum_rank: slot outside the mailbox");
-    }
+    if (slot < 0) { throw std::invalid_argument("allreduce_sum_rank: slot outside the mailbox"); }
     // The per-rank form: this rank's own exchange, in the slot the caller chose so that both ranks
     // agree on it. The caller owns `rank`'s stream, so enqueueing this after its projection is what
     // orders the two. `enqueue_exchange_sum` bounds-checks the slot.

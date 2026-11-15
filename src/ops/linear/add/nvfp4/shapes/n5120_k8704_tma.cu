@@ -3,7 +3,7 @@
 
 namespace ninfer::ops::detail {
 void launch_nvfp4_add_n5120_k8704_tma(const Tensor& x, const Weight& w, Tensor& out,
-                                       Nvfp4A4Workspace scratch, cudaStream_t stream) {
+                                      Nvfp4A4Workspace scratch, cudaStream_t stream) {
     using S    = Nvfp4ScheduleInstance<Nvfp4A4TmaMmaSchedule<256, 3, 1>, 8704>;
     auto* data = static_cast<__nv_bfloat16*>(out.data);
     launch_nvfp4_a4_tma_mma<S>(nvfp4_a4_operands(w, scratch, x.ne[1], Nvfp4ScaleLayout::Tiled256),

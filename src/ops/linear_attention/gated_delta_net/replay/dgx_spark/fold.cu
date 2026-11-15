@@ -126,8 +126,8 @@ __global__ __launch_bounds__(common::kWarpSize* kFoldWarps, 2) void fold_kernel(
     history.warp %= kNumWarps;
     const int conv_block = static_cast<int>(blockIdx.x) * (kFoldWarps / kNumWarps) +
                            static_cast<int>(threadIdx.y) / kNumWarps;
-    history.value_head = conv_block / 8;
-    history.state_tile = conv_block % 8;
+    history.value_head   = conv_block / 8;
+    history.state_tile   = conv_block % 8;
     access.publish_final_conv_history(history, valid);
 }
 

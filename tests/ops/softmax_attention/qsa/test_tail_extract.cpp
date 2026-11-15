@@ -67,13 +67,13 @@ int run(DeviceContext& device, int batch, int layout, Binding binding, int capac
             if (!exhaustive && shared_source) bases[b] = bases[0];
             counts[b]       = exhaustive ? (phase % (capacity + 1) + b) % (capacity + 1)
                                          : std::array{0,
-                                                1,
-                                                std::min(2, capacity),
-                                                std::min(3, capacity),
-                                                capacity / 2,
-                                                std::max(0, capacity - 2),
-                                                capacity - 1,
-                                                capacity}[(phase + b) % 8];
+                                                      1,
+                                                      std::min(2, capacity),
+                                                      std::min(3, capacity),
+                                                      capacity / 2,
+                                                      std::max(0, capacity - 2),
+                                                      capacity - 1,
+                                                      capacity}[(phase + b) % 8];
             available[b]    = counts[b] + (capacity - counts[b]) / (1 + phase % 3);
             const int dst   = binding == Binding::SamePool ? batch + 1 + b
                               : raw_alias                  ? sources[b]

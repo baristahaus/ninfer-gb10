@@ -90,7 +90,8 @@ struct RoundTokenScores {
     std::span<const float> chosen;
     std::span<const std::int32_t> top_ids;
     std::span<const float> top_logprobs;
-    std::int32_t ranks                   = 0;
+    std::int32_t ranks = 0;
+
     [[nodiscard]] bool empty() const noexcept { return chosen.empty(); }
 };
 

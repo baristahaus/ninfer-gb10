@@ -47,7 +47,7 @@ private:
     std::uint32_t descriptor_  = 0;
     std::uint32_t generation_  = 0;
     PageDirectory* page_store_ = nullptr;
-    bool page_in_              = false;   // spill page-in form: abort must not unpin Device
+    bool page_in_              = false; // spill page-in form: abort must not unpin Device
 };
 
 // Owns Host page membership and byte ranges. Replicas retain their fixed byte offsets when an

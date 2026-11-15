@@ -126,7 +126,7 @@ MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
                 prefix + "experts: the NVFP4 and EXL3 bank routes are mutually exclusive");
         }
         return {
-            .router      = device(binder, prefix + "gate.weight", QType::BF16, {513, 2560}),
+            .router = device(binder, prefix + "gate.weight", QType::BF16, {513, 2560}),
             .shared_gate =
                 projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}),
             .shared_up = projection(binder, prefix + "shared_expert.up_proj.weight", {640, 2560}),
@@ -168,26 +168,24 @@ DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
     using detail::DFlash2Config;
     constexpr DFlash2Config dflash2{};
     DFlash2Plan out;
-    out.feature_projection =
-        device(binder, "dflash2/feature_projection", QType::BF16,
-               {dflash2.hidden, dflash2.feature_projection_cols}, placement);
+    out.feature_projection = device(binder, "dflash2/feature_projection", QType::BF16,
+                                    {dflash2.hidden, dflash2.feature_projection_cols}, placement);
     out.context_norm =
         device(binder, "dflash2/context_norm", QType::BF16, {dflash2.hidden}, placement);
-    out.final_norm =
-        device(binder, "dflash2/final_norm", QType::BF16, {dflash2.hidden}, placement);
+    out.final_norm = device(binder, "dflash2/final_norm", QType::BF16, {dflash2.hidden}, placement);
     for (int i = 0; i < dflash2.layers; ++i) {
-        const std::string p     = "dflash2/layers/" + std::to_string(i) + "/";
-        const std::string sp    = "layers." + std::to_string(i) + ".";
-        auto& layer             = out.layers[i];
-        layer.input_norm        = device(binder, p + "input_norm", QType::BF16, {dflash2.hidden}, placement);
+        const std::string p  = "dflash2/layers/" + std::to_string(i) + "/";
+        const std::string sp = "layers." + std::to_string(i) + ".";
+        auto& layer          = out.layers[i];
+        layer.input_norm =
+            device(binder, p + "input_norm", QType::BF16, {dflash2.hidden}, placement);
         layer.post_attention_norm =
             device(binder, p + "post_attention_norm", QType::BF16, {dflash2.hidden}, placement);
-        layer.query_key_value = device(binder, p + "attention/query_key_value", QType::BF16,
-                                       {dflash2.query_size + 2 * dflash2.kv_size,
-                                        dflash2.hidden},
-                                       placement);
-        layer.context_key = device(binder, p + "attention/context_key", QType::BF16,
-                                   {dflash2.kv_size, dflash2.hidden}, placement);
+        layer.query_key_value =
+            device(binder, p + "attention/query_key_value", QType::BF16,
+                   {dflash2.query_size + 2 * dflash2.kv_size, dflash2.hidden}, placement);
+        layer.context_key   = device(binder, p + "attention/context_key", QType::BF16,
+                                     {dflash2.kv_size, dflash2.hidden}, placement);
         layer.context_value = device(binder, p + "attention/context_value", QType::BF16,
                                      {dflash2.kv_size, dflash2.hidden}, placement);
         layer.query_norm =
@@ -210,8 +208,8 @@ DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
                    {dflash2.conv_projection_rows, dflash2.hidden}, placement);
         layer.mlp_gate_up = device(binder, p + "mlp/gate_up", QType::BF16,
                                    {2 * dflash2.intermediate, dflash2.hidden}, placement);
-        layer.mlp_down = device(binder, p + "mlp/down", QType::Q8_G32_FP16,
-                                {dflash2.hidden, dflash2.intermediate}, placement);
+        layer.mlp_down    = device(binder, p + "mlp/down", QType::Q8_G32_FP16,
+                                   {dflash2.hidden, dflash2.intermediate}, placement);
     }
     out.selector_hidden_projection =
         device(binder, "dflash2/candidate_selector/hidden_projection", QType::BF16,
@@ -252,9 +250,9 @@ MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placem
     if (exl3) {
         // The EXL3 recipe's grouped `gate.weight` carries the router and the shared-gate
         // row as one BF16 [513, 2560] object (see bind_main_moe).
-        out.router      = device(binder, prefix + "gate.weight", QType::BF16, {513, 2560}, placement);
-        out.exl3_gate   = exl3_bank(binder, prefix + "experts.gate", {512 * 640, 2560});
-        out.exl3_up     = exl3_bank(binder, prefix + "experts.up", {512 * 640, 2560});
+        out.router    = device(binder, prefix + "gate.weight", QType::BF16, {513, 2560}, placement);
+        out.exl3_gate = exl3_bank(binder, prefix + "experts.gate", {512 * 640, 2560});
+        out.exl3_up   = exl3_bank(binder, prefix + "experts.up", {512 * 640, 2560});
         out.routed_down = exl3_bank(binder, prefix + "experts.down", {512 * 2560, 640});
         out.exl3        = true;
     } else if (nvfp4) {
@@ -264,7 +262,8 @@ MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placem
                 "MTP experts must be one BF16, NVFP4, or EXL3 gate/up and down bank pair");
         }
         out.routed_gate_up = expert_bank(binder, prefix + "experts.gate_up", {512, 1280, 2560});
-        out.routed_gate_up_input_divisors = expert_input_divisors(binder, prefix + "experts.gate_up");
+        out.routed_gate_up_input_divisors =
+            expert_input_divisors(binder, prefix + "experts.gate_up");
         out.routed_down = expert_bank(binder, prefix + "experts.down", {512, 2560, 640});
         out.routed_down_input_divisors = expert_input_divisors(binder, prefix + "experts.down");
     } else {
@@ -316,7 +315,7 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
     }
     const auto& object = binder.reader().directory().tensor(binding.parts.front().object);
     binder.reader().validate_object(binding.parts.front().object);
-    const bool fp8_table = object.format == "fp8_e4m3fn" && object.layout == "contiguous_le_v1";
+    const bool fp8_table   = object.format == "fp8_e4m3fn" && object.layout == "contiguous_le_v1";
     const bool nvfp4_table = object.format == "nvfp4" && object.layout == "block_scale_k16_v1";
     if (object.shape != shape || (!fp8_table && !nvfp4_table)) {
         throw artifact::ArtifactError("PLE table representation is invalid");
@@ -327,26 +326,26 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
 }
 
 PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
-    const auto& bindings = binder.reader().directory().bindings;
+    const auto& bindings         = binder.reader().directory().bindings;
     const std::string table_name = prefix + "ple_embedding.ngram_embedding.weight";
     const bool nvfp4_table =
-        binder.reader().directory().tensor(bindings.at(table_name).parts.front().object)
-            .format == "nvfp4";
+        binder.reader().directory().tensor(bindings.at(table_name).parts.front().object).format ==
+        "nvfp4";
     PlePlan out{};
     if (!nvfp4_table) {
         // Vendor FP8 recipes carry the table scale as its own object; the NVFP4
         // recipe's scale_2 word lives in the table payload.
-        out.embedding_scale = device(
-            binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1});
+        out.embedding_scale =
+            device(binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1});
     }
-    out.nvfp4_table = nvfp4_table;
+    out.nvfp4_table      = nvfp4_table;
     out.convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240});
     out.key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560});
     out.convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240});
     out.key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240});
     out.query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240});
     out.value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560});
-    out.embedding_table = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
+    out.embedding_table  = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
     return out;
 }
 
@@ -465,13 +464,12 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
             if (handle == directory.object_index.end()) {
                 throw artifact::ArtifactError("tier_plan bank object is absent: " + bank.object);
             }
-            const auto& shape = directory.tensor(handle->second).shape;
+            const auto& shape   = directory.tensor(handle->second).shape;
             const auto expected = static_cast<std::uint64_t>(bank.experts) *
                                   static_cast<std::uint64_t>(bank.rows_per_expert);
             const bool row_count_ok =
                 (shape.size() == 2 && static_cast<std::uint64_t>(shape[0]) == expected) ||
-                (shape.size() == 3 &&
-                 static_cast<std::uint64_t>(shape[0]) == bank.experts &&
+                (shape.size() == 3 && static_cast<std::uint64_t>(shape[0]) == bank.experts &&
                  static_cast<std::uint64_t>(shape[1]) == bank.rows_per_expert);
             if (shape.empty() || !row_count_ok) {
                 throw artifact::ArtifactError("tier_plan bank " + bank.object +
@@ -543,14 +541,14 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     mtp.final_hc     = bind_final_hc(binder, "mtp.hyper_connection_mixer.", mtp_placement);
     const Placement dflash2_placement =
         features.dflash2() ? Placement::Device : Placement::Disabled;
-    out.bindings.dflash2 = bind_dflash2(binder, dflash2_placement);
+    out.bindings.dflash2             = bind_dflash2(binder, dflash2_placement);
     const Placement vision_placement = features.vision ? Placement::Device : Placement::Disabled;
     out.bindings.vision              = bind_vision(binder, vision_placement);
 
     out.device_objects = binder.device_objects();
     // The tier state is final once every binding has remapped; capture before the binder's
     // finish() move.
-    out.tier_inputs = binder.tier_inputs();
+    out.tier_inputs     = binder.tier_inputs();
     out.materialization = std::move(binder).finish();
     return out;
 }

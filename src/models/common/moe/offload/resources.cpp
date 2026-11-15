@@ -446,7 +446,7 @@ std::optional<PreparedExecution> Resources::try_prepare_layer(ExpertBankId bank)
         const auto& selected = state.plan->layers[index];
         const auto count     = selected.cache_experts;
         const auto kind      = selected.requires_full_bank(state.tokens) ||
-                                  count == std::uint32_t(selected.spec.profile.routed.experts)
+                                       count == std::uint32_t(selected.spec.profile.routed.experts)
                                    ? ops::ExpertSubsetKind::All
                                : count ? ops::ExpertSubsetKind::MaskOnes
                                        : ops::ExpertSubsetKind::None;

@@ -848,7 +848,7 @@ int test_stream_response() {
 
     GenerationOutcome outcome = sample_outcome();
     outcome.stats.constraint  = ninfer::ConstraintObservation{
-         .branch = ninfer::ConstraintOutputBranch::Content, .complete = true, .terminated = true};
+        .branch = ninfer::ConstraintOutputBranch::Content, .complete = true, .terminated = true};
     const std::vector<std::string> events = stream.finish(outcome);
     failures +=
         check(events.size() == 4, "finish emits buffered suffix, terminal, usage, and done");
@@ -903,11 +903,11 @@ int test_stream_response() {
     (void)progress_only.tool_call_progress(16);
     const auto progress_finish = progress_only.finish(tool_outcome);
     const Json adopted         = parse_sse(progress_finish[0]);
-    failures += check(
-        adopted["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "Edit" &&
-            adopted["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] ==
-                R"({"file_path":"/tmp/probe.cpp"})",
-        "progress-only route emits terminal calls as complete tool-call deltas");
+    failures +=
+        check(adopted["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "Edit" &&
+                  adopted["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] ==
+                      R"({"file_path":"/tmp/probe.cpp"})",
+              "progress-only route emits terminal calls as complete tool-call deltas");
     return failures;
 }
 

@@ -28,9 +28,7 @@ int check(bool condition, const std::string& message) {
 bool throws_invalid(const ShardAxis axis, const std::int64_t extent, const int width) {
     try {
         (void)split_evenly(axis, extent, width);
-    } catch (const std::invalid_argument&) {
-        return true;
-    } catch (...) {
+    } catch (const std::invalid_argument&) { return true; } catch (...) {
         return false;
     }
     return false;
@@ -64,8 +62,7 @@ int test_even_splits() {
 
     // PrimaryOnly: rank 0 whole, every other rank empty.
     const ShardPlacement primary = split_evenly(ShardAxis::PrimaryOnly, 4096, 3);
-    failures += check(primary.ranges ==
-                          std::vector<ShardRange>{{0, 4096}, {0, 0}, {0, 0}},
+    failures += check(primary.ranges == std::vector<ShardRange>{{0, 4096}, {0, 0}, {0, 0}},
                       "a primary-only parameter is whole on rank 0 and empty elsewhere");
     failures += check(primary.ranges[1].empty() && primary.ranges[2].empty(),
                       "the empty ranks report empty ranges");
@@ -81,11 +78,16 @@ int test_rejections() {
     int failures = 0;
     // The extents that actually matter: the models' KV heads (4 and 2), the GDN key heads (16),
     // the vocabulary (248320 = 2^9*5*97) and the dense intermediate (17408 = 2^10*17).
-    failures += check(throws_invalid(ShardAxis::Rows, 4, 3), "4 KV heads do not split over 3 ranks");
-    failures += check(throws_invalid(ShardAxis::Rows, 2, 3), "2 KV heads do not split over 3 ranks");
-    failures += check(throws_invalid(ShardAxis::Rows, 16, 3), "16 GDN key heads do not split over 3");
-    failures += check(throws_invalid(ShardAxis::Rows, 248320, 3), "the vocabulary does not split over 3");
-    failures += check(throws_invalid(ShardAxis::Columns, 17408, 3), "17408 columns do not split over 3");
+    failures +=
+        check(throws_invalid(ShardAxis::Rows, 4, 3), "4 KV heads do not split over 3 ranks");
+    failures +=
+        check(throws_invalid(ShardAxis::Rows, 2, 3), "2 KV heads do not split over 3 ranks");
+    failures +=
+        check(throws_invalid(ShardAxis::Rows, 16, 3), "16 GDN key heads do not split over 3");
+    failures +=
+        check(throws_invalid(ShardAxis::Rows, 248320, 3), "the vocabulary does not split over 3");
+    failures +=
+        check(throws_invalid(ShardAxis::Columns, 17408, 3), "17408 columns do not split over 3");
     failures += check(throws_invalid(ShardAxis::Rows, 8, 0), "a zero-width group is rejected");
     failures += check(throws_invalid(ShardAxis::Rows, 8, -2), "a negative width is rejected");
     failures += check(throws_invalid(ShardAxis::Rows, -8, 2), "a negative extent is rejected");
@@ -94,9 +96,7 @@ int test_rejections() {
     bool replicated_ok = true;
     try {
         (void)split_evenly(ShardAxis::Replicated, 7, 3);
-    } catch (...) {
-        replicated_ok = false;
-    }
+    } catch (...) { replicated_ok = false; }
     failures += check(replicated_ok, "replicated placement does not need a divisible extent");
     return failures;
 }
@@ -116,14 +116,16 @@ int test_shard_binding() {
     const auto halves   = split_evenly(ShardAxis::Rows, 24, 2);
     const Binding rank0 = shard_binding(whole, halves, 0);
     const Binding rank1 = shard_binding(whole, halves, 1);
-    failures += check(rank0.parts.size() == 1 && rank0.parts[0].begin == 0 && rank0.parts[0].end == 12,
-                      "rank 0 owns the first half of the object");
-    failures += check(rank1.parts.size() == 1 && rank1.parts[0].begin == 12 && rank1.parts[0].end == 24,
-                      "rank 1 owns the second half of the object");
+    failures +=
+        check(rank0.parts.size() == 1 && rank0.parts[0].begin == 0 && rank0.parts[0].end == 12,
+              "rank 0 owns the first half of the object");
+    failures +=
+        check(rank1.parts.size() == 1 && rank1.parts[0].begin == 12 && rank1.parts[0].end == 24,
+              "rank 1 owns the second half of the object");
     failures += check(rank0.parts[0].object == ObjectHandle{7}, "the object is unchanged");
-    failures += check(rank0.elements == 12 && rank1.elements == 12, "each rank's element count halves");
-    failures += check(!rank0.whole_object && !rank1.whole_object,
-                      "a half is not the whole object");
+    failures +=
+        check(rank0.elements == 12 && rank1.elements == 12, "each rank's element count halves");
+    failures += check(!rank0.whole_object && !rank1.whole_object, "a half is not the whole object");
 
     // Two stored parts: a rank's range can span both.
     Binding two_parts;
@@ -131,7 +133,7 @@ int test_shard_binding() {
     two_parts.parts.push_back(Part{ObjectHandle{1}, 0, 12});
     two_parts.parts.push_back(Part{ObjectHandle{2}, 0, 12});
     // A range covering logical [8, 16) crosses the part boundary at 12.
-    const auto thirds = split_evenly(ShardAxis::Rows, 24, 3); // {0,8},{8,8},{16,8}
+    const auto thirds    = split_evenly(ShardAxis::Rows, 24, 3); // {0,8},{8,8},{16,8}
     const Binding middle = shard_binding(two_parts, thirds, 1);
     failures += check(middle.parts.size() == 2, "a range spanning two parts yields two slices");
     failures += check(middle.parts[0].object == ObjectHandle{1} && middle.parts[0].begin == 8 &&
@@ -144,7 +146,7 @@ int test_shard_binding() {
 
     // Replicated: every rank gets the whole binding, flagged whole.
     const auto replicated = split_evenly(ShardAxis::Replicated, 24, 2);
-    const Binding all      = shard_binding(whole, replicated, 1);
+    const Binding all     = shard_binding(whole, replicated, 1);
     failures += check(all.parts.size() == 1 && all.parts[0].begin == 0 && all.parts[0].end == 24,
                       "a replicated parameter is whole on every rank");
     failures += check(all.whole_object, "a replicated parameter keeps the whole-object flag");
@@ -155,23 +157,20 @@ int test_shard_binding() {
     failures += check(none.parts.empty() && none.elements == 0,
                       "a rank that owns none of a primary-only parameter gets an empty binding");
     const Binding first = shard_binding(whole, primary, 0);
-    failures += check(first.whole_object && first.elements == 24, "rank 0 owns the whole parameter");
+    failures +=
+        check(first.whole_object && first.elements == 24, "rank 0 owns the whole parameter");
 
     // Rejections.
     bool threw = false;
     try {
         (void)shard_binding(whole, halves, 2);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
+    } catch (const std::invalid_argument&) { threw = true; }
     failures += check(threw, "a rank outside the placement is rejected");
 
     threw = false;
     try {
         (void)shard_binding(whole, split_evenly(ShardAxis::Rows, 48, 2), 1);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
+    } catch (const std::invalid_argument&) { threw = true; }
     failures += check(threw, "a range outside the binding is rejected");
     return failures;
 }

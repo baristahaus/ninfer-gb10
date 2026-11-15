@@ -17,9 +17,9 @@ namespace ninfer::ops {
 // Small-column execution uses 512 threads to reduce atomic contenders. Aggregate
 // execution dispatches registered vocab profiles to a smaller block so the much
 // larger 2-D grid exposes enough resident CTAs without oversized reductions.
-inline constexpr int kArgmaxBlock          = 512;
-inline constexpr int kArgmaxItemsPerThread = 1;
-inline constexpr int kShortlistRerankTile = 512;
+inline constexpr int kArgmaxBlock                = 512;
+inline constexpr int kArgmaxItemsPerThread       = 1;
+inline constexpr int kShortlistRerankTile        = 512;
 inline constexpr int kShortlistCandidatesPerTile = 2;
 
 __device__ __forceinline__ bool argmax_better(float value, std::int32_t index, float best_value,
@@ -130,46 +130,47 @@ __launch_bounds__(kArgmaxBlock) __global__
     }
 }
 
-__launch_bounds__(kShortlistRerankTile) __global__ void shortlist_tile_candidates_kernel(
-    const __nv_bfloat16* logits, const std::int32_t* id_map, std::int32_t* candidate_ids,
-    std::int32_t shortlist_rows, std::int32_t physical_rows, std::int32_t candidate_rows) {
-    const int tile = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
-    const int row = tile * kShortlistRerankTile + static_cast<int>(threadIdx.x);
+__launch_bounds__(kShortlistRerankTile) __global__
+    void shortlist_tile_candidates_kernel(const __nv_bfloat16* logits, const std::int32_t* id_map,
+                                          std::int32_t* candidate_ids, std::int32_t shortlist_rows,
+                                          std::int32_t physical_rows, std::int32_t candidate_rows) {
+    const int tile          = static_cast<int>(blockIdx.x);
+    const int token         = static_cast<int>(blockIdx.y);
+    const int row           = tile * kShortlistRerankTile + static_cast<int>(threadIdx.x);
     const std::int64_t base = static_cast<std::int64_t>(token) * physical_rows;
     const float original_value =
         row < shortlist_rows ? __bfloat162float(logits[base + row]) : -CUDART_INF_F;
     const std::int32_t original_row = row < shortlist_rows ? row : INT32_MAX;
-    float best_value = original_value;
-    std::int32_t best_row = original_row;
+    float best_value                = original_value;
+    std::int32_t best_row           = original_row;
     argmax_block_reduce(best_value, best_row);
     __shared__ std::int32_t first_row;
     if (threadIdx.x == 0) { first_row = best_row; }
     __syncthreads();
 
     best_value = original_row == first_row ? -CUDART_INF_F : original_value;
-    best_row = original_row == first_row ? INT32_MAX : original_row;
+    best_row   = original_row == first_row ? INT32_MAX : original_row;
     argmax_block_reduce(best_value, best_row);
-    const std::int64_t output_base = static_cast<std::int64_t>(token) * candidate_rows +
-                                     tile * kShortlistCandidatesPerTile;
+    const std::int64_t output_base =
+        static_cast<std::int64_t>(token) * candidate_rows + tile * kShortlistCandidatesPerTile;
     if (threadIdx.x == 0) {
-        candidate_ids[output_base] = id_map[first_row];
+        candidate_ids[output_base]     = id_map[first_row];
         candidate_ids[output_base + 1] = id_map[best_row];
     }
 }
 
-__launch_bounds__(256) __global__ void shortlist_exact_scores_kernel(
-    const __nv_bfloat16* hidden, const __nv_bfloat16* exact_head,
-    const std::int32_t* candidate_ids, float* candidate_scores, std::int32_t hidden_rows,
-    std::int32_t candidate_rows) {
+__launch_bounds__(256) __global__
+    void shortlist_exact_scores_kernel(const __nv_bfloat16* hidden, const __nv_bfloat16* exact_head,
+                                       const std::int32_t* candidate_ids, float* candidate_scores,
+                                       std::int32_t hidden_rows, std::int32_t candidate_rows) {
     const int candidate = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
-    const std::int64_t candidate_index = static_cast<std::int64_t>(token) * candidate_rows +
-                                         candidate;
-    const int token_id = candidate_ids[candidate_index];
-    const __nv_bfloat16* x = hidden + static_cast<std::int64_t>(token) * hidden_rows;
+    const int token     = static_cast<int>(blockIdx.y);
+    const std::int64_t candidate_index =
+        static_cast<std::int64_t>(token) * candidate_rows + candidate;
+    const int token_id          = candidate_ids[candidate_index];
+    const __nv_bfloat16* x      = hidden + static_cast<std::int64_t>(token) * hidden_rows;
     const __nv_bfloat16* weight = exact_head + static_cast<std::int64_t>(token_id) * hidden_rows;
-    float sum = 0.0F;
+    float sum                   = 0.0F;
     for (int k = static_cast<int>(threadIdx.x); k < hidden_rows; k += blockDim.x) {
         sum = fmaf(__bfloat162float(x[k]), __bfloat162float(weight[k]), sum);
     }
@@ -190,17 +191,17 @@ __launch_bounds__(256) __global__ void shortlist_exact_scores_fp8_kernel(
     const __nv_bfloat16* exact_row_scales, const std::int32_t* candidate_ids,
     float* candidate_scores, std::int32_t hidden_rows, std::int32_t candidate_rows) {
     const int candidate = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
-    const std::int64_t candidate_index = static_cast<std::int64_t>(token) * candidate_rows +
-                                         candidate;
-    const int token_id = candidate_ids[candidate_index];
-    const __nv_bfloat16* x = hidden + static_cast<std::int64_t>(token) * hidden_rows;
+    const int token     = static_cast<int>(blockIdx.y);
+    const std::int64_t candidate_index =
+        static_cast<std::int64_t>(token) * candidate_rows + candidate;
+    const int token_id        = candidate_ids[candidate_index];
+    const __nv_bfloat16* x    = hidden + static_cast<std::int64_t>(token) * hidden_rows;
     const std::uint8_t* codes = exact_codes + static_cast<std::int64_t>(token_id) * hidden_rows;
-    float sum = 0.0F;
+    float sum                 = 0.0F;
     for (int k = static_cast<int>(threadIdx.x); k < hidden_rows; k += blockDim.x) {
         __nv_fp8_e4m3 code;
         code.__x = codes[k];
-        sum = fmaf(__bfloat162float(x[k]), static_cast<float>(code), sum);
+        sum      = fmaf(__bfloat162float(x[k]), static_cast<float>(code), sum);
     }
     __shared__ float partial[256];
     partial[threadIdx.x] = sum;
@@ -215,16 +216,17 @@ __launch_bounds__(256) __global__ void shortlist_exact_scores_fp8_kernel(
     }
 }
 
-__launch_bounds__(kShortlistRerankTile) __global__ void shortlist_exact_select_kernel(
-    const float* candidate_scores, const std::int32_t* candidate_ids, std::int32_t* out,
-    std::int32_t candidate_rows) {
-    const int token = static_cast<int>(blockIdx.x);
-    const int candidate = static_cast<int>(threadIdx.x);
+__launch_bounds__(kShortlistRerankTile) __global__
+    void shortlist_exact_select_kernel(const float* candidate_scores,
+                                       const std::int32_t* candidate_ids, std::int32_t* out,
+                                       std::int32_t candidate_rows) {
+    const int token         = static_cast<int>(blockIdx.x);
+    const int candidate     = static_cast<int>(threadIdx.x);
     const std::int64_t base = static_cast<std::int64_t>(token) * candidate_rows;
-    float best_value = -CUDART_INF_F;
+    float best_value        = -CUDART_INF_F;
     std::int32_t best_index = INT32_MAX;
     for (int row = candidate; row < candidate_rows; row += blockDim.x) {
-        const float value = candidate_scores[base + row];
+        const float value        = candidate_scores[base + row];
         const std::int32_t index = candidate_ids[base + row];
         if (argmax_better(value, index, best_value, best_index)) {
             best_value = value;

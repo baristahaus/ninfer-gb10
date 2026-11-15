@@ -10,15 +10,17 @@
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (path == nullptr || *path == '\0') {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the load-plan test did not run. Set it to the 125B .ninfer file\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the load-plan test did "
+                     "not run. Set it to the 125B .ninfer file\n";
         return 77;
     }
     try {
         ninfer::artifact::Reader reader{std::filesystem::path(path)};
         const auto& provenance = reader.directory().provenance;
-        const std::string recipe = provenance.contains("recipe") && provenance.at("recipe").is_string()
-                                       ? provenance.at("recipe").get<std::string>()
-                                       : std::string{};
+        const std::string recipe =
+            provenance.contains("recipe") && provenance.at("recipe").is_string()
+                ? provenance.at("recipe").get<std::string>()
+                : std::string{};
         const bool fp8_mtp = recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp-v3";
         const bool fp8_projections =
             fp8_mtp || recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3";
@@ -57,17 +59,13 @@ int main() {
             (void)ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
                 dflash2_binder, {.speculative = ninfer::SpeculativeBackend::DFlash2});
         } catch (const ninfer::artifact::ArtifactError& error) {
-            if (std::string(error.what()).find("DFlash2 component") == std::string::npos) {
-                throw;
-            }
+            if (std::string(error.what()).find("DFlash2 component") == std::string::npos) { throw; }
             std::cout << "dflash2 refused as expected: " << error.what() << '\n';
         }
         std::cout << "device_objects=" << plan.device_objects.size()
                   << " mtp_objects=" << mtp_plan.device_objects.size()
                   << " full_objects=" << full_plan.device_objects.size()
-                  << " file_backed="
-                  << plan.bindings.ple_mapping.size()
-                  << '\n';
+                  << " file_backed=" << plan.bindings.ple_mapping.size() << '\n';
         // The DFlash2-enabled load plan: runs only against a dflash2-carrying artifact
         // (the 5090-side conversion's output, NINFER_QWEN38_FLASH_NEXT_DFLASH2_WEIGHTS).
         // Asserts the draft's 85 device bindings plus the refusal-free component
@@ -82,11 +80,10 @@ int main() {
             // the text body plus the draft's 76 device objects, and no MTP tensors.
             const std::size_t expected_dflash2_objects = text_objects + 76;
             if (dflash2_plan.device_objects.size() != expected_dflash2_objects) {
-                throw std::runtime_error(
-                    "DFlash2 load plan uploaded " +
-                    std::to_string(dflash2_plan.device_objects.size()) +
-                    " device objects, expected " +
-                    std::to_string(expected_dflash2_objects));
+                throw std::runtime_error("DFlash2 load plan uploaded " +
+                                         std::to_string(dflash2_plan.device_objects.size()) +
+                                         " device objects, expected " +
+                                         std::to_string(expected_dflash2_objects));
             }
             if (dflash2_plan.bindings.mtp.embedding_norm.name ==
                 "mtp.pre_fc_norm_embedding.weight") {

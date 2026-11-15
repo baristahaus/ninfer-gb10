@@ -65,8 +65,7 @@ void launch_dense_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaSt
             Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 64, kGemmK, 32, 16, 2, 2>, K>>(
             operands, output, LinearIdentityEpilogue{}, stream);
     }
-    launch_fp8_a16_mma<
-        Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 128, 64, 64, 16, 2, 2>, K>>(
+    launch_fp8_a16_mma<Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 128, 64, 64, 16, 2, 2>, K>>(
         operands, output, LinearIdentityEpilogue{}, stream);
 }
 
@@ -83,8 +82,7 @@ struct Fp8FlashNextVocabularyRoute {
     static void tile(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
         constexpr int kPreferredWarps = ActiveTokens <= 24 ? 8 : 4;
         constexpr int kWarps          = K % (kPreferredWarps * 64) == 0 ? kPreferredWarps : 2;
-        using Schedule                = Fp8A16SlicedKMmaSchedule<kWarps, ActiveTokens,
-                                                             ActiveTokens <= 8 ? 1 : 2>;
+        using Schedule = Fp8A16SlicedKMmaSchedule<kWarps, ActiveTokens, ActiveTokens <= 8 ? 1 : 2>;
         static_assert(K % Schedule::kBlockK == 0);
         launch_fp8_a16_sliced_k_mma<Fp8ScheduleInstance<Schedule, K, ActiveTokens>>(
             fp8_a16_operands(x, weight),

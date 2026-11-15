@@ -592,12 +592,12 @@ int graph_case(Case c, int batch, bool pooled) {
     const auto launch    = [&] {
         if (pooled) {
             ops::gated_delta_net_batch_update(q, k, v, g, beta, scale, c.normalize_qk, states,
-                                                 sources, destinations, out, execution);
+                                              sources, destinations, out, execution);
         } else {
             auto si = states.slice(3, 0, 1).view({kStateDim, kStateDim, c.value_heads});
             auto so = states.slice(3, 1, 1).view({kStateDim, kStateDim, c.value_heads});
             ops::gated_delta_net(q, k, v, g, beta, scale, c.normalize_qk, workspace, si, so, out,
-                                    execution);
+                                 execution);
         }
     };
     DecodeGraphDefinition definition;
@@ -653,7 +653,7 @@ int graph_case(Case c, int batch, bool pooled) {
             input.tokens      = c.tokens;
             const auto slice  = [row](const std::vector<float>& values, std::size_t size) {
                 return std::vector<float>(values.begin() + row * size,
-                                           values.begin() + (row + 1) * size);
+                                          values.begin() + (row + 1) * size);
             };
             input.q    = slice(in.q, qk_size);
             input.k    = slice(in.k, qk_size);

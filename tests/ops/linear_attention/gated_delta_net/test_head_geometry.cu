@@ -100,7 +100,8 @@ void check_route_selector() {
     const bool rank_earlier =
         select_recurrence_route(kRankQk, kRankValue, 11) == RecurrenceRoute::Chunked &&
         select_recurrence_route(kSingleQk, kSingleValue, 11) == RecurrenceRoute::Recurrent;
-    check(rank_earlier, "on dgx_spark the 8/24 geometry crosses to chunked at 11 tokens, 16/48 at 16");
+    check(rank_earlier,
+          "on dgx_spark the 8/24 geometry crosses to chunked at 11 tokens, 16/48 at 16");
     std::printf("  dgx_spark crossover: 8/24 at 11 tokens, 16/48 at 16 tokens\n");
 #endif
 }
@@ -162,7 +163,7 @@ void check_workspace_is_parametric() {
 // gate: its packed stride is (2*QK + value) * state_dim, which is a head-count-derived constant,
 // and its grid is the literal value-head count.
 void check_packed_path_is_absolute() {
-    constexpr int kStateDim = 128;
+    constexpr int kStateDim     = 128;
     constexpr int kPackedSingle = (2 * kSingleQk + kSingleValue) * kStateDim;
     constexpr int kPackedRank   = (2 * kRankQk + kRankValue) * kStateDim;
     check(kPackedSingle == 10240, "the packed stride for 16/48 is the 10240 the gate requires");
@@ -184,13 +185,13 @@ void check_control_profile_gate() {
     using ninfer::ops::detail::gdn_control::describe_profile;
 
     const auto profile = [](std::int32_t rows) {
-        const LinearProfile parent{ ninfer::QType::BF16, rows, 5120,
-                                    ninfer::ops::LinearPolicy::A16Only,
-                                    ninfer::QuantLayout::Contiguous };
+        const LinearProfile parent{ninfer::QType::BF16, rows, 5120,
+                                   ninfer::ops::LinearPolicy::A16Only,
+                                   ninfer::QuantLayout::Contiguous};
         return ProjectionProfile{parent, parent};
     };
     // The single device's paired a/b projections: 48 rows each, accepted.
-    bool single_ok = true;
+    bool single_ok     = true;
     std::int32_t heads = 0;
     try {
         heads = describe_profile(profile(48)).heads;
@@ -201,7 +202,7 @@ void check_control_profile_gate() {
     // 24 heads through two 16-head M tiles made the profile acceptable, so this group now asserts
     // the acceptance rather than the refusal. It went stale silently once — the merge that added
     // the route and the merge that added this assertion disagreed, and only a suite run caught it.
-    bool rank_ok = false;
+    bool rank_ok            = false;
     std::int32_t rank_heads = 0;
     try {
         rank_heads = describe_profile(profile(24)).heads;
@@ -209,8 +210,7 @@ void check_control_profile_gate() {
     } catch (const std::invalid_argument&) { rank_ok = false; }
     std::printf("  control profile at 24 rows: %s (heads %d)\n", rank_ok ? "accepted" : "REFUSED",
                 rank_heads);
-    check(rank_ok && rank_heads == 24,
-          "a tp2 rank's 24-row control profile is accepted, heads 24");
+    check(rank_ok && rank_heads == 24, "a tp2 rank's 24-row control profile is accepted, heads 24");
 
     // The guard that made this group worth having survives: a row count with no geometry is still
     // refused, so acceptance cannot be added ahead of a route.

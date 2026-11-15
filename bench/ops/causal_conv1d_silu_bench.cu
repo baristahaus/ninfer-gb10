@@ -299,7 +299,7 @@ void run_snapshot(const Options& options) {
     // and publishes three BF16 state columns.
     const double bytes = 8.0 * options.channels + 6.0 * options.channels * options.batch +
                          10.0 * static_cast<double>(n);
-    const Result r = time_stage(
+    const Result r     = time_stage(
         options,
         [&](CudaExecutionView cuda) {
             ops::causal_conv1d_silu_snapshot(tx, tw, ts, tvalid, tslot, tsnapshot_base, tout, cuda);

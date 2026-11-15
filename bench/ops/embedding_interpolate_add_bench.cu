@@ -98,9 +98,7 @@ int main(int argc, char** argv) try {
     measurement::hardware();
     measurement::LogicalBenchmark benchmark(timing);
 
-    if (patches.empty()) {
-        patches = {8, 256, 4096, 49152, 65536};
-    }
+    if (patches.empty()) { patches = {8, 256, 4096, 49152, 65536}; }
     for (const std::int32_t p : patches) { run(p, profile_once, benchmark); }
     return 0;
 } catch (const std::exception& error) {

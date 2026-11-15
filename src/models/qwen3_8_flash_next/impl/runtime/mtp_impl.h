@@ -225,7 +225,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                                      .replay_records          = state.execution.replay_records,
                                      .pending_records = pending ? state.pending_snapshot : nullptr,
                                      .pending_folds   = pending ? frame.pending_folds.slice(
-                                                                    1, 0, state.pending_fold_rows)
+                                                                      1, 0, state.pending_fold_rows)
                                                                 : Tensor{},
                                      .sampling        = frame.sampling,
                                  },

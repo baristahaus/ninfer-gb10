@@ -31,13 +31,15 @@ Tensor host_step(const Tensor& storage, std::uint32_t step, std::int32_t element
 
 execution::MtpExecutionView mtp_view(const execution::Parameters& parameters, Resources& resources,
                                      CudaExecutionView execution, ProposalHead proposal_head,
-                                     const models::ShardedGroup* group = nullptr,
+                                     const models::ShardedGroup* group              = nullptr,
                                      const execution::ShardedCollective* collective = nullptr) {
     if (!resources.frame.mtp || !resources.decoder.mtp_cache()) {
         throw std::logic_error("MTP execution resources are unavailable");
     }
-    return {parameters, resources.work, execution,
-            resources.decoder.mtp_cache()->batch_layer_view(0), proposal_head, group, collective};
+    return {parameters,    resources.work,
+            execution,     resources.decoder.mtp_cache()->batch_layer_view(0),
+            proposal_head, group,
+            collective};
 }
 
 void retain_conditioning(Resources& resources, std::span<const ExecutionRow> rows,
@@ -86,23 +88,23 @@ void RankProgramImpl::prepare_mtp_draft(ComputeOperation& operation) {
 
 void RankProgramImpl::run_mtp_draft(std::uint32_t batch_size, std::uint32_t steps,
                                     std::uint32_t max_frontier) {
-    auto& frame              = resources.frame;
-    auto& mtp                = *frame.mtp;
-    const auto cuda          = device.execution_view();
-    const auto batch         = static_cast<std::int32_t>(batch_size);
-    const auto hidden        = execution::dimension(parameters.profile->config.text.hidden_size);
-    const auto mtp_execution = mtp_view(parameters, resources, cuda, proposal_head, sharded_,
-                                        sharded_collective());
-    auto base                = packed(mtp.base_conditioning, {hidden, batch});
-    auto drafts              = packed(mtp.drafts, {static_cast<std::int32_t>(draft_window), batch});
+    auto& frame       = resources.frame;
+    auto& mtp         = *frame.mtp;
+    const auto cuda   = device.execution_view();
+    const auto batch  = static_cast<std::int32_t>(batch_size);
+    const auto hidden = execution::dimension(parameters.profile->config.text.hidden_size);
+    const auto mtp_execution =
+        mtp_view(parameters, resources, cuda, proposal_head, sharded_, sharded_collective());
+    auto base   = packed(mtp.base_conditioning, {hidden, batch});
+    auto drafts = packed(mtp.drafts, {static_cast<std::int32_t>(draft_window), batch});
     CUDA_CHECK(cudaMemsetAsync(drafts.data, 0, drafts.bytes(), cuda.stream()));
     // The frame's MTP proposal buffer is the frame's own extent, `spec.output_rows` (the public
     // vocabulary). That is the width-1 projection's destination and the extent the width-2 gather
     // fills the group's pair with; at width 2 the projection goes to a rank-sized scratch inside
     // `mtp_propose` and this buffer is unused, so the buffer and the frame spec no longer disagree
     // about its extent. The rank's row count is read where the projection is made, not here.
-    auto logits = packed(mtp.proposal_logits,
-                         {execution::dimension(frame.spec.output_rows), batch});
+    auto logits =
+        packed(mtp.proposal_logits, {execution::dimension(frame.spec.output_rows), batch});
     for (std::uint32_t step = 0; step < steps; ++step) {
         auto input         = mtp.step_view(static_cast<std::int32_t>(step), batch);
         const auto visible = static_cast<std::uint32_t>(
@@ -204,10 +206,10 @@ void RankProgramImpl::align_mtp_history(ComputeOperation& operation) {
                                     .view({width, batch})
                                     .slice(1, row, 1)
                                     .view({width});
-            auto destination = rope.slice(1, axis, 1)
-                                   .view({history_width, batch})
-                                   .slice(1, row, 1)
-                                   .view({history_width});
+            auto destination  = rope.slice(1, axis, 1)
+                                    .view({history_width, batch})
+                                    .slice(1, row, 1)
+                                    .view({history_width});
             if (skip)
                 copy_tensor(destination, source.slice(0, 0, history_width), cuda);
             else if (history_width > 1)
@@ -220,9 +222,9 @@ void RankProgramImpl::align_mtp_history(ComputeOperation& operation) {
         // Each Forward row retains its own pinned tail coordinates until the work retires.
         const auto host_offset = forward ? 3 * static_cast<std::int32_t>(operation.forward_row) : 0;
         auto host              = frame.host_step_rope_positions.slice(1, 0, 1)
-                        .slice(0, host_offset, 3 * batch)
-                        .view({batch, 3});
-        auto* values = static_cast<std::int32_t*>(host.data);
+                                     .slice(0, host_offset, 3 * batch)
+                                     .view({batch, 3});
+        auto* values           = static_cast<std::int32_t*>(host.data);
         for (int axis = 0; axis < 3; ++axis)
             for (std::int32_t row = 0; row < batch; ++row)
                 values[axis * batch + row] = rows[row].tail_rope_position[axis];
@@ -271,7 +273,7 @@ void RankProgramImpl::rebuild_mtp_history(std::uint32_t batch_size, std::uint32_
                                     .view({width, batch})
                                     .slice(1, row, 1)
                                     .slice(0, 0, count);
-            auto destination = rope.slice(1, axis, 1).view({count, batch}).slice(1, row, 1);
+            auto destination  = rope.slice(1, axis, 1).view({count, batch}).slice(1, row, 1);
             copy_tensor(destination, source, cuda);
         }
     }

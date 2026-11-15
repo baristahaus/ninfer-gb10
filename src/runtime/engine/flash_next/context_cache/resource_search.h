@@ -8,7 +8,6 @@
 namespace ninfer::flashnext_runtime {
 using namespace ninfer::runtime;
 
-
 // Session-local indexed membership for opaque Program target ordinals. Storage is acquired when a
 // bounded search begins; discovering, assessing, and expanding targets performs no allocation and
 // no linear handle scan.

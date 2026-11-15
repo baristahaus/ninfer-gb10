@@ -14,8 +14,8 @@ using ConvGeometry = GdnConvGeometry<6144>;
 namespace {
 
 using Launch       = void (*)(const Tensor&, const Weight&, const Tensor&, Tensor&, const Tensor&,
-                        const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
-                        cudaStream_t);
+                              const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
+                              cudaStream_t);
 using RecordLaunch = void (*)(const Tensor&, const Weight&, const Tensor&, const Tensor&,
                               const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
                               Tensor&, cudaStream_t);

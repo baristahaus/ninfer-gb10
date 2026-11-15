@@ -14,8 +14,8 @@
 
 namespace ninfer::flashnext_runtime {
 
-[[nodiscard]] inline ninfer::RankMemoryUsage rank_memory_usage(
-    const MemorySummary& summary) noexcept {
+[[nodiscard]] inline ninfer::RankMemoryUsage
+rank_memory_usage(const MemorySummary& summary) noexcept {
     ninfer::RankMemoryUsage usage;
     // Resident weights, the state-slot arena and the unified workspace are the three device arenas
     // the Flash-Next startup prints.
@@ -23,7 +23,7 @@ namespace ninfer::flashnext_runtime {
     usage.allocations.persistent_device_bytes = summary.sequence.capacity_bytes;
     usage.allocations.workspace_device_bytes  = summary.workspace.capacity_bytes;
     // The Host context tier is pinned Host KV; this route has no separate host weight bank.
-    usage.allocations.host_context_bytes = summary.host_kv_capacity_bytes;
+    usage.allocations.host_context_bytes    = summary.host_kv_capacity_bytes;
     usage.workspace.allocation_cursor_bytes = summary.workspace.used_bytes;
     usage.workspace.required_peak_bytes     = summary.workspace_logical_peak_bytes;
     usage.workspace.measurement_peak_bytes  = summary.workspace.peak_used_bytes;
@@ -31,8 +31,8 @@ namespace ninfer::flashnext_runtime {
     return usage;
 }
 
-[[nodiscard]] inline ninfer::RankMemoryBudget rank_memory_budget(
-    const MemorySummary& summary) noexcept {
+[[nodiscard]] inline ninfer::RankMemoryBudget
+rank_memory_budget(const MemorySummary& summary) noexcept {
     ninfer::RankMemoryBudget budget;
     budget.runtime_reservation_bytes         = summary.runtime_reservation_bytes;
     budget.minimum_runtime_reservation_bytes = summary.minimum_runtime_reservation_bytes;

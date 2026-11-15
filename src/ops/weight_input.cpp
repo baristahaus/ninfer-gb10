@@ -158,9 +158,9 @@ LinearProfile describe_single(const WeightView& view, std::span<const WeightInpu
     require(view.shape.size() == 2 && view.shape[0] <= INT32_MAX && view.shape[1] <= INT32_MAX,
             "projection dimensions exceed int32");
     const auto geometry = consumer_geometry(view);
-    const auto layout    = geometry.layout == QuantLayout::BatchedBlockScaleK16M128x4
-                               ? QuantLayout::BlockScaleK16M128x4
-                               : geometry.layout;
+    const auto layout   = geometry.layout == QuantLayout::BatchedBlockScaleK16M128x4
+                              ? QuantLayout::BlockScaleK16M128x4
+                              : geometry.layout;
     return {geometry.format, static_cast<std::int32_t>(view.shape[0]),
             static_cast<std::int32_t>(view.shape[1]), common_policy(inputs), layout};
 }
@@ -264,11 +264,9 @@ ProjectionProfile describe_projection_weights(std::span<const WeightInput> rows)
 }
 
 std::size_t projection_region_count(std::span<const WeightInput> rows) {
-    return projection_regions(rows,
-                              [](const WeightView&, std::span<const WeightInput>) {
-                                  return std::size_t{1};
-                              },
-                              std::numeric_limits<std::size_t>::max())
+    return projection_regions(
+               rows, [](const WeightView&, std::span<const WeightInput>) { return std::size_t{1}; },
+               std::numeric_limits<std::size_t>::max())
         .size();
 }
 
@@ -351,7 +349,7 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
     // (contract section 5 refuses the split at plan time).
     if (gate_format == QType::EXL3) {
         require(down_format == QType::EXL3,
-                 "SparseMoe EXL3 gate/up banks require an EXL3 down bank");
+                "SparseMoe EXL3 gate/up banks require an EXL3 down bank");
         require(expert_gate_up.size() % 2 == 0, "SparseMoe EXL3 gate/up views must pair");
         std::vector<WeightInput> gates;
         std::vector<WeightInput> ups;
@@ -375,9 +373,18 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
                     up_bank.weight.k == 2048 && up_bank.weight.exl3_rows_per_expert == 512 &&
                     down_bank.weight.k == 512 && down_bank.weight.exl3_rows_per_expert == 2048,
                 "SparseMoe EXL3 bank shapes differ from the 35B bank contract");
-        return {router_bank.weight, Weight{},       down_bank.weight, shared.weight,
-                down.weight,        Weight{},       Weight{},         0,
-                nullptr,            nullptr,        gate_bank.weight, up_bank.weight};
+        return {router_bank.weight,
+                Weight{},
+                down_bank.weight,
+                shared.weight,
+                down.weight,
+                Weight{},
+                Weight{},
+                0,
+                nullptr,
+                nullptr,
+                gate_bank.weight,
+                up_bank.weight};
     }
     require(router_bank.weight.qtype == QType::BF16 && shared.weight.qtype == QType::Q8_G32_FP16 &&
                 down.weight.qtype == QType::Q8_G32_FP16 &&
@@ -398,14 +405,12 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
         return {router_bank.weight, gate_up_bank.weight, down_bank.weight, shared.weight,
                 down.weight};
     }
-    require(!gate_up_warm.empty() && !down_warm.empty(),
-            "tiered routed banks must split together");
+    require(!gate_up_warm.empty() && !down_warm.empty(), "tiered routed banks must split together");
     const auto hot_experts = down_hot.size();
     require(gate_up_hot.size() == 2 * hot_experts && gate_up_warm.size() % 2 == 0 &&
                 gate_up_warm.size() / 2 == down_warm.size(),
             "tiered gate/up and down banks must partition the same experts");
-    auto gather = [](std::span<const WeightInput> inputs,
-                     const std::vector<std::size_t>& indices) {
+    auto gather = [](std::span<const WeightInput> inputs, const std::vector<std::size_t>& indices) {
         std::vector<WeightInput> picked;
         picked.reserve(indices.size());
         for (const auto i : indices) { picked.push_back(inputs[i]); }
@@ -415,13 +420,9 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
     const auto warm_gate_up = single(gather(expert_gate_up, gate_up_warm));
     const auto hot_down     = single(gather(expert_down, down_hot));
     const auto warm_down    = single(gather(expert_down, down_warm));
-    return {router_bank.weight,
-            hot_gate_up.weight,
-            hot_down.weight,
-            shared.weight,
-            down.weight,
-            warm_gate_up.weight,
-            warm_down.weight,
-            static_cast<std::uint32_t>(hot_experts)};
+    return {router_bank.weight, hot_gate_up.weight,
+            hot_down.weight,    shared.weight,
+            down.weight,        warm_gate_up.weight,
+            warm_down.weight,   static_cast<std::uint32_t>(hot_experts)};
 }
 } // namespace ninfer::ops

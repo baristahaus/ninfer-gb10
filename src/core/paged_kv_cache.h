@@ -38,7 +38,7 @@ struct PagedKVBatchLayerView {
     KvCacheStorage storage    = KvCacheStorage::BFloat16;
     // Master-generation extra per-layer planes (PLE staging); restructured consumers ignore it.
     std::vector<Tensor> auxiliary_pages;
-     [[nodiscard]] Device device() const;
+    [[nodiscard]] Device device() const;
 };
 
 /** Rebinds one checked single-sequence table row as a one-row batched view. */

@@ -102,9 +102,9 @@ int main() {
         // Our equivalent of capy's caller-stop-token case: a caller stop string is StopString.
         auto caller_stop          = stopped(generated);
         caller_stop.finish_reason = FinishReason::StopString;
-        failures += check(plan_reasoning_retry(caller_stop, tokens).trigger ==
-                              ReasoningRetryTrigger::None,
-                          "a caller stop string was treated as the model's end of turn");
+        failures +=
+            check(plan_reasoning_retry(caller_stop, tokens).trigger == ReasoningRetryTrigger::None,
+                  "a caller stop string was treated as the model's end of turn");
     }
     {
         const std::vector<TokenId> generated{248046};

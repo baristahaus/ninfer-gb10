@@ -184,9 +184,9 @@ __device__ __forceinline__ void speculative_sparse_warp_accept(
             weight       = workspace.dist_prob[at];
             if (a < extent) {
                 const int q_at = (row * k + a) * kSparseSpeculativeCandidates;
-                weight         = fmaxf(weight - speculative_sparse_probability(candidate_ids + q_at,
-                                                                               proposal_q + q_at, token),
-                                       0.0f);
+                weight = fmaxf(weight - speculative_sparse_probability(candidate_ids + q_at,
+                                                                       proposal_q + q_at, token),
+                               0.0f);
             }
         }
         float cdf = weight;
@@ -670,8 +670,8 @@ __launch_bounds__(kSamplerGroupBlock) __global__ void speculative_sampling_group
                                 break;
                             }
                         }
-                        const float u           = sampling_uniform(cfg.seed, L + i + 1,
-                                                                   kSamplePurposeSpeculativeAccept, 0u);
+                        const float u = sampling_uniform(cfg.seed, L + i + 1,
+                                                         kSamplePurposeSpeculativeAccept, 0u);
                         const bool accept_draft = u < pd;
                         if (accept_draft) {
                             a = i + 1;

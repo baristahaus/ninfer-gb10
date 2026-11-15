@@ -35,9 +35,9 @@ struct SparseMoeDecodeWorkspace {
 };
 
 template <class Arena>
-SparseMoeDecodeWorkspace allocate_sparse_moe_decode_workspace(Arena& arena, bool exl3 = false,
-                                                              const SparseMoeShape& shape =
-                                                                  kSparseMoe35B) {
+SparseMoeDecodeWorkspace
+allocate_sparse_moe_decode_workspace(Arena& arena, bool exl3 = false,
+                                     const SparseMoeShape& shape = kSparseMoe35B) {
     const int top_k        = shape.top_k;
     const int hidden       = shape.hidden;
     const int intermediate = shape.intermediate;
@@ -60,11 +60,10 @@ SparseMoeDecodeWorkspace allocate_sparse_moe_decode_workspace(Arena& arena, bool
 [[nodiscard]] std::size_t sparse_moe_decode_workspace_bytes();
 [[nodiscard]] std::size_t
 sparse_moe_exl3_decode_workspace_bytes(const SparseMoeShape& shape = kSparseMoe35B);
-[[nodiscard]] SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up,
-                                                                 QType routed_down,
-                                                                 const SparseMoeHints& hints = {},
-                                                                 const SparseMoeShape& shape =
-                                                                     kSparseMoe35B);
+[[nodiscard]] SparseMoeDecodePlan
+resolve_sparse_moe_decode_plan(QType routed_gate_up, QType routed_down,
+                               const SparseMoeHints& hints = {},
+                               const SparseMoeShape& shape = kSparseMoe35B);
 
 void sparse_moe_decode_launch_d3_small_t(const Tensor& x, const SparseMoeWeights& weights,
                                          const int* token_ids, float* token_activations,

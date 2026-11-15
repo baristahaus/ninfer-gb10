@@ -100,7 +100,7 @@ std::vector<double> gated_rmsnorm_oracle(const std::vector<float>& input,
             const double sigmoid    = 1.0 / (1.0 + std::exp(-gate_value));
             const double activation = kind == Gate::Silu ? gate_value * sigmoid : sigmoid;
             output[base + column]   = static_cast<double>(input[base + column]) * inverse *
-                                    static_cast<double>(weight[column]) * activation;
+                                      static_cast<double>(weight[column]) * activation;
         }
     }
     return output;
@@ -157,7 +157,7 @@ int run_case(CudaExecutionView execution, Gate kind, const char* description, co
                               std::to_string(c.shape.d) + "," + std::to_string(c.shape.heads) +
                               "," + std::to_string(c.shape.tokens) + "," +
                               std::to_string(c.shape.batch) + "]";
-    int failures = 0;
+    int failures            = 0;
     for (int phase = 0; phase < (c.graph ? 2 : 1); ++phase) {
         if (phase) {
             for (std::size_t i = 0; i < input.size(); ++i)

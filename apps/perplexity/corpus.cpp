@@ -158,10 +158,8 @@ CorpusSelection load_corpus(const std::filesystem::path& manifest, bool quick) {
         const std::filesystem::path path = root_directory / item.path;
         std::string text                 = read_bytes(path);
         validate_text(text, path);
-        result.streams.push_back(CorpusStream{.id     = id,
-                                              .domain = item.domain,
-                                              .path   = item.path,
-                                              .text   = std::move(text)});
+        result.streams.push_back(CorpusStream{
+            .id = id, .domain = item.domain, .path = item.path, .text = std::move(text)});
     }
     return result;
 }

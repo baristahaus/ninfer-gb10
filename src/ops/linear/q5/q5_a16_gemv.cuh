@@ -55,7 +55,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     const auto row0           = std::int64_t(row < rows ? row : 0) * row_groups + group_begin;
     constexpr bool kFullTiles = Schedule::kStaticK > 0 && (Schedule::kStaticK / 128) % W == 0 &&
                                 (Schedule::kStaticK / 64 / W) % G == 0;
-    const auto stage = [&](int slot, int tile) {
+    const auto stage          = [&](int slot, int tile) {
         const int active  = kFullTiles ? G : min(G, groups - tile * G);
         const auto group0 = row0 + tile * G;
         for (int item = lane; item < G * 2; item += 32)

@@ -18,18 +18,18 @@ constexpr std::uint64_t kCopyChunk = 16;
 // mini-bank at the expert's warm rank into the device mini-bank at its tail slot. The
 // pinned-host source is read over PCIe exactly as the MoE kernels read the warm tier.
 __device__ __forceinline__ void copy_expert_plane(const std::byte* __restrict__ device_base,
-                                                   std::uint64_t device_offset,
-                                                   const std::byte* __restrict__ warm_base,
-                                                   std::uint64_t warm_offset,
-                                                   std::uint64_t bytes, std::uint32_t tid) {
+                                                  std::uint64_t device_offset,
+                                                  const std::byte* __restrict__ warm_base,
+                                                  std::uint64_t warm_offset, std::uint64_t bytes,
+                                                  std::uint32_t tid) {
     const std::uint64_t chunk_count = (bytes + kCopyChunk - 1) / kCopyChunk;
     for (std::uint64_t chunk = tid; chunk < chunk_count; chunk += blockDim.x) {
-        const std::uint64_t offset = chunk * kCopyChunk;
+        const std::uint64_t offset    = chunk * kCopyChunk;
         const std::uint64_t remaining = bytes - offset;
-        const std::uint64_t length = remaining < kCopyChunk ? remaining : kCopyChunk;
-        const char* source      = reinterpret_cast<const char*>(warm_base + warm_offset + offset);
-        char* destination       = reinterpret_cast<char*>(const_cast<std::byte*>(
-            device_base + device_offset + offset));
+        const std::uint64_t length    = remaining < kCopyChunk ? remaining : kCopyChunk;
+        const char* source = reinterpret_cast<const char*>(warm_base + warm_offset + offset);
+        char* destination =
+            reinterpret_cast<char*>(const_cast<std::byte*>(device_base + device_offset + offset));
         for (std::uint64_t byte = 0; byte < length; ++byte) { destination[byte] = source[byte]; }
     }
 }
@@ -37,21 +37,20 @@ __device__ __forceinline__ void copy_expert_plane(const std::byte* __restrict__ 
 // Copies one expert's full slice (both banks, all planes) from the warm mini-bank into the
 // cache tail slot. blockDim threads cooperate per plane.
 __device__ __forceinline__ void copy_expert_slice(const ExpertCacheLayerParams& layer,
-                                                   std::uint32_t warm_rank,
-                                                   std::uint32_t tail_slot, std::uint32_t tid) {
+                                                  std::uint32_t warm_rank, std::uint32_t tail_slot,
+                                                  std::uint32_t tid) {
     const std::uint32_t device_rank = layer.hot + tail_slot;
     for (const auto* bank : {&layer.gate_up, &layer.down}) {
         const auto plane = [&](std::uint64_t device_offset, std::uint64_t warm_offset,
-                              std::uint64_t per_row) {
+                               std::uint64_t per_row) {
             if (per_row == 0) { return; }
             // One expert's plane block: rows_per_expert rows of per_row bytes each.
             const std::uint64_t expert_block = bank->rows_per_expert * per_row;
-            copy_expert_plane(bank->device,
-                              device_offset +
-                                  static_cast<std::uint64_t>(device_rank) * expert_block,
-                              bank->warm,
-                              warm_offset + static_cast<std::uint64_t>(warm_rank) * expert_block,
-                              expert_block, tid);
+            copy_expert_plane(
+                bank->device,
+                device_offset + static_cast<std::uint64_t>(device_rank) * expert_block, bank->warm,
+                warm_offset + static_cast<std::uint64_t>(warm_rank) * expert_block, expert_block,
+                tid);
         };
         plane(bank->device_code_offset, bank->warm_code_offset, bank->code_bytes_per_row);
         plane(bank->device_high_offset, bank->warm_high_offset, bank->high_bytes_per_row);
@@ -64,15 +63,14 @@ __global__ void expert_cache_adapt_kernel(ExpertCacheAdaptState state) {
     const std::uint32_t layer = static_cast<std::uint32_t>(blockIdx.x);
     if (layer >= state.layer_count) { return; }
     const ExpertCacheLayerParams& lp = state.layers[layer];
-    const std::uint32_t base = layer * state.experts;
-    const std::uint32_t tid  = static_cast<std::uint32_t>(threadIdx.x);
+    const std::uint32_t base         = layer * state.experts;
+    const std::uint32_t tid          = static_cast<std::uint32_t>(threadIdx.x);
 
     // Phase 0: the recency delta per expert, and the warm-tier hit-rate accumulation.
-    const bool warm_tier = state.warm_rank[base + tid] != ExpertCacheAdaptState::kNoWarmRank;
+    const bool warm_tier      = state.warm_rank[base + tid] != ExpertCacheAdaptState::kNoWarmRank;
     const std::uint32_t count = state.counters[base + tid];
     const std::uint32_t delta = count - state.snapshot[base + tid];
-    const bool promoted =
-        warm_tier && (state.residency[base + tid] & 0x80000000u) == 0u;
+    const bool promoted       = warm_tier && (state.residency[base + tid] & 0x80000000u) == 0u;
     if (warm_tier) {
         atomicAdd(state.totals, static_cast<unsigned long long>(delta));
         if (promoted) { atomicAdd(state.hits, static_cast<unsigned long long>(delta)); }
@@ -87,9 +85,9 @@ __global__ void expert_cache_adapt_kernel(ExpertCacheAdaptState state) {
         swaps = 0;
         // Tiers the tail fully covers have no candidates; skip straight to the snapshot.
         if (lp.slots < lp.warm_count) {
-            std::uint32_t candidate[2][2] = {{0, 0}, {0, 0}};  // (expert, delta) top-2 by delta
+            std::uint32_t candidate[2][2] = {{0, 0}, {0, 0}}; // (expert, delta) top-2 by delta
             std::uint32_t weakest[2][2]   = {{0xffffffffu, 0xffffffffu},
-                                              {0xffffffffu, 0xffffffffu}};  // bottom-2 promoted
+                                             {0xffffffffu, 0xffffffffu}}; // bottom-2 promoted
             for (std::uint32_t e = 0; e < state.experts; ++e) {
                 if (state.warm_rank[base + e] == ExpertCacheAdaptState::kNoWarmRank) { continue; }
                 const std::uint32_t expert_delta =
@@ -119,9 +117,9 @@ __global__ void expert_cache_adapt_kernel(ExpertCacheAdaptState state) {
                 }
             }
             for (int swap = 0; swap < kMaximumSwaps; ++swap) {
-                const std::uint32_t incoming = candidate[swap][0];
+                const std::uint32_t incoming       = candidate[swap][0];
                 const std::uint32_t incoming_count = candidate[swap][1];
-                const std::uint32_t outgoing = weakest[swap][0];
+                const std::uint32_t outgoing       = weakest[swap][0];
                 const std::uint32_t outgoing_count = weakest[swap][1];
                 if (incoming == 0 || outgoing == 0xffffffffu) { break; }
                 if (incoming_count < kMinimumRecentCount) { break; }
@@ -137,16 +135,14 @@ __global__ void expert_cache_adapt_kernel(ExpertCacheAdaptState state) {
     // Phase 2: the swaps — the block copies each newcomer's slice into the freed tail slot
     // and thread 0 flips the residency entries.
     for (int swap = 0; swap < swaps; ++swap) {
-        const std::uint32_t outgoing = incumbent[swap];
-        const std::uint32_t incoming = newcomer[swap];
-        const std::uint32_t tail_slot =
-            (state.residency[base + outgoing] & 0x7fffffffu) - lp.hot;
+        const std::uint32_t outgoing  = incumbent[swap];
+        const std::uint32_t incoming  = newcomer[swap];
+        const std::uint32_t tail_slot = (state.residency[base + outgoing] & 0x7fffffffu) - lp.hot;
         __syncthreads();
         copy_expert_slice(lp, state.warm_rank[base + incoming], tail_slot, tid);
         __syncthreads();
         if (tid == 0) {
-            state.residency[base + outgoing] =
-                0x80000000u | state.warm_rank[base + outgoing];
+            state.residency[base + outgoing] = 0x80000000u | state.warm_rank[base + outgoing];
             state.residency[base + incoming] = lp.hot + tail_slot;
             atomicAdd(state.promotions, 1ULL);
             atomicAdd(state.evictions, 1ULL);

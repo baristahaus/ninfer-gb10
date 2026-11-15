@@ -109,7 +109,7 @@ __device__ __forceinline__ void stage_inputs(TileStorage<S>& tile, int stage, in
         const int wr      = row0 + row + (Gate ? part * kIntermediate : 0);
         auto* destination = reinterpret_cast<std::uint8_t*>(tile.weight_scales[stage]) + k64 * 512 +
                             row * 16 + part * bytes;
-        const bool valid = S::k % S::k_step == 0 || kt * S::k_step + k64 * 64 < S::k;
+        const bool valid  = S::k % S::k_step == 0 || kt * S::k_step + k64 * 64 < S::k;
         cp_async_zfill<bytes>(
             destination,
             weight.scales +

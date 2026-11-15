@@ -72,10 +72,10 @@ __global__ void scan_assignments(GroupedStorage out, int tiles, GroupedPlan plan
     }
     if (e == Shape::experts - 1) {
         const int total = scan[e];
-        *out.info       = {total,
-                           int(plan.adaptive &&
+        *out.info = {total,
+                     int(plan.adaptive &&
                          total * plan.direct_denominator > plan.direct_numerator * assignments),
-                           int(total * plan.spread_denominator < plan.spread_numerator * active)};
+                     int(total * plan.spread_denominator < plan.spread_numerator * active)};
     }
 }
 

@@ -53,7 +53,8 @@ struct Mxfp8A16GemvSchedule {
 };
 
 template <class Schedule>
-__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void mxfp8_a16_gemv_kernel(
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void mxfp8_a16_gemv_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const std::uint8_t* __restrict__ group_scales, __nv_bfloat16* __restrict__ out, int rows,
     int K) {
@@ -64,7 +65,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     const int warp = static_cast<int>(threadIdx.x) / kWarpSize;
     const int row_begin =
         static_cast<int>(blockIdx.x) * Schedule::kBlockRows + warp * Schedule::kRowsPerWarp;
-    const int scale_row_words = K / 32;
+    const int scale_row_words    = K / 32;
     const auto* activation_pairs = reinterpret_cast<const std::uint32_t*>(x);
     float accumulators[Schedule::kRowsPerWarp][Schedule::kChains] = {};
 
@@ -83,14 +84,14 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
                 packed_words = load_ldg<uint4>(source);
             } else {
                 const uint2 v = load_ldg<uint2>(source);
-                packed_words = make_uint4(v.x, v.y, 0, 0);
+                packed_words  = make_uint4(v.x, v.y, 0, 0);
             }
 #pragma unroll
             for (int pair = 0; pair < Schedule::kValuesPerLane / 2; ++pair) {
                 const float2 activation =
                     bf16x2_bits_to_float2(activation_pairs[value_begin / 2 + pair]);
-                const std::uint16_t packed = static_cast<std::uint16_t>(
-                    (&packed_words.x)[pair >> 1] >> ((pair & 1) * 16));
+                const std::uint16_t packed =
+                    static_cast<std::uint16_t>((&packed_words.x)[pair >> 1] >> ((pair & 1) * 16));
                 const float2 weight = decode_mxfp8_e4m3x2(packed);
                 const int chain_a   = (2 * pair) & (Schedule::kChains - 1);
                 const int chain_b   = (2 * pair + 1) & (Schedule::kChains - 1);
@@ -118,9 +119,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             total += accumulators[local_row][chain];
         }
         total = warp_reduce_sum(total);
-        if (lane == 0) {
-            out[weight_row] = __float2bfloat16_rn(total);
-        }
+        if (lane == 0) { out[weight_row] = __float2bfloat16_rn(total); }
     }
 }
 
@@ -161,28 +160,29 @@ struct Mxfp8A16MmaSchedule {
 };
 
 template <class Schedule, bool FullTokens>
-__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void mxfp8_a16_mma_kernel(
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void mxfp8_a16_mma_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const std::uint8_t* __restrict__ group_scales, __nv_bfloat16* __restrict__ out, int rows,
     int input_rows, int token_offset, int count) {
-    const int K = input_rows;
-    constexpr int BM   = Schedule::kBlockRows;
-    constexpr int BN   = Schedule::kBlockTokens;
-    constexpr int BK   = Schedule::kBlockK;
-    constexpr int WM   = Schedule::kWarpRows;
-    constexpr int WN   = Schedule::kWarpTokens;
-    constexpr int MT   = Schedule::kMmaRows;
-    constexpr int NT   = Schedule::kMmaTokens;
-    constexpr int KSUB = Schedule::kMmaK;
-    constexpr int THREADS = Schedule::kThreads;
+    const int K                     = input_rows;
+    constexpr int BM                = Schedule::kBlockRows;
+    constexpr int BN                = Schedule::kBlockTokens;
+    constexpr int BK                = Schedule::kBlockK;
+    constexpr int WM                = Schedule::kWarpRows;
+    constexpr int WN                = Schedule::kWarpTokens;
+    constexpr int MT                = Schedule::kMmaRows;
+    constexpr int NT                = Schedule::kMmaTokens;
+    constexpr int KSUB              = Schedule::kMmaK;
+    constexpr int THREADS           = Schedule::kThreads;
     constexpr int kGroupsPerRowTile = BK / 32;
-    const int scale_row_words = K / 32;
+    const int scale_row_words       = K / 32;
 
     extern __shared__ __align__(16) unsigned char shared_raw[];
-    auto* weight_shared = reinterpret_cast<__nv_bfloat16*>(shared_raw);
+    auto* weight_shared     = reinterpret_cast<__nv_bfloat16*>(shared_raw);
     auto* activation_shared = weight_shared + BM * BK;
-    auto* code_shared = reinterpret_cast<std::uint8_t*>(activation_shared +
-                                                        Schedule::kActivationStages * BN * BK);
+    auto* code_shared =
+        reinterpret_cast<std::uint8_t*>(activation_shared + Schedule::kActivationStages * BN * BK);
 
     const int tid  = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5;
@@ -212,8 +212,8 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             const int k8          = item - local_token * (BK / 8);
             const int token       = token_begin + local_token;
             const int kk          = k8 * 8;
-            auto* destination = &activation_shared[stage * BN * BK + local_token * BK +
-                                                   mxfp8_shared_col_64(local_token, kk)];
+            auto* destination     = &activation_shared[stage * BN * BK + local_token * BK +
+                                                       mxfp8_shared_col_64(local_token, kk)];
             if constexpr (FullTokens) {
                 cp_async<16, Schedule::kActivationCache>(
                     destination, x + static_cast<std::int64_t>(token) * K + k_begin + kk);
@@ -231,10 +231,9 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
         const int k_begin = k_tile * BK;
 #pragma unroll 1
         for (int item = tid; item < BM * (BK / 16); item += THREADS) {
-            const int local_row = item / (BK / 16);
-            const int chunk     = item - local_row * (BK / 16);
-            const int weight_row =
-                row_begin + local_row < rows ? row_begin + local_row : rows - 1;
+            const int local_row  = item / (BK / 16);
+            const int chunk      = item - local_row * (BK / 16);
+            const int weight_row = row_begin + local_row < rows ? row_begin + local_row : rows - 1;
             cp_async<16, Schedule::kWeightCache>(
                 &code_shared[local_row * BK + chunk * 16],
                 weight_codes + static_cast<std::int64_t>(weight_row) * K + k_begin + chunk * 16);
@@ -255,8 +254,8 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             for (int col32 = 0; col32 < BK; col32 += 32) {
                 const float group_scale =
                     mxfp8_group_scale(__ldg(row_scales + k_begin / 32 + col32 / 32));
-                const int col           = col32 + half_lane * 2;
-                const unsigned packed   = static_cast<unsigned>(
+                const int col         = col32 + half_lane * 2;
+                const unsigned packed = static_cast<unsigned>(
                     *reinterpret_cast<const std::uint16_t*>(&code_shared[row * BK + col]));
                 const __nv_bfloat162 widened = mxfp8_widen_pair_scaled(packed, group_scale);
                 store_vec(&weight_shared[row * BK + mxfp8_shared_col_64(row, col)], widened);
@@ -293,29 +292,30 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
 #pragma unroll
             for (int mma_row = 0; mma_row < MT; ++mma_row) {
                 const int row = wm * WM + mma_row * 16 + a_row_offset;
-                ldmatrix_x4(a_fragments[mma_row][0], a_fragments[mma_row][1],
-                            a_fragments[mma_row][2], a_fragments[mma_row][3],
-                            smem_addr(&weight_shared[row * BK +
-                                                     mxfp8_shared_col_64(row, ks + a_col_offset)]));
+                ldmatrix_x4(
+                    a_fragments[mma_row][0], a_fragments[mma_row][1], a_fragments[mma_row][2],
+                    a_fragments[mma_row][3],
+                    smem_addr(
+                        &weight_shared[row * BK + mxfp8_shared_col_64(row, ks + a_col_offset)]));
             }
 #pragma unroll
             for (int mma_token = 0; mma_token < NT; ++mma_token) {
                 const int row = wn * WN + mma_token * 8 + b_inner_row;
-                ldmatrix_x2(b_fragments[mma_token][0], b_fragments[mma_token][1],
-                            smem_addr(&activation_shared[stage * BN * BK + row * BK +
-                                                         mxfp8_shared_col_64(row, ks + b_col_offset)]));
+                ldmatrix_x2(
+                    b_fragments[mma_token][0], b_fragments[mma_token][1],
+                    smem_addr(&activation_shared[stage * BN * BK + row * BK +
+                                                 mxfp8_shared_col_64(row, ks + b_col_offset)]));
             }
 #pragma unroll
             for (int mma_row = 0; mma_row < MT; ++mma_row) {
 #pragma unroll
                 for (int mma_token = 0; mma_token < NT; ++mma_token) {
-                    mma_bf16(accumulators[mma_row][mma_token][0],
-                             accumulators[mma_row][mma_token][1],
-                             accumulators[mma_row][mma_token][2],
-                             accumulators[mma_row][mma_token][3], a_fragments[mma_row][0],
-                             a_fragments[mma_row][1], a_fragments[mma_row][2],
-                             a_fragments[mma_row][3], b_fragments[mma_token][0],
-                             b_fragments[mma_token][1]);
+                    mma_bf16(
+                        accumulators[mma_row][mma_token][0], accumulators[mma_row][mma_token][1],
+                        accumulators[mma_row][mma_token][2], accumulators[mma_row][mma_token][3],
+                        a_fragments[mma_row][0], a_fragments[mma_row][1], a_fragments[mma_row][2],
+                        a_fragments[mma_row][3], b_fragments[mma_token][0],
+                        b_fragments[mma_token][1]);
                 }
             }
         }

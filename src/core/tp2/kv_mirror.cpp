@@ -34,9 +34,7 @@ void on_mirror_device(const MirrorTarget& where, Replay&& replay) {
 } // namespace
 
 void require_matching_kv_mirror(const DeviceKVPagePool& origin, const DeviceKVPagePool& mirror) {
-    if (&origin == &mirror) {
-        throw std::invalid_argument("Paged KV mirror is the origin pool");
-    }
+    if (&origin == &mirror) { throw std::invalid_argument("Paged KV mirror is the origin pool"); }
     if (origin.capacity_pages() != mirror.capacity_pages()) {
         throw std::invalid_argument("Paged KV mirror pool page capacity differs");
     }
@@ -134,11 +132,10 @@ void MirroredKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
     // The same contiguous physical runs on rank 1, in the origin's order.
     std::size_t begin = 0;
     while (begin < pages.size()) {
-        std::size_t end = begin + 1;
+        std::size_t end          = begin + 1;
         const std::int32_t first = origin_.physical_page(pages[begin]);
         while (end < pages.size() &&
-               origin_.physical_page(pages[end]) ==
-                   origin_.physical_page(pages[end - 1]) + 1) {
+               origin_.physical_page(pages[end]) == origin_.physical_page(pages[end - 1]) + 1) {
             ++end;
         }
         const auto count = static_cast<std::uint32_t>(end - begin);
@@ -154,9 +151,8 @@ void MirroredKVPagePool::copy_page(DeviceKVPageHandle source, DeviceKVPageHandle
     const std::int32_t source_index      = origin_.physical_page(source);
     const std::int32_t destination_index = origin_.physical_page(destination);
     if (source_index == destination_index) { return; }
-    on_mirror_device(where_, [&] {
-        mirror_.copy_page_run(source_index, destination_index, 1, where_.stream);
-    });
+    on_mirror_device(
+        where_, [&] { mirror_.copy_page_run(source_index, destination_index, 1, where_.stream); });
 }
 
 void MirroredKVPagePool::zero_page_run(std::int32_t first, std::uint32_t count,
@@ -178,8 +174,7 @@ void MirroredKVPagePool::copy_page_run(std::int32_t source_first, std::int32_t d
 }
 
 void MirroredKVPagePool::copy_to_host(std::span<const DeviceKVPageHandle> source,
-                                      HostKVAllocationView destination,
-                                      cudaStream_t stream) const {
+                                      HostKVAllocationView destination, cudaStream_t stream) const {
     (void)source;
     (void)destination;
     (void)stream;
@@ -295,14 +290,13 @@ void MirroredKVExecutionTables::publish_repeated(KVExecutionRowHandle row, Devic
     const KVExecutionRowHandle mirror_row_handle = require_mirror_handle(row.row_index());
     const std::int32_t physical                  = pages_.origin_pool().physical_page(page);
     std::vector<std::int32_t> indices(count, physical);
-    on_mirror_device(where_, [&] {
-        mirror_.publish_physical(mirror_row_handle, 0, indices, where_.stream);
-    });
+    on_mirror_device(
+        where_, [&] { mirror_.publish_physical(mirror_row_handle, 0, indices, where_.stream); });
 }
 
 void MirroredKVExecutionTables::publish_physical(std::int32_t row, std::uint32_t logical_begin,
-                                                std::span<const std::int32_t> indices,
-                                                cudaStream_t stream) {
+                                                 std::span<const std::int32_t> indices,
+                                                 cudaStream_t stream) {
     const auto& origin_row = rows_.at(static_cast<std::size_t>(row));
     if (!origin_row.has_value()) {
         throw std::logic_error("Paged KV mirror publication on a row with no lease");
@@ -319,9 +313,7 @@ const KVExecutionRowLease& MirroredKVExecutionTables::mirror_row(std::int32_t ro
         throw std::out_of_range("Paged KV mirror execution row is out of range");
     }
     const auto& slot = rows_[static_cast<std::size_t>(row)];
-    if (!slot.has_value()) {
-        throw std::logic_error("Paged KV mirror execution row is not bound");
-    }
+    if (!slot.has_value()) { throw std::logic_error("Paged KV mirror execution row is not bound"); }
     return *slot;
 }
 

@@ -474,8 +474,7 @@ void DeviceKVPagePool::zero_page_run(std::int32_t first, std::uint32_t count,
                                      cudaStream_t stream) const {
     if (count == 0) { return; }
     const std::uint32_t capacity = capacity_pages();
-    if (first < 0 || count > capacity ||
-        static_cast<std::uint32_t>(first) > capacity - count) {
+    if (first < 0 || count > capacity || static_cast<std::uint32_t>(first) > capacity - count) {
         throw std::out_of_range("Paged KV zero run is outside the pool");
     }
     for (const Tensor& plane : planes_) {
@@ -792,7 +791,7 @@ void KVExecutionTablePool::publish_repeated(KVExecutionRowHandle row_handle,
         throw std::invalid_argument("Repeated Paged KV mapping is outside its execution row");
     }
     const std::int32_t physical = pages_->physical_index(page);
-    auto* shadow                = static_cast<std::int32_t*>(host_shadow_.data()) +
+    auto* shadow = static_cast<std::int32_t*>(host_shadow_.data()) +
                    static_cast<std::size_t>(row_handle.row_) * logical_page_capacity();
     std::fill_n(shadow, count, physical);
     publish_indices(row_handle, 0, std::span<const std::int32_t>(shadow, count), stream);

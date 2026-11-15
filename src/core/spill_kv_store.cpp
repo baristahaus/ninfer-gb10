@@ -19,11 +19,11 @@ namespace {
 
 constexpr std::size_t kSpillAlignment = 256;
 
-std::size_t align_up(std::size_t value) { return (value + kSpillAlignment - 1) & ~(kSpillAlignment - 1); }
-
-std::string errno_text(const char* what) {
-    return std::string(what) + ": " + std::strerror(errno);
+std::size_t align_up(std::size_t value) {
+    return (value + kSpillAlignment - 1) & ~(kSpillAlignment - 1);
 }
+
+std::string errno_text(const char* what) { return std::string(what) + ": " + std::strerror(errno); }
 
 } // namespace
 
@@ -32,13 +32,9 @@ SpillKVStore::SpillKVStore(std::filesystem::path path, std::size_t capacity_byte
     if (capacity_bytes_ == 0) {
         throw std::invalid_argument("spill kv store: capacity must be positive");
     }
-    if (path_.empty()) {
-        throw std::invalid_argument("spill kv store: path must not be empty");
-    }
+    if (path_.empty()) { throw std::invalid_argument("spill kv store: path must not be empty"); }
     descriptor_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
-    if (descriptor_ < 0) {
-        throw std::runtime_error(errno_text("spill kv store: open failed"));
-    }
+    if (descriptor_ < 0) { throw std::runtime_error(errno_text("spill kv store: open failed")); }
 }
 
 SpillKVStore::~SpillKVStore() {
@@ -52,9 +48,7 @@ SpillKVStore::Extent SpillKVStore::write(const std::byte* bytes, std::size_t cou
 }
 
 SpillKVStore::Extent SpillKVStore::reserve(std::size_t count) {
-    if (count == 0) {
-        throw std::invalid_argument("spill kv store: cannot write an empty extent");
-    }
+    if (count == 0) { throw std::invalid_argument("spill kv store: cannot write an empty extent"); }
     const std::size_t aligned = align_up(count);
 
     // First fit over released extents; append when no released extent fits. A released extent
@@ -63,22 +57,19 @@ SpillKVStore::Extent SpillKVStore::reserve(std::size_t count) {
     std::uint64_t offset  = append_offset_;
     bool append           = true;
     std::size_t remainder = 0;
-    auto fit = std::find_if(free_extents_.begin(), free_extents_.end(),
-                            [aligned](const FreeExtent& extent) { return extent.bytes >= aligned; });
+    auto fit =
+        std::find_if(free_extents_.begin(), free_extents_.end(),
+                     [aligned](const FreeExtent& extent) { return extent.bytes >= aligned; });
     if (fit != free_extents_.end()) {
         offset    = fit->offset;
         remainder = static_cast<std::size_t>(fit->bytes - aligned);
         free_extents_.erase(fit);
-        if (remainder != 0) {
-            free_extents_.push_back(FreeExtent{offset + aligned, remainder});
-        }
+        if (remainder != 0) { free_extents_.push_back(FreeExtent{offset + aligned, remainder}); }
         append = false;
     } else if (aligned > capacity_bytes_ - append_offset_) {
         throw std::invalid_argument("spill kv store: capacity cannot hold the extent");
     }
-    if (append) {
-        append_offset_ += aligned;
-    }
+    if (append) { append_offset_ += aligned; }
 
     live_.emplace(offset, next_generation_);
     reserved_bytes_ += aligned;
@@ -90,9 +81,7 @@ void SpillKVStore::write_at(const Extent& extent, const std::byte* bytes, std::s
     if (found == live_.end() || found->second != extent.generation) {
         throw std::invalid_argument("spill kv store: foreign extent");
     }
-    if (bytes == nullptr) {
-        throw std::invalid_argument("spill kv store: null write source");
-    }
+    if (bytes == nullptr) { throw std::invalid_argument("spill kv store: null write source"); }
     if (count != extent.bytes) {
         throw std::invalid_argument("spill kv store: write size does not match the extent");
     }
@@ -147,8 +136,7 @@ void SpillKVStore::checked_write(const void* bytes, std::size_t count, std::uint
     std::size_t done   = 0;
     while (done < count) {
         const ssize_t written =
-            ::pwrite(descriptor_, cursor + done, count - done,
-                     static_cast<off_t>(offset + done));
+            ::pwrite(descriptor_, cursor + done, count - done, static_cast<off_t>(offset + done));
         if (written <= 0) {
             if (written < 0 && (errno == EINTR)) { continue; }
             throw std::runtime_error(errno_text("spill kv store: write failed"));
@@ -158,11 +146,11 @@ void SpillKVStore::checked_write(const void* bytes, std::size_t count, std::uint
 }
 
 void SpillKVStore::checked_read(void* bytes, std::size_t count, std::uint64_t offset) const {
-    auto* cursor = static_cast<std::byte*>(bytes);
+    auto* cursor     = static_cast<std::byte*>(bytes);
     std::size_t done = 0;
     while (done < count) {
-        const ssize_t got = ::pread(descriptor_, cursor + done, count - done,
-                                    static_cast<off_t>(offset + done));
+        const ssize_t got =
+            ::pread(descriptor_, cursor + done, count - done, static_cast<off_t>(offset + done));
         if (got < 0) {
             if (errno == EINTR) { continue; }
             throw std::runtime_error(errno_text("spill kv store: read failed"));

@@ -170,7 +170,6 @@ struct ContextCacheOptions {
     std::optional<std::uint64_t> session_activity_window;
 };
 
-
 // Arena capacity/usage/peak triple the master-generation startup reports.
 struct ArenaMemorySummary {
     std::size_t capacity_bytes  = 0;
@@ -250,16 +249,16 @@ struct EngineOptions {
     std::filesystem::path chat_template_path;
     // Retained compiled output-constraint grammars per model. Grammars still referenced by an
     // active request outlive eviction, so this bounds the cache, not total process memory.
-    std::size_t grammar_cache_bytes    = 256ULL * 1024 * 1024;
-    EnginePurpose purpose              = EnginePurpose::Generation;
-    int device                         = 0;
+    std::size_t grammar_cache_bytes = 256ULL * 1024 * 1024;
+    EnginePurpose purpose           = EnginePurpose::Generation;
+    int device                      = 0;
     // The device group this engine drives, rank 0 first. Empty means the single `device`.
     // A width above 1 is the tensor-parallel lane; the group is validated at startup.
     std::vector<int> devices;
     // When true, per-token log-probabilities of sampled tokens are reported. A request asking
     // for probabilities against an engine loaded without this capability is rejected rather than
     // answered with placeholders.
-    bool token_logprobs = false;
+    bool token_logprobs                = false;
     std::uint32_t max_context          = 8192; // Logical ceiling of one request or score window.
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(8192);
     std::uint32_t max_concurrency      = 1;
@@ -505,12 +504,12 @@ tool_call_parse_fallback_reason_name(ToolCallParseFallbackReason reason) noexcep
 }
 
 struct ToolCallParseDiagnostics {
-    bool marker_seen                              = false;
-    std::uint32_t structured_call_count           = 0;
-    std::uint32_t empty_arguments_omitted         = 0;
-    std::uint32_t schema_mismatch_arguments       = 0;
-    std::uint32_t duplicate_parameters_repaired   = 0;
-    ToolCallParseFallbackReason fallback_reason   = ToolCallParseFallbackReason::None;
+    bool marker_seen                            = false;
+    std::uint32_t structured_call_count         = 0;
+    std::uint32_t empty_arguments_omitted       = 0;
+    std::uint32_t schema_mismatch_arguments     = 0;
+    std::uint32_t duplicate_parameters_repaired = 0;
+    ToolCallParseFallbackReason fallback_reason = ToolCallParseFallbackReason::None;
 
     [[nodiscard]] friend constexpr bool
     operator==(const ToolCallParseDiagnostics&, const ToolCallParseDiagnostics&) noexcept = default;
@@ -758,13 +757,13 @@ struct TokenLogprob {
 };
 
 // The probability report for one generated token. `top` holds the leading vocabulary ranks for the
-// same position in descending order and may or may not contain `token`; it is empty when the request
-// asked for no alternatives.
+// same position in descending order and may or may not contain `token`; it is empty when the
+// request asked for no alternatives.
 //
 // Reports stay index-aligned with the generated tokens they describe. A token the Engine injected
-// deterministically rather than drew from the target - a forced thinking-control or tool-call span -
-// reports zero with `injected` set and an empty `top`, because inventing a target-model value for a
-// position whose logits were never consumed would be false. A drawn token's logprob is a negative
+// deterministically rather than drew from the target - a forced thinking-control or tool-call span
+// - reports zero with `injected` set and an empty `top`, because inventing a target-model value for
+// a position whose logits were never consumed would be false. A drawn token's logprob is a negative
 // number in practice, so the two cases never collide.
 struct GeneratedTokenLogprob {
     TokenId token = 0;
@@ -777,7 +776,7 @@ struct OutputDelta {
     // Bytes of tool-call argument text the frontend consumed for the in-flight call. Streaming
     // protocols use it to report decode progress while parameters are still private.
     std::size_t tool_call_progress_bytes = 0;
-    OutputChannel channel = OutputChannel::Content;
+    OutputChannel channel                = OutputChannel::Content;
     std::string text;
 };
 
@@ -895,9 +894,9 @@ struct GenerationObservationOptions {
     std::uint32_t accepted_length_steps = 0;
     // Retained for the direct-Program engine route: per-phase wall timings are collected for an
     // Aggregate terminal response.
-    bool phase_timings     = false;
-    bool live_timings      = false;
-    bool prompt_progress   = false;
+    bool phase_timings   = false;
+    bool live_timings    = false;
+    bool prompt_progress = false;
     // Optional for either consumer mode. No scheduling events are retained when unset.
     GenerationSchedulingObserver scheduling;
     GenerationFirstTokenObserver first_token;
@@ -1054,7 +1053,6 @@ struct GenerationResult {
     PrefixReusePath prefix_reuse_path  = PrefixReusePath::Root;
     MaterializationDiagnostics materialization;
     SpeculativeStats speculative;
-
 };
 
 } // namespace ninfer

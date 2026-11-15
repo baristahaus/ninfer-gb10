@@ -39,15 +39,14 @@ struct FlashNextGdnWeights {
 void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& convolution_state_in, Tensor& convolution_state_out,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
-                    Tensor& destination, MemoryArena& workspace,
-                    CudaExecutionView execution, Bf16GemmContext* bf16_gemm = nullptr);
+                    Tensor& destination, MemoryArena& workspace, CudaExecutionView execution,
+                    Bf16GemmContext* bf16_gemm = nullptr);
 
 // One-token exact-B selected-slot transition used by ordinary decode.
 void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights& weights,
                                  Tensor& convolution_states, Tensor& recurrent_states,
                                  const Tensor& source_slots, const Tensor& destination_slots,
-                                 Tensor& destination, MemoryArena& workspace,
-                                 cudaStream_t stream);
+                                 Tensor& destination, MemoryArena& workspace, cudaStream_t stream);
 
 // The previous round's commits still to be folded into this layer's states: rows is device I32
 // [4,R] ({source, destination, commit_columns, 0} per previous record row), and records is this

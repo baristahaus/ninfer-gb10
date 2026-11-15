@@ -261,8 +261,8 @@ std::array<cost::FitResult, 3> fit_transfers(const cost::TransferSuiteResult& sa
         for (const cost::TransferMeasurement& sample : samples.measurements) {
             if (sample.direction != directions[direction]) { continue; }
             points.push_back(cost::TransferRegressionPoint{
-                .label = sample.label + "-p" + std::to_string(sample.page_count) + "-r" +
-                         std::to_string(sample.contiguous_runs),
+                .label           = sample.label + "-p" + std::to_string(sample.page_count) + "-r" +
+                                   std::to_string(sample.contiguous_runs),
                 .payload_bytes   = sample.work.payload_bytes,
                 .copy_operations = sample.work.copy_operations,
                 .elapsed_ns      = sample.timing.median_ns,
@@ -300,8 +300,7 @@ cost::FitResult fit_prefill(const cost::PrefillSuiteResult& samples) {
         kMaximumPrefillP95, kOrderingSignificance);
 }
 
-std::array<ninfer::runtime::ContextTransferCost,
-           ninfer::runtime::kContextTransferDirectionCount>
+std::array<ninfer::runtime::ContextTransferCost, ninfer::runtime::kContextTransferDirectionCount>
 runtime_transfer_cost(const std::array<cost::FitResult, 3>& fits) {
     std::array<ninfer::runtime::ContextTransferCost,
                ninfer::runtime::kContextTransferDirectionCount>

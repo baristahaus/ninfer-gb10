@@ -26,7 +26,7 @@ struct Plan;
 namespace ninfer::models::qwen3_5::execution {
 // The group-scoped resources of a two-GPU lane; defined in execution/sharded.h.
 struct ShardedGroup;
-}
+} // namespace ninfer::models::qwen3_5::execution
 
 namespace ninfer::models::qwen3_5 {
 
@@ -101,8 +101,7 @@ private:
                                                             SequencePlan&&, DeviceContext&,
                                                             const StartupObserver&,
                                                             const models::ShardedGroup*);
-    friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&,
-                                    PreparedSession*);
+    friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&, PreparedSession*);
 };
 
 class SequencePlanner {
@@ -136,9 +135,9 @@ private:
 // partial pair the whole group shares. Null on the single-device lane. A Program at width > 1
 // refuses to run without it rather than creating its own: a mailbox per Program would never
 // rendezvous and a partial pair per Program would diverge silently.
-[[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(
-    const execution::Parameters&, SequencePlan&&, DeviceContext&, const StartupObserver&,
-    const models::ShardedGroup* sharded = nullptr);
+[[nodiscard]] std::unique_ptr<RankProgram>
+create_rank_program(const execution::Parameters&, SequencePlan&&, DeviceContext&,
+                    const StartupObserver&, const models::ShardedGroup* sharded = nullptr);
 
 // tp 2: attach `peer`'s KV page pool and execution tables to `origin`'s, so every physical mutation
 // rank 0 issues is replayed on rank 1's stream. Called once, after both Programs exist and before

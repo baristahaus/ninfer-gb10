@@ -428,9 +428,9 @@ void add_shape(Suite& suite, QType format, ActivationRecipe recipe, WeightGenera
 }
 
 void add_workspace_cases(Suite& suite, QType format, int n, int k) {
-    auto test     = linear_suite::make_case(linear_suite::format_name(format), n, k, 0,
-                                            ops::LinearPolicy::A16Only, linear_suite::Execution::Eager,
-                                            "workspace-intervals");
+    auto test = linear_suite::make_case(linear_suite::format_name(format), n, k, 0,
+                                        ops::LinearPolicy::A16Only, linear_suite::Execution::Eager,
+                                        "workspace-intervals");
     test.policies = 7;
     suite.add(std::move(test), [=] { return verify_workspace_envelopes(format, n, k); });
 }

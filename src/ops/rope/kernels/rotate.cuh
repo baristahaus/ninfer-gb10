@@ -51,8 +51,8 @@ __device__ __forceinline__ void fixed_axis_frequency(int pair, int* axis, float*
 // Text geometries YaRN scales. Vision (D72R72) has its own effective dimension and table, and the
 // DFlash D128R128 drafter is a separate component, so neither is reached from here.
 template <RopeKernelMode Mode>
-inline constexpr bool kYarnMode = Mode == RopeKernelMode::D256R64 ||
-                                  Mode == RopeKernelMode::MropeD256R64;
+inline constexpr bool kYarnMode =
+    Mode == RopeKernelMode::D256R64 || Mode == RopeKernelMode::MropeD256R64;
 
 template <RopeKernelMode Mode>
 __device__ __forceinline__ void fixed_sincos(const std::int32_t* positions, int tokens, int token,
@@ -285,7 +285,7 @@ static __global__ void rope_generic_kernel(const std::int32_t* positions, std::i
         __nv_bfloat16* data         = is_q ? q : k;
         const std::int64_t stride_t = is_q ? q_token_stride : k_token_stride;
         const std::int64_t base     = static_cast<std::int64_t>(token) * stride_t +
-                                  static_cast<std::int64_t>(head) * head_dim;
+                                      static_cast<std::int64_t>(head) * head_dim;
         for (int pair = lane; pair < half; pair += 32) {
             const float first        = __bfloat162float(data[base + pair]);
             const float second       = __bfloat162float(data[base + pair + half]);

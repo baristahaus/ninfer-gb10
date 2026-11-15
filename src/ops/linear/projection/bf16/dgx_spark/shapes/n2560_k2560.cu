@@ -15,24 +15,24 @@ using Gemv = Bf16N2560K2560Schedule<Bf16ScheduleInstance<
 using Sliced =
     Bf16N2560K2560Schedule<Bf16ScheduleInstance<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 3>, 2560>>;
 using Hot64      = Bf16N2560K2560Schedule<Bf16ScheduleInstance<
-         Bf16A16MmaSchedule<64, 32, 128, 32, 16, 2, 2, Cache::cg, Cache::cg,
-                            Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
-         2560>>;
+    Bf16A16MmaSchedule<64, 32, 128, 32, 16, 2, 2, Cache::cg, Cache::cg,
+                       Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
+    2560>>;
 using Prefill64  = Bf16N2560K2560Schedule<Bf16ScheduleInstance<
-     Bf16A16TmaMmaSchedule<128, 64, 64, 32, 32, 2, 2, Bf16MmaRaster::TokenFast, 1>, 2560>>;
+    Bf16A16TmaMmaSchedule<128, 64, 64, 32, 32, 2, 2, Bf16MmaRaster::TokenFast, 1>, 2560>>;
 using Prefill128 = Bf16N2560K2560Schedule<
     Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1>, 2560>>;
 // Reuse input fragments across rows with different pipeline depths in the hot bands.
 using HotTwoStage   = Bf16N2560K2560Schedule<Bf16ScheduleInstance<
-      Bf16A16MmaSchedule<32, 32, 128, 16, 8, 2, 1, Cache::cg, Cache::cg,
-                         Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
-      2560>>;
+    Bf16A16MmaSchedule<32, 32, 128, 16, 8, 2, 1, Cache::cg, Cache::cg,
+                       Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
+    2560>>;
 using HotThreeStage = Bf16N2560K2560Schedule<Bf16ScheduleInstance<
     Bf16A16MmaSchedule<32, 32, 128, 16, 8, 3, 1, Cache::cg, Cache::cg,
                        Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
     2560>>;
 using Prefill192    = Bf16N2560K2560Schedule<
-       Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<160, 192, 64, 80, 48, 2, 1>, 2560>>;
+    Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<160, 192, 64, 80, 48, 2, 1>, 2560>>;
 using LargeGrouped = Bf16N2560K2560Schedule<Bf16ScheduleInstance<
     Bf16A16TmaMmaSchedule<256, 128, 64, 128, 32, 2, 1, Bf16MmaRaster::Grouped, 6, 3>, 2560>>;
 

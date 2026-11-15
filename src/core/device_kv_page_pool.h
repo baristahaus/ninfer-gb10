@@ -161,7 +161,8 @@ public:
     // replica can replay it without minting a handle of this pool. The range must lie inside
     // capacity_pages() and a copy's two ranges must not overlap; the caller owns ordering on
     // `stream`. This pool's own page bookkeeping is not consulted or changed.
-    void zero_page_run(std::int32_t first, std::uint32_t count, cudaStream_t stream = nullptr) const;
+    void zero_page_run(std::int32_t first, std::uint32_t count,
+                       cudaStream_t stream = nullptr) const;
     void copy_page_run(std::int32_t source_first, std::int32_t destination_first,
                        std::uint32_t count, cudaStream_t stream = nullptr) const;
     // The physical page a handle names, after validating the handle.

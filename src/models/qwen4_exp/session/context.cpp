@@ -145,11 +145,11 @@ BindingReservation Session::start_binding(const RequestBasePlan& base, runtime::
     const auto image    = checkpoint ? checkpoint->snapshot.continuation().image : detail::Image{};
     const bool resident = checkpoint && states.device_resident(image);
     const bool consume  = checkpoint && (own || candidate.consume_source) &&
-                         p.checkpoints[source->index].pins == 0 &&
-                         states.checkpoint_references(image) == 1 && !states.source_pins(image);
-    const bool split = checkpoint && !consume && resident && states.host_resident(image) &&
-                       !states.source_pins(image);
-    const auto target = resume ? resume->frontier() : f;
+                          p.checkpoints[source->index].pins == 0 &&
+                          states.checkpoint_references(image) == 1 && !states.source_pins(image);
+    const bool split    = checkpoint && !consume && resident && states.host_resident(image) &&
+                          !states.source_pins(image);
+    const auto target   = resume ? resume->frontier() : f;
     const auto requested_peak =
         resume ? std::uint64_t(target) +
                      (resume_kind == ExecutionUnitKind::Decode

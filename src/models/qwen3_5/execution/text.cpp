@@ -188,15 +188,15 @@ void TextRun::attention(const BlockParameters& block, std::uint32_t compact_laye
         view_.cache.batch_layer_view(compact_layer), envelope_, work, ab, cuda);
     ops::sigmoid_mul(gate, a, cuda);
     if (view_.collective != nullptr) {
-        // Column-parallel: the residual is replicated, so it is added ONCE after the cross-rank sum.
-        // `linear_add` here would count it once per rank. The reduce is this rank's own exchange on
-        // this rank's stream, so the projection above is already ordered before it.
+        // Column-parallel: the residual is replicated, so it is added ONCE after the cross-rank
+        // sum. `linear_add` here would count it once per rank. The reduce is this rank's own
+        // exchange on this rank's stream, so the projection above is already ordered before it.
         std::array<Tensor, 2> partials = column_partials(tokens);
         sharded_project_columns_add(a.view({dimension(extents.query_width), tokens}), p.output,
                                     partials, residual_, *view_.collective, work, cuda);
     } else {
-        ops::linear_add(a.view({dimension(extents.query_width), tokens}), p.output.weight, residual_,
-                        p.output.policy, work, cuda);
+        ops::linear_add(a.view({dimension(extents.query_width), tokens}), p.output.weight,
+                        residual_, p.output.policy, work, cuda);
     }
 }
 
@@ -209,9 +209,9 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     const auto tokens    = residual_.ne[1];
     const auto width     = inputs_.ids.ne[0];
     const auto batch     = inputs_.ids.ne[1];
-    const auto dk    = dimension(gdn.linear_key_head_dim);
-    const auto dv    = dimension(gdn.linear_value_head_dim);
-    const auto scale = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
+    const auto dk        = dimension(gdn.linear_key_head_dim);
+    const auto dv        = dimension(gdn.linear_value_head_dim);
+    const auto scale     = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
     const auto* sequence = std::get_if<SequenceUpdate>(&update_);
     const auto* replay   = std::get_if<ReplayRecords>(&update_);
 
@@ -246,16 +246,16 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         Tensor value_output     = vc.view({extents.value_width, width, batch});
         Tensor gate_output      = z.view({extents.value_width, width, batch});
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
-        const bool exl3_route = is_exl3_gdn(p);
+        const bool exl3_route   = is_exl3_gdn(p);
         if (exl3_route) {
             // Decomposed EXL3 route: the per-role or fused projection into one qkv
             // plane plus the output gate, then the standalone batched causal conv
             // over the qkv rows. The conv preserves the projection's row order, so
             // each split output is a contiguous row range of its result.
             const std::int32_t kColumns = width * batch;
-            Tensor qkv       = workspace::gdn_prefill_conv(work, extents, kColumns);
-            Tensor z_flat    = z.view({extents.value_width, kColumns});
-            Tensor hidden_2d = h.view({extents.hidden_size, kColumns});
+            Tensor qkv                  = workspace::gdn_prefill_conv(work, extents, kColumns);
+            Tensor z_flat               = z.view({extents.value_width, kColumns});
+            Tensor hidden_2d            = h.view({extents.hidden_size, kColumns});
             gdn_projection(hidden_2d, p, qkv, z_flat, work, cuda);
             Tensor conv_out    = workspace::gdn_prefill_conv(work, extents, kColumns);
             Tensor conv_input  = qkv.view({extents.conv_channels(), width, batch});
@@ -270,15 +270,15 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
                 // plane itself: the fused record op's [C,W,B] column order is the
                 // plane's own layout.
                 const std::int32_t channels = extents.conv_channels();
-                Tensor scratch_states = work.alloc(DType::BF16, {channels, 3, kColumns});
-                Tensor heads = work.alloc(DType::I32, {batch});
+                Tensor scratch_states       = work.alloc(DType::BF16, {channels, 3, kColumns});
+                Tensor heads                = work.alloc(DType::I32, {batch});
                 // One device-side op fills the reservation heads and gathers the source
                 // windows; both stay valid under stream capture.
                 ops::gdn_conv_history_gather(conv, inputs_.state_source_slots, scratch_states,
                                              heads, width, cuda.stream());
                 ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, scratch_states,
-                                                 inputs_.valid_columns, heads, heads,
-                                                 conv_result, cuda);
+                                                 inputs_.valid_columns, heads, heads, conv_result,
+                                                 cuda);
                 const auto records = replay->records.layer(compact_layer, batch);
                 if (!(records.conv.dtype == DType::BF16 &&
                       records.conv.ne[0] == extents.conv_channels() &&
@@ -286,32 +286,29 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
                     throw std::invalid_argument(
                         "gdn record: conv record geometry differs from the round");
                 }
-                CUDA_CHECK(cudaMemcpyAsync(records.conv.data, conv_input.data,
-                                           records.conv.bytes(), cudaMemcpyDeviceToDevice,
-                                           cuda.stream()));
+                CUDA_CHECK(cudaMemcpyAsync(records.conv.data, conv_input.data, records.conv.bytes(),
+                                           cudaMemcpyDeviceToDevice, cuda.stream()));
             } else {
-                ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, conv,
-                                                 inputs_.valid_columns,
-                                                 inputs_.state_source_slots,
-                                                 inputs_.state_destination_slots, conv_result,
-                                                 cuda);
+                ops::causal_conv1d_silu_snapshot(
+                    conv_input, p.convolution, conv, inputs_.valid_columns,
+                    inputs_.state_source_slots, inputs_.state_destination_slots, conv_result, cuda);
             }
             // The qkv plane is row-fastest [rows, kColumns]: each row group's rows for column j
             // live at j*conv_channels. The split outputs keep the same row-fastest layout, so
             // each group is a strided 2D copy, not a flat range.
             const auto group_channels = extents.conv_channels();
-            const auto* source = static_cast<const std::byte*>(conv_out.data);
-            CUDA_CHECK(cudaMemcpy2DAsync(
-                query_output.data, static_cast<std::size_t>(extents.key_width) * 2,
-                source, static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(extents.key_width) * 2, kColumns,
-                cudaMemcpyDeviceToDevice, cuda.stream()));
-            CUDA_CHECK(cudaMemcpy2DAsync(
-                key_output.data, static_cast<std::size_t>(extents.key_width) * 2,
-                source + static_cast<std::size_t>(extents.key_width) * 2,
-                static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(extents.key_width) * 2, kColumns,
-                cudaMemcpyDeviceToDevice, cuda.stream()));
+            const auto* source        = static_cast<const std::byte*>(conv_out.data);
+            CUDA_CHECK(cudaMemcpy2DAsync(query_output.data,
+                                         static_cast<std::size_t>(extents.key_width) * 2, source,
+                                         static_cast<std::size_t>(group_channels) * 2,
+                                         static_cast<std::size_t>(extents.key_width) * 2, kColumns,
+                                         cudaMemcpyDeviceToDevice, cuda.stream()));
+            CUDA_CHECK(cudaMemcpy2DAsync(key_output.data,
+                                         static_cast<std::size_t>(extents.key_width) * 2,
+                                         source + static_cast<std::size_t>(extents.key_width) * 2,
+                                         static_cast<std::size_t>(group_channels) * 2,
+                                         static_cast<std::size_t>(extents.key_width) * 2, kColumns,
+                                         cudaMemcpyDeviceToDevice, cuda.stream()));
             CUDA_CHECK(cudaMemcpy2DAsync(
                 value_output.data, static_cast<std::size_t>(extents.value_width) * 2,
                 source + static_cast<std::size_t>(2 * extents.key_width) * 2,
@@ -360,16 +357,17 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         }
     }
 
-    Tensor normalized = workspace::gdn_normalized_output(work, extents, tokens).view({dv, vh, tokens});
+    Tensor normalized =
+        workspace::gdn_normalized_output(work, extents, tokens).view({dv, vh, tokens});
     ops::silu_gated_rmsnorm(o, p.norm, z, cfg.rms_norm_eps, normalized, cuda);
     if (view_.collective != nullptr) {
         // Column-parallel, same residual rule as the attention output projection.
         std::array<Tensor, 2> partials = column_partials(tokens);
-        sharded_project_columns_add(normalized.view({extents.value_width, tokens}),
-                                    p.output, partials, residual_, *view_.collective, work, cuda);
+        sharded_project_columns_add(normalized.view({extents.value_width, tokens}), p.output,
+                                    partials, residual_, *view_.collective, work, cuda);
     } else {
-        ops::linear_add(normalized.view({extents.value_width, tokens}), p.output.weight,
-                        residual_, p.output.policy, work, cuda);
+        ops::linear_add(normalized.view({extents.value_width, tokens}), p.output.weight, residual_,
+                        p.output.policy, work, cuda);
     }
 }
 
@@ -445,10 +443,10 @@ void TextRun::capture_features(std::uint32_t layer) {
 }
 
 void TextRun::finish() {
-    // NO COLLECTIVE IN THIS FUNCTION: a conditional copy_bytes_async and one ops::rmsnorm (the final
-    // norm, unsharded). So a 1 s cost bracketed here is host-side work or an enqueue that blocks,
-    // NOT a collective question -- which is why two timestamps suffice and why the read differs from
-    // project_decode's six.
+    // NO COLLECTIVE IN THIS FUNCTION: a conditional copy_bytes_async and one ops::rmsnorm (the
+    // final norm, unsharded). So a 1 s cost bracketed here is host-side work or an enqueue that
+    // blocks, NOT a collective question -- which is why two timestamps suffice and why the read
+    // differs from project_decode's six.
     const auto fin_stamp = [&](const char* where) {
         if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
         std::timespec ts{};
@@ -498,18 +496,19 @@ bool TextRun::poll() {
     // scheduling, not a collective action -- but it is how a per-rank value becomes a per-rank
     // WALL-CLOCK cost, which is what the 1 s delta at launch_decision looks like.
     struct PollCounts {
-        std::uint64_t calls = 0;
+        std::uint64_t calls            = 0;
         std::uint64_t try_before_false = 0;
-        std::uint64_t start_false = 0;
-        std::uint64_t layers_done = 0;
-        int rank = 0;
+        std::uint64_t start_false      = 0;
+        std::uint64_t layers_done      = 0;
+        int rank                       = 0;
     };
+
     static thread_local PollCounts poll_counts;
     if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
         ++poll_counts.calls;
         // PRINT ON THRESHOLD, NOT ON COMPLETION. A failing round never reaches Stage::Done, so a
-        // print placed there measures nothing on the path that fails. The counter is monotonic, so a
-        // partial trace is enough to compare the two ranks' RATES -- and a rate difference is the
+        // print placed there measures nothing on the path that fails. The counter is monotonic, so
+        // a partial trace is enough to compare the two ranks' RATES -- and a rate difference is the
         // finding.
         if (poll_counts.calls % 10 == 0) {
             std::fprintf(stderr,
@@ -535,9 +534,9 @@ bool TextRun::poll() {
     while (layer_ < parameters.text.layers.size()) {
         // ONE LINE PER LAYER PER RANK, no threshold and no deduplication: ~35 layers x 2 ranks is
         // 70 lines, which is readable -- and it cannot be silenced by a count smaller than its
-        // period because there is no period. The per-layer deltas distinguish a flat cost (post-loop
-        // path), a single-layer jump (that layer), and a steadily growing cost (each layer a little
-        // more on one rank).
+        // period because there is no period. The per-layer deltas distinguish a flat cost
+        // (post-loop path), a single-layer jump (that layer), and a steadily growing cost (each
+        // layer a little more on one rank).
         if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
             std::timespec layer_ts{};
             (void)::clock_gettime(CLOCK_MONOTONIC, &layer_ts);

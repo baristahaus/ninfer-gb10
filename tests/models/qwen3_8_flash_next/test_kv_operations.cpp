@@ -1,8 +1,8 @@
 // The KV funnel: dispatch at width 1, and the two Program capture sites that now go through it.
 //
-// The compile-time half is the point of the funnel for B3: the handle must be constructible from the
-// plain pool *or* the mirrored pair, so the per-rank plan only has to pass the mirrored one in. The
-// host-only half proves the width-1 handle forwards to the plain pool without a device: a page
+// The compile-time half is the point of the funnel for B3: the handle must be constructible from
+// the plain pool *or* the mirrored pair, so the per-rank plan only has to pass the mirrored one in.
+// The host-only half proves the width-1 handle forwards to the plain pool without a device: a page
 // pool over pageable host memory rejects its own bad arguments before any CUDA call, and those
 // rejections are what the funnel surfaces. The two-device-free runtime half needs a GPU because a
 // KVExecutionTablePool allocates pinned host memory in its constructor.
@@ -53,10 +53,12 @@ int expect_throws(Fn&& fn, const std::string& label) {
 
 // B3 supplies the mirrored pair; the funnel must accept either form without a call site changing.
 static_assert(std::is_constructible_v<ninfer::tp2::KVPageOperations, ninfer::DeviceKVPagePool&>);
-static_assert(std::is_constructible_v<ninfer::tp2::KVPageOperations, ninfer::tp2::MirroredKVPagePool&>);
-static_assert(std::is_constructible_v<ninfer::tp2::KVTableOperations, ninfer::KVExecutionTablePool&>);
 static_assert(
-    std::is_constructible_v<ninfer::tp2::KVTableOperations, ninfer::tp2::MirroredKVExecutionTables&>);
+    std::is_constructible_v<ninfer::tp2::KVPageOperations, ninfer::tp2::MirroredKVPagePool&>);
+static_assert(
+    std::is_constructible_v<ninfer::tp2::KVTableOperations, ninfer::KVExecutionTablePool&>);
+static_assert(std::is_constructible_v<ninfer::tp2::KVTableOperations,
+                                      ninfer::tp2::MirroredKVExecutionTables&>);
 static_assert(std::is_constructible_v<ninfer::tp2::KVTableRowLease>);
 static_assert(std::is_move_constructible_v<ninfer::tp2::KVTableRowLease>);
 static_assert(!std::is_copy_constructible_v<ninfer::tp2::KVTableRowLease>);
@@ -69,12 +71,11 @@ struct PlannedPools {
 
 PlannedPools plan_pools(std::uint32_t physical_pages, std::uint32_t logical_pages,
                         std::int32_t rows) {
-    const ninfer::KVPageGeometry geometry{
-        .planes = {{.dtype          = ninfer::DType::I8,
-                    .leading_extent = 4,
-                    .head_extent    = 2,
-                    .alignment      = 256,
-                    .tokens_per_row = 4}}};
+    const ninfer::KVPageGeometry geometry{.planes = {{.dtype          = ninfer::DType::I8,
+                                                      .leading_extent = 4,
+                                                      .head_extent    = 2,
+                                                      .alignment      = 256,
+                                                      .tokens_per_row = 4}}};
     ninfer::LayoutBuilder builder;
     PlannedPools planned;
     planned.pages = ninfer::plan_device_kv_page_pool(
@@ -88,7 +89,7 @@ PlannedPools plan_pools(std::uint32_t physical_pages, std::uint32_t logical_page
 // --- host-only: the width-1 page handle forwards to the plain pool ---------------------------
 
 int exercise_width_one_page_dispatch() {
-    int failures = 0;
+    int failures            = 0;
     const PlannedPools plan = plan_pools(2, 2, 1);
     // A page pool binds tensors over its backing; it performs no CUDA call, so pageable host memory
     // is enough to prove dispatch through the pool's own validation.
@@ -140,7 +141,7 @@ int exercise_width_one_page_dispatch() {
 // --- GPU: the two capture sites, through the store funnels ----------------------------------
 
 int exercise_capture_site_dispatch(ninfer::DeviceContext& device) {
-    int failures = 0;
+    int failures            = 0;
     const PlannedPools plan = plan_pools(2, 4, 1);
     ninfer::DeviceBuffer arena(device.device(), plan.bytes);
     ninfer::DeviceKVPagePool pool(arena.span(), plan.pages);
@@ -148,8 +149,8 @@ int exercise_capture_site_dispatch(ninfer::DeviceContext& device) {
 
     detail::LogicalKVPageStore pages(pool, 4);
     detail::KVAddressSpaceStore addresses(pages, tables, 2, 4);
-    failures += (addresses.logical_page_capacity() == 4 ? 0
-                                                        : fail("funnel geometry is not the pool's"));
+    failures +=
+        (addresses.logical_page_capacity() == 4 ? 0 : fail("funnel geometry is not the pool's"));
 
     std::optional<detail::KVAddressSpaceHandle> allocation = addresses.create_active(1, 0);
     if (!allocation.has_value()) { return fail("capture row activation failed"); }
@@ -217,14 +218,16 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; the runtime dispatch cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the runtime dispatch cases did not run; supply "
+                     "one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {
         return fail(std::string("cudaGetDeviceCount failed: ") + cudaGetErrorString(count_err));
     }
     if (count == 0) {
-        std::cerr << "SKIP: no CUDA devices; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no CUDA devices; supply one with CUDA_VISIBLE_DEVICES (sm_121a on "
+                     "GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
 

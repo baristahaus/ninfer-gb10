@@ -104,25 +104,25 @@ ops::FlashNextExpertBank nvfp4_bank(const artifact::MaterializedArtifact& artifa
                                     const artifact::ParameterReference& handle,
                                     const artifact::ParameterReference& input_divisors, int rows,
                                     int columns) {
-    const auto view = artifact::bind_view(handle, artifact);
+    const auto view   = artifact::bind_view(handle, artifact);
     const auto object = handle.binding.parts.front().object;
     const auto* state = artifact.tier_state(object);
     if (!is_complete_weight(view) && state == nullptr) {
         throw std::logic_error("expert bank requires complete storage");
     }
-    const auto& parent = state != nullptr
-                             ? artifact.device_parent(object)
-                             : *view.parts.front().parent;
-    const auto* base   = static_cast<const std::byte*>(parent.data);
+    const auto& parent =
+        state != nullptr ? artifact.device_parent(object) : *view.parts.front().parent;
+    const auto* base = static_cast<const std::byte*>(parent.data);
     ops::FlashNextExpertBank bank{
-        .codes                 = base,
-        .scales                = base + parent.geometry.scale_offset,
-        .weight_scale_divisors = reinterpret_cast<const float*>(base + parent.geometry.divisor_offset),
-        .input_scale_divisors  = reinterpret_cast<const float*>(data(artifact, input_divisors)),
-        .qtype                 = QType::NVFP4,
-        .experts               = 512,
-        .rows                  = rows,
-        .columns               = columns,
+        .codes  = base,
+        .scales = base + parent.geometry.scale_offset,
+        .weight_scale_divisors =
+            reinterpret_cast<const float*>(base + parent.geometry.divisor_offset),
+        .input_scale_divisors = reinterpret_cast<const float*>(data(artifact, input_divisors)),
+        .qtype                = QType::NVFP4,
+        .experts              = 512,
+        .rows                 = rows,
+        .columns              = columns,
     };
     // SP-4 tiered banks: the hot parent is the compacted device mini-bank (its geometry is
     // the mini layout); the pinned warm mini-bank, the residency table, and the counters
@@ -130,22 +130,21 @@ ops::FlashNextExpertBank nvfp4_bank(const artifact::MaterializedArtifact& artifa
     if (state != nullptr) {
         const auto& warm      = artifact.host_parent(object);
         const auto* warm_base = static_cast<const std::byte*>(warm.data);
-        bank.warm_codes                 = warm_base;
-        bank.warm_scales                = warm_base + warm.geometry.scale_offset;
+        bank.warm_codes       = warm_base;
+        bank.warm_scales      = warm_base + warm.geometry.scale_offset;
         bank.warm_weight_scale_divisors =
             reinterpret_cast<const float*>(warm_base + warm.geometry.divisor_offset);
-        const auto* state_base          = static_cast<const std::uint32_t*>(state->data());
-        bank.expert_residency           = state_base;
+        const auto* state_base = static_cast<const std::uint32_t*>(state->data());
+        bank.expert_residency  = state_base;
         // The counters are the state buffer's second half; the kernels atomically arm them.
-        bank.expert_activations         = const_cast<std::uint32_t*>(state_base) + 512;
+        bank.expert_activations = const_cast<std::uint32_t*>(state_base) + 512;
         if (const auto* staging = artifact.tier_swap_staging(object); staging != nullptr) {
             // The staging is mutable tier scratch; the accessor's const is the read-mostly
             // view, matching the residency's interface const.
             bank.tier_swap_staging = const_cast<void*>(staging->data());
         }
-        const auto warm_experts         = warm.geometry.shape[0] /
-                                          static_cast<std::uint64_t>(rows);
-        bank.tiered_hot_experts         = 512 - static_cast<std::uint32_t>(warm_experts);
+        const auto warm_experts = warm.geometry.shape[0] / static_cast<std::uint64_t>(rows);
+        bank.tiered_hot_experts = 512 - static_cast<std::uint32_t>(warm_experts);
     }
     return bank;
 }
@@ -189,7 +188,7 @@ ops::FlashNextExpertBank bank(const artifact::MaterializedArtifact& artifact,
 // as the packed [2*intermediate, hidden] parent and shared_down as the row-scaled FP8
 // [hidden, intermediate] projection. MXFP8 and BF16-pair shared experts are not admitted.
 MoeWeights exl3_moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact) {
-    auto shared = shared_gate_up(plan, artifact);
+    auto shared        = shared_gate_up(plan, artifact);
     const auto* packed = std::get_if<Weight>(&shared);
     if (packed == nullptr) {
         throw artifact::ArtifactError(
@@ -222,8 +221,7 @@ MoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifa
         .shared_scale   = bf16(artifact, plan.shared_scale, 1, 2560),
         .routed_gate_up =
             bank(artifact, plan.routed_gate_up, plan.routed_gate_up_input_divisors, 1280, 2560),
-        .routed_down =
-            bank(artifact, plan.routed_down, plan.routed_down_input_divisors, 2560, 640),
+        .routed_down = bank(artifact, plan.routed_down, plan.routed_down_input_divisors, 2560, 640),
     };
 }
 
@@ -361,20 +359,20 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
     if (plan.features.dflash2()) {
         const DFlash2Plan& source = plan.dflash2;
         auto& draft               = runtime.dflash2.emplace();
-        draft.feature_projection = bf16(backing, source.feature_projection, 2560, 12800);
-        draft.context_norm       = tensor(backing, source.context_norm, {2560});
-        draft.final_norm         = tensor(backing, source.final_norm, {2560});
+        draft.feature_projection  = bf16(backing, source.feature_projection, 2560, 12800);
+        draft.context_norm        = tensor(backing, source.context_norm, {2560});
+        draft.final_norm          = tensor(backing, source.final_norm, {2560});
         for (int layer = 0; layer < detail::DFlash2Config::layers; ++layer) {
             const DFlash2Plan::Layer& from = source.layers[layer];
             auto& to                       = draft.layers[layer];
             to.input_norm                  = tensor(backing, from.input_norm, {2560});
-            to.post_attention_norm = tensor(backing, from.post_attention_norm, {2560});
-            to.query_key_value = bf16(backing, from.query_key_value, 6144, 2560);
-            to.context_key         = bf16(backing, from.context_key, 1024, 2560);
-            to.context_value       = bf16(backing, from.context_value, 1024, 2560);
-            to.query_norm          = tensor(backing, from.query_norm, {128});
-            to.key_norm            = tensor(backing, from.key_norm, {128});
-            to.output              = bf16(backing, from.output, 2560, 4096);
+            to.post_attention_norm         = tensor(backing, from.post_attention_norm, {2560});
+            to.query_key_value             = bf16(backing, from.query_key_value, 6144, 2560);
+            to.context_key                 = bf16(backing, from.context_key, 1024, 2560);
+            to.context_value               = bf16(backing, from.context_value, 1024, 2560);
+            to.query_norm                  = tensor(backing, from.query_norm, {128});
+            to.key_norm                    = tensor(backing, from.key_norm, {128});
+            to.output                      = bf16(backing, from.output, 2560, 4096);
             // The artifact stores the conv base kernel with the hidden axis fastest; the
             // convolution ops declare that axis first.
             to.attention_conv_base_kernel =
@@ -385,7 +383,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             to.mlp_conv_kernel_projection =
                 bf16(backing, from.mlp_conv_kernel_projection, 640, 2560);
             to.mlp_gate_up = bf16(backing, from.mlp_gate_up, 15360, 2560);
-            to.mlp_down = bf16(backing, from.mlp_down, 2560, 7680);
+            to.mlp_down    = bf16(backing, from.mlp_down, 2560, 7680);
         }
         draft.selector_hidden_projection =
             bf16(backing, source.selector_hidden_projection, 256, 2560);

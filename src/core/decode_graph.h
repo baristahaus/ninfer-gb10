@@ -71,8 +71,8 @@ public:
     void reset() noexcept;
 
 private:
-    // A child binding is valid only for the definition graph its node handle came from, so a rebuild
-    // keeps just the bindings taken from the graph it instantiates.
+    // A child binding is valid only for the definition graph its node handle came from, so a
+    // rebuild keeps just the bindings taken from the graph it instantiates.
     struct ChildBinding {
         cudaGraph_t parent   = nullptr;
         cudaGraphNode_t node = nullptr;
@@ -92,8 +92,8 @@ private:
     // The stream of the last launch. Read only on the rebuild path, to retire in-flight work before
     // the old executable is destroyed; the clean-update path never touches it.
     cudaStream_t launch_stream_ = nullptr;
-    // The stream of the last upload, and whether a rebuild left the executable un-uploaded. The next
-    // launch uploads it on its own stream, keeping the caller's pre-warm.
+    // The stream of the last upload, and whether a rebuild left the executable un-uploaded. The
+    // next launch uploads it on its own stream, keeping the caller's pre-warm.
     cudaStream_t upload_stream_ = nullptr;
     bool needs_upload_          = false;
     std::vector<ChildBinding> children_;

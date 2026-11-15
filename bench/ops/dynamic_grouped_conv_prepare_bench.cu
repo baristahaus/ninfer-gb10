@@ -94,7 +94,7 @@ void run_batch(int width, std::int32_t batch_size, const Options& options,
     const ColdTiming timing =
         measure_cold_launch([&](CudaExecutionView cuda) { graph.launch(cuda); }, flush, cuda,
                             options.warmup, options.repeat);
-    const double seconds    = timing.median_us * 1.0e-6;
+    const double seconds          = timing.median_us * 1.0e-6;
     const double projection_flops = 2.0 * kCoefficientRows * kHidden * static_cast<double>(tokens);
     const double effective_tflops = projection_flops / seconds / 1.0e12;
     const std::size_t workspace_bytes = workspace.peak_used();

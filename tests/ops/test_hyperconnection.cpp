@@ -15,9 +15,9 @@ using namespace ninfer;
 using namespace ninfer::test;
 
 constexpr int kStreams = 4;
-constexpr int kHidden = 2560;
-constexpr int kHyper = kStreams * kHidden;
-constexpr int kRank = 320;
+constexpr int kHidden  = 2560;
+constexpr int kHyper   = kStreams * kHidden;
+constexpr int kRank    = 320;
 
 enum class ProjectionFormat { Bf16, Fp8 };
 
@@ -29,16 +29,16 @@ std::vector<std::uint16_t> encode(const std::vector<float>& values) {
 
 Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
-    out.payload = storage.data();
+    out.payload       = storage.data();
     out.payload_bytes = storage.size();
-    out.qtype = QType::BF16;
-    out.qdata = storage.data();
-    out.n = rows;
-    out.k = columns;
-    out.ndim = 2;
+    out.qtype         = QType::BF16;
+    out.qdata         = storage.data();
+    out.n             = rows;
+    out.k             = columns;
+    out.ndim          = 2;
     out.shape[0] = out.padded_shape[0] = rows;
     out.shape[1] = out.padded_shape[1] = columns;
-    out.layout = QuantLayout::Contiguous;
+    out.layout                         = QuantLayout::Contiguous;
     return out;
 }
 
@@ -57,8 +57,8 @@ int run_case(int tokens, ProjectionFormat format) {
     std::vector<float> down(static_cast<std::size_t>(kRank) * kHyper, 0.0F);
     std::vector<float> up(static_cast<std::size_t>(kHyper) * kRank, 0.0F);
     std::vector<float> inject(static_cast<std::size_t>(kStreams) * kHyper, 0.0F);
-    const auto fp8_down = quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16,
-                                                                  kRank, kHyper, 917U);
+    const auto fp8_down =
+        quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16, kRank, kHyper, 917U);
     const auto fp8_up =
         quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16, kHyper, kRank, 919U);
     if (format == ProjectionFormat::Fp8) {
@@ -70,8 +70,12 @@ int run_case(int tokens, ProjectionFormat format) {
         down = quantized_weight::materialize_rows_fp32(fp8_down, all_rows(kRank));
         up   = quantized_weight::materialize_rows_fp32(fp8_up, all_rows(kHyper));
     } else {
-        for (int row = 0; row < kRank; ++row) { down[static_cast<std::size_t>(row) * kHyper + (37 * row) % kHyper] = 0.25F; }
-        for (int row = 0; row < kHyper; ++row) { up[static_cast<std::size_t>(row) * kRank + row % kRank] = (row & 1) ? -0.5F : 0.5F; }
+        for (int row = 0; row < kRank; ++row) {
+            down[static_cast<std::size_t>(row) * kHyper + (37 * row) % kHyper] = 0.25F;
+        }
+        for (int row = 0; row < kHyper; ++row) {
+            up[static_cast<std::size_t>(row) * kRank + row % kRank] = (row & 1) ? -0.5F : 0.5F;
+        }
     }
     // Dense injection rows: every source stream contributes to every destination, so the
     // per-stream injection partials and their in-order sum are exercised.
@@ -83,16 +87,24 @@ int run_case(int tokens, ProjectionFormat format) {
     std::vector<double> injection_reference(kStreams * tokens);
     for (int token = 0; token < tokens; ++token) {
         for (int stream = 0; stream < kStreams; ++stream) {
-            const int base = token * kHyper + stream * kHidden;
+            const int base    = token * kHyper + stream * kHidden;
             double square_sum = 0.0;
-            for (int d = 0; d < kHidden; ++d) { square_sum += double(hyper[base + d]) * hyper[base + d]; }
+            for (int d = 0; d < kHidden; ++d) {
+                square_sum += double(hyper[base + d]) * hyper[base + d];
+            }
             const double inverse = 1.0 / std::sqrt(square_sum / kHidden + 1.0e-6);
-            for (int d = 0; d < kHidden; ++d) { normalized[base + d] = hyper[base + d] * inverse * (1.0 + norm[stream * kHidden + d]); }
+            for (int d = 0; d < kHidden; ++d) {
+                normalized[base + d] =
+                    hyper[base + d] * inverse * (1.0 + norm[stream * kHidden + d]);
+            }
         }
         std::vector<double> low(kRank);
         for (int row = 0; row < kRank; ++row) {
             double value = 0.0;
-            for (int column = 0; column < kHyper; ++column) { value += down[static_cast<std::size_t>(row) * kHyper + column] * normalized[token * kHyper + column]; }
+            for (int column = 0; column < kHyper; ++column) {
+                value += down[static_cast<std::size_t>(row) * kHyper + column] *
+                         normalized[token * kHyper + column];
+            }
             value /= kStreams;
             low[row] = value / (1.0 + std::exp(-value));
         }
@@ -100,26 +112,31 @@ int run_case(int tokens, ProjectionFormat format) {
             double value = 0.0;
             for (int stream = 0; stream < kStreams; ++stream) {
                 const int row = stream * kHidden + d;
-                double logit = 0.0;
-                for (int rank = 0; rank < kRank; ++rank) { logit += up[static_cast<std::size_t>(row) * kRank + rank] * low[rank]; }
+                double logit  = 0.0;
+                for (int rank = 0; rank < kRank; ++rank) {
+                    logit += up[static_cast<std::size_t>(row) * kRank + rank] * low[rank];
+                }
                 value += normalized[token * kHyper + row] / (1.0 + std::exp(-logit));
             }
             block_reference[token * kHidden + d] = value / kStreams;
         }
         for (int stream = 0; stream < kStreams; ++stream) {
             double value = 0.0;
-            for (int column = 0; column < kHyper; ++column) { value += inject[static_cast<std::size_t>(stream) * kHyper + column] * normalized[token * kHyper + column]; }
+            for (int column = 0; column < kHyper; ++column) {
+                value += inject[static_cast<std::size_t>(stream) * kHyper + column] *
+                         normalized[token * kHyper + column];
+            }
             injection_reference[token * kStreams + stream] = value;
         }
     }
 
-    const auto hyper_bits = encode(hyper);
-    const auto norm_bits = encode(norm);
-    const auto down_bits = encode(down);
-    const auto up_bits = encode(up);
+    const auto hyper_bits  = encode(hyper);
+    const auto norm_bits   = encode(norm);
+    const auto down_bits   = encode(down);
+    const auto up_bits     = encode(up);
     const auto inject_bits = encode(inject);
-    DeviceBuffer d_hyper = to_device(hyper_bits);
-    DeviceBuffer d_norm = to_device(norm_bits);
+    DeviceBuffer d_hyper   = to_device(hyper_bits);
+    DeviceBuffer d_norm    = to_device(norm_bits);
     DeviceBuffer d_down =
         format == ProjectionFormat::Fp8 ? to_device(fp8_down.payload) : to_device(down_bits);
     DeviceBuffer d_up =
@@ -127,10 +144,14 @@ int run_case(int tokens, ProjectionFormat format) {
     DeviceBuffer d_inject = to_device(inject_bits);
     GuardedDeviceBuffer d_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_injection(injection_reference.size() * sizeof(std::uint16_t));
-    Tensor hyper_tensor(d_hyper.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, tokens});
-    Tensor norm_tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper});
-    Tensor block_tensor(d_block.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
-    Tensor injection_tensor(d_injection.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kStreams, tokens});
+    Tensor hyper_tensor(d_hyper.data(), ninfer::test::cuda_environment().context.device(),
+                        DType::BF16, {kHyper, tokens});
+    Tensor norm_tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(),
+                       DType::BF16, {kHyper});
+    Tensor block_tensor(d_block.data(), ninfer::test::cuda_environment().context.device(),
+                        DType::BF16, {kHidden, tokens});
+    Tensor injection_tensor(d_injection.data(), ninfer::test::cuda_environment().context.device(),
+                            DType::BF16, {kStreams, tokens});
     ops::HyperConnectionWeights weights{
         .norm      = norm_tensor,
         .down      = format == ProjectionFormat::Fp8 ? fp8_down.device_weight(d_down.span())
@@ -157,15 +178,18 @@ int run_case(int tokens, ProjectionFormat format) {
     const std::vector<double> got_mix = from_device_bf16(d_block.data(), block_reference.size());
     int failures;
     if (format == ProjectionFormat::Fp8) {
-        failures = verify_reduction(label + " mix", got_mix, block_reference,
-                                    ReductionCriterion{/*relative_l2*/ 0.025, /*gross_absolute*/ 0.0,
-                                                       /*gross_relative_to_max_reference*/ 0.15});
+        failures =
+            verify_reduction(label + " mix", got_mix, block_reference,
+                             ReductionCriterion{/*relative_l2*/ 0.025, /*gross_absolute*/ 0.0,
+                                                /*gross_relative_to_max_reference*/ 0.15});
     } else {
         // BF16 mix: exact products, BF16 staging only; pointwise calibration applies.
         failures = verify_pointwise(label + " mix", got_mix, block_reference,
                                     PointwiseCriterion{/*absolute*/ 7.0e-3, /*relative*/ 2.0e-2});
     }
-    failures += verify_pointwise(label + " injection", from_device_bf16(d_injection.data(), injection_reference.size()), injection_reference, {/*absolute*/ 7.0e-3, /*relative*/ 2.0e-2});
+    failures += verify_pointwise(label + " injection",
+                                 from_device_bf16(d_injection.data(), injection_reference.size()),
+                                 injection_reference, {/*absolute*/ 7.0e-3, /*relative*/ 2.0e-2});
 
     std::vector<float> block_output(kHidden * tokens);
     fill_uniform(block_output, 915, -0.5F, 0.5F);
@@ -173,43 +197,59 @@ int run_case(int tokens, ProjectionFormat format) {
     std::vector<double> combined(hyper.size());
     for (int token = 0; token < tokens; ++token) {
         for (int stream = 0; stream < kStreams; ++stream) {
-            const double scale = 2.0 / (1.0 + std::exp(-injection_reference[token * kStreams + stream] / kStreams));
-            for (int d = 0; d < kHidden; ++d) { combined[token * kHyper + stream * kHidden + d] = hyper[token * kHyper + stream * kHidden + d] + scale * block_output[token * kHidden + d]; }
+            const double scale =
+                2.0 / (1.0 + std::exp(-injection_reference[token * kStreams + stream] / kStreams));
+            for (int d = 0; d < kHidden; ++d) {
+                combined[token * kHyper + stream * kHidden + d] =
+                    hyper[token * kHyper + stream * kHidden + d] +
+                    scale * block_output[token * kHidden + d];
+            }
         }
     }
     DeviceBuffer d_block_output = to_device(encode(block_output));
-    Tensor block_output_tensor(d_block_output.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
+    Tensor block_output_tensor(d_block_output.data(),
+                               ninfer::test::cuda_environment().context.device(), DType::BF16,
+                               {kHidden, tokens});
     DeviceBuffer d_hyper_fused = to_device(hyper_bits);
-    Tensor hyper_fused_tensor(d_hyper_fused.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, tokens});
+    Tensor hyper_fused_tensor(d_hyper_fused.data(),
+                              ninfer::test::cuda_environment().context.device(), DType::BF16,
+                              {kHyper, tokens});
     ops::hyperconnection_combine(hyper_tensor, block_output_tensor, injection_tensor,
                                  cuda_environment().context.stream());
     GuardedDeviceBuffer d_next_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_next_injection(injection_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_fused_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_fused_injection(injection_reference.size() * sizeof(std::uint16_t));
-    Tensor next_block(d_next_block.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
-    Tensor next_injection(d_next_injection.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kStreams, tokens});
-    Tensor fused_block(d_fused_block.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
-    Tensor fused_injection(d_fused_injection.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kStreams, tokens});
+    Tensor next_block(d_next_block.data(), ninfer::test::cuda_environment().context.device(),
+                      DType::BF16, {kHidden, tokens});
+    Tensor next_injection(d_next_injection.data(),
+                          ninfer::test::cuda_environment().context.device(), DType::BF16,
+                          {kStreams, tokens});
+    Tensor fused_block(d_fused_block.data(), ninfer::test::cuda_environment().context.device(),
+                       DType::BF16, {kHidden, tokens});
+    Tensor fused_injection(d_fused_injection.data(),
+                           ninfer::test::cuda_environment().context.device(), DType::BF16,
+                           {kStreams, tokens});
     ops::hyperconnection_mix(hyper_tensor, weights, next_block, &next_injection, workspace,
                              cuda_environment().context.stream());
     ops::hyperconnection_combine_mix(hyper_fused_tensor, block_output_tensor, injection_tensor,
                                      weights, fused_block, &fused_injection, workspace,
                                      cuda_environment().context.stream());
     cuda_synchronize();
-    failures += verify_pointwise(label + " combine", from_device_bf16(d_hyper, hyper.size()), combined, {/*absolute*/ 1.2e-2, /*relative*/ 2.0e-2});
-    failures += verify_pointwise(label + " fused state",
-                                 from_device_bf16(d_hyper_fused, hyper.size()), combined,
-                                 {/*absolute*/ 1.2e-2, /*relative*/ 2.0e-2});
-    failures += verify_pointwise(
-        label + " fused block", from_device_bf16(d_fused_block.data(), block_reference.size()),
-        from_device_bf16(d_next_block.data(), block_reference.size()),
-        {/*absolute*/ 0.0, /*relative*/ 0.0});
-    failures += verify_pointwise(
-        label + " fused injection",
-        from_device_bf16(d_fused_injection.data(), injection_reference.size()),
-        from_device_bf16(d_next_injection.data(), injection_reference.size()),
-        {/*absolute*/ 0.0, /*relative*/ 0.0});
+    failures += verify_pointwise(label + " combine", from_device_bf16(d_hyper, hyper.size()),
+                                 combined, {/*absolute*/ 1.2e-2, /*relative*/ 2.0e-2});
+    failures +=
+        verify_pointwise(label + " fused state", from_device_bf16(d_hyper_fused, hyper.size()),
+                         combined, {/*absolute*/ 1.2e-2, /*relative*/ 2.0e-2});
+    failures += verify_pointwise(label + " fused block",
+                                 from_device_bf16(d_fused_block.data(), block_reference.size()),
+                                 from_device_bf16(d_next_block.data(), block_reference.size()),
+                                 {/*absolute*/ 0.0, /*relative*/ 0.0});
+    failures +=
+        verify_pointwise(label + " fused injection",
+                         from_device_bf16(d_fused_injection.data(), injection_reference.size()),
+                         from_device_bf16(d_next_injection.data(), injection_reference.size()),
+                         {/*absolute*/ 0.0, /*relative*/ 0.0});
     failures += d_block.verify_guards(label + " block input");
     failures += d_injection.verify_guards(label + " injection");
     failures += d_next_block.verify_guards(label + " next block input");
@@ -238,7 +278,8 @@ int run() {
 
 int main() {
     if (ninfer::test::cuda_unavailable()) {
-        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     try {

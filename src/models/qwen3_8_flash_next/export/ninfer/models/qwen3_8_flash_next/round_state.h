@@ -17,8 +17,8 @@ inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 5;
 inline constexpr std::uint32_t kMtpDecodeMaximumWidth     = kMtpDecodeMaximumDrafts + 1;
 inline constexpr std::uint32_t kDFlashDecodeMaximumDrafts = 15;
 // The DFlash2 candidate selector's per-position rank (the published draft's top-k).
-inline constexpr std::int32_t kDFlash2SelectorTopK = 16;
-inline constexpr std::uint32_t kDFlashDecodeMaximumWidth  = kDFlashDecodeMaximumDrafts + 1;
+inline constexpr std::int32_t kDFlash2SelectorTopK       = 16;
+inline constexpr std::uint32_t kDFlashDecodeMaximumWidth = kDFlashDecodeMaximumDrafts + 1;
 
 struct RoundStateSpec {
     std::int32_t hidden = 0;
@@ -31,6 +31,7 @@ struct RoundStateSpec {
     bool enable_mtp              = false;
     bool enable_dflash           = false;
 };
+
 // Pinned/device transfer format for the single token a prefill step publishes. Prefill keeps its
 // own tiny egress rather than a decode frame's, so the probability report travels beside it.
 struct PrefillRoundReport {
@@ -101,8 +102,7 @@ struct MtpDecodeEgress {
     std::array<std::int32_t,
                ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
         top_ids{};
-    std::array<float,
-               ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
+    std::array<float, ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
         top_logprobs{};
 };
 

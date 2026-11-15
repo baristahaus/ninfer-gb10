@@ -9,12 +9,12 @@ constexpr std::array kAllocationBoundaries{2, kGroupedFirst, 768};
 
 Plan select_plan(int tokens, int, ExpertSubsetKind subset) {
     Plan plan;
-    plan.integer.grouped        = tokens >= kGroupedFirst;
-    plan.router                 = {.algorithm         = tokens == 1 ? RouterAlgorithm::Vector
-                                                        : plan.integer.grouped ? RouterAlgorithm::Mma
-                                                                               : RouterAlgorithm::TokenTile,
-                                   .programmatic      = !plan.integer.grouped,
-                                   .count_assignments = plan.integer.grouped && subset == ExpertSubsetKind::All};
+    plan.integer.grouped = tokens >= kGroupedFirst;
+    plan.router = {.algorithm         = tokens == 1            ? RouterAlgorithm::Vector
+                                        : plan.integer.grouped ? RouterAlgorithm::Mma
+                                                               : RouterAlgorithm::TokenTile,
+                   .programmatic      = !plan.integer.grouped,
+                   .count_assignments = plan.integer.grouped && subset == ExpertSubsetKind::All};
     plan.integer.token          = {.paths_per_block    = tokens == 1 ? 9 : 3,
                                    .output_rows        = tokens == 1    ? 1
                                                          : tokens <= 2  ? 1

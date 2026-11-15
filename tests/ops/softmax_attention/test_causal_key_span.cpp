@@ -32,7 +32,7 @@ using ninfer::ops::detail::CausalKvPartition;
 
 constexpr std::int32_t kInt32Max = std::numeric_limits<std::int32_t>::max();
 // The two production devices' physical SM counts: RTX 5090 (sm_120a) and GB10 (sm_121a).
-constexpr int kSmCounts[] = {170, 72};
+constexpr int kSmCounts[]           = {170, 72};
 constexpr std::uint32_t kOldCeiling = 262144;
 constexpr std::uint32_t kNewCeiling = 1048576;
 
@@ -61,9 +61,8 @@ void check_bf16(const CausalAttentionExecutionEnvelope& envelope, int heads, int
                 int sms) {
     const auto plan =
         ninfer::ops::detail::select_bf16_kv_causal_plan(heads, width, batch, envelope, sms);
-    const auto& partition = plan.partition;
-    const auto description =
-        ninfer::ops::detail::bf16_kv_instance_description(plan.instance);
+    const auto& partition  = plan.partition;
+    const auto description = ninfer::ops::detail::bf16_kv_instance_description(plan.instance);
     check_tile_divides_page(description.key_rows, "bf16");
 
     // The widest row the envelope allows is the one the workspace was sized for.
@@ -82,8 +81,7 @@ void check_bf16(const CausalAttentionExecutionEnvelope& envelope, int heads, int
     std::printf("  bf16 heads=%2d w=%3d b=%d sms=%3d ceiling=%7u: capacity=%3d splits=%3d "
                 "keys/split=%6d tiles/split=%4d\n",
                 heads, width, batch, sms, envelope.max_visible_keys, partition.capacity,
-                widest.splits, widest.keys_per_split,
-                widest.keys_per_split / description.key_rows);
+                widest.splits, widest.keys_per_split, widest.keys_per_split / description.key_rows);
 }
 
 void check_int8(const CausalAttentionExecutionEnvelope& envelope, int heads, int width, int batch,
@@ -104,8 +102,9 @@ void check_int8(const CausalAttentionExecutionEnvelope& envelope, int heads, int
     // where logical_tiles = div_up(window, Bc) and Bc is the schedule's key tile (32 or 64). 32 is
     // the worst case: it maximises the tile count and therefore the product.
     constexpr std::int64_t kWorstKeyTile = 32;
-    const std::int64_t tiles = static_cast<std::int64_t>(envelope.max_visible_keys) / kWorstKeyTile +
-                               (envelope.max_visible_keys % kWorstKeyTile != 0 ? 1 : 0);
+    const std::int64_t tiles =
+        static_cast<std::int64_t>(envelope.max_visible_keys) / kWorstKeyTile +
+        (envelope.max_visible_keys % kWorstKeyTile != 0 ? 1 : 0);
     check(tiles * CausalKvPartition::kMaxSplits <= kInt32Max,
           "int8 split * logical_tiles fits int32");
     const std::int64_t active = partition.active(static_cast<int>(envelope.max_visible_keys));
@@ -117,9 +116,9 @@ void check_int8(const CausalAttentionExecutionEnvelope& envelope, int heads, int
 }
 
 // Every registered geometry must be accepted by every plan selector, and every unregistered head
-// count must be refused. The dispatch table (detail::causal_kv_heads) is what both the Op's geometry
-// check and the launch dispatch read, so this is the gate that keeps a plan from accepting a head
-// count the kernels cannot launch.
+// count must be refused. The dispatch table (detail::causal_kv_heads) is what both the Op's
+// geometry check and the launch dispatch read, so this is the gate that keeps a plan from accepting
+// a head count the kernels cannot launch.
 void check_registered_geometries() {
     const CausalAttentionExecutionEnvelope envelope{1, kNewCeiling};
     for (const auto& geometry : ninfer::ops::detail::kCausalHeadCounts) {
@@ -150,7 +149,8 @@ void check_registered_geometries() {
               "an unregistered head count is refused by the table");
         bool refused = false;
         try {
-            (void)ninfer::ops::detail::select_bf16_kv_causal_plan(unregistered, 1, 1, envelope, 170);
+            (void)ninfer::ops::detail::select_bf16_kv_causal_plan(unregistered, 1, 1, envelope,
+                                                                  170);
         } catch (const std::invalid_argument&) { refused = true; }
         check(refused, "an unregistered head count is refused by the plan selectors");
     }
@@ -160,13 +160,12 @@ void check_registered_geometries() {
 void check_dispatch_selects_the_registered_geometry() {
     const auto query_heads_of = [](int heads) {
         int selected = 0;
-        ninfer::ops::detail::with_causal_geometry(heads, [&]<class G>() {
-            selected = G::QHeads;
-        });
+        ninfer::ops::detail::with_causal_geometry(heads, [&]<class G>() { selected = G::QHeads; });
         return selected;
     };
     for (const int heads : {24, 16, 12}) {
-        check(query_heads_of(heads) == heads, "the dispatch reaches the geometry for its head count");
+        check(query_heads_of(heads) == heads,
+              "the dispatch reaches the geometry for its head count");
     }
     bool threw = false;
     try {
@@ -185,8 +184,8 @@ void check_bf16_covers_every_row(const CausalAttentionExecutionEnvelope& envelop
     const auto plan =
         ninfer::ops::detail::select_bf16_kv_causal_plan(heads, width, batch, envelope, sms);
     const auto& partition = plan.partition;
-    int worst            = 0;
-    int worst_visible    = 0;
+    int worst             = 0;
+    int worst_visible     = 0;
     for (std::uint32_t visible = 1; visible <= envelope.max_visible_keys; ++visible) {
         const int splits = partition.live(static_cast<int>(visible)).splits;
         if (splits > worst) {
@@ -207,7 +206,7 @@ void check_int8_covers_every_row(const CausalAttentionExecutionEnvelope& envelop
     const auto plan =
         ninfer::ops::detail::select_int8_kv_causal_plan(heads, width, batch, envelope, sms);
     const auto& partition = plan.partition;
-    int worst            = 0;
+    int worst             = 0;
     for (std::uint32_t visible = 1; visible <= envelope.max_visible_keys; ++visible) {
         const int splits = partition.active(static_cast<int>(visible));
         if (splits > worst) { worst = splits; }

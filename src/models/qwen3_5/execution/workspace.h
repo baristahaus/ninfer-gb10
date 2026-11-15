@@ -48,9 +48,10 @@ TextPrefillRoots text_prefill_roots(Allocator& allocator, const TextConfig& conf
 // validate against -- rather than from the model description, because a quantity taken from the
 // description describes the whole model, not this rank.
 //
-// The widths are storage: each root below is allocated at them and handed straight to `ops::linear`,
-// which rejects a strided operand. A row-slice of a config-sized {6144, tokens} root is strided, so
-// the roots themselves must be rank-sized rather than the config's shape sliced afterwards.
+// The widths are storage: each root below is allocated at them and handed straight to
+// `ops::linear`, which rejects a strided operand. A row-slice of a config-sized {6144, tokens} root
+// is strided, so the roots themselves must be rank-sized rather than the config's shape sliced
+// afterwards.
 struct AttentionExtents {
     std::int32_t query_width = 0;
     std::int32_t key_width   = 0;
@@ -133,8 +134,10 @@ struct GdnExtents {
     std::int32_t value_heads = 0;
     std::int32_t key_width   = 0;
     std::int32_t value_width = 0;
+
     // Q | K | V, the convolution's channel axis. It is the input projection's row count.
     [[nodiscard]] std::int32_t conv_channels() const { return 2 * key_width + value_width; }
+
     // The residual width is NOT sharded: every rank holds the whole hidden vector, so this is the
     // model's hidden size at every width. Sizing the control workspace's `hidden` from the value
     // width instead made it 3072 at width 2 where the control op expects 5120.
@@ -216,10 +219,8 @@ Tensor gdn_prefill_conv(Allocator& allocator, const TextConfig& config, std::int
     return matrix(allocator, DType::BF16, dimension(config.gdn->conv_channels()), tokens);
 }
 
-
-
-// The config-wide forms: planning sizes the arena for the largest shape any rank can hold, so it uses
-// the model's own extents. Correctness never calls these.
+// The config-wide forms: planning sizes the arena for the largest shape any rank can hold, so it
+// uses the model's own extents. Correctness never calls these.
 template <class Allocator>
 Tensor gdn_recurrent_output(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
     return matrix(allocator, DType::BF16, dimension(config.gdn->value_width()), tokens);
@@ -268,8 +269,8 @@ struct MtpAttentionProjectionRoots {
 };
 
 template <class Allocator>
-MtpAttentionProjectionRoots mtp_attention_projection(Allocator& allocator,
-                                                     AttentionExtents extents, std::int32_t tokens) {
+MtpAttentionProjectionRoots mtp_attention_projection(Allocator& allocator, AttentionExtents extents,
+                                                     std::int32_t tokens) {
     return {
         matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
         matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),

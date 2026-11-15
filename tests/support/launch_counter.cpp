@@ -56,7 +56,10 @@ struct Counts {
     std::uint64_t wait   = 0;
     std::uint64_t copy2d = 0;
     std::uint64_t copy3d = 0;
-    std::uint64_t total() const { return launch + memcpy + memset + graph + wait + copy2d + copy3d; }
+
+    std::uint64_t total() const {
+        return launch + memcpy + memset + graph + wait + copy2d + copy3d;
+    }
 };
 
 Counts g_counts[2];
@@ -90,30 +93,36 @@ struct Timing {
     // THE DEVICE THE PROBE ACTUALLY READ, printed with the number rather than inherited from the
     // counter's attribution: cudaMemGetInfo reports the CALLING THREAD'S current device, so a
     // number that carries no device can be attributed to the wrong rank.
-    int gap_device = -1;
-    const char* previous      = "none";
-    const char* previous2     = "none";
+    int gap_device        = -1;
+    const char* previous  = "none";
+    const char* previous2 = "none";
 };
+
 Timing g_timing[2];
+
 // SHIM SENTINELS: one counter per entry point, printed at every boundary whether or not it fired.
 // A shim that is never called says so rather than leaving a zero that could be read as agreement.
 struct ShimUse {
     const char* name;
     std::uint64_t count;
 };
-ShimUse g_shims[8] = {{"cudaLaunchKernel", 0}, {"__cudaLaunchKernel", 0},
+
+ShimUse g_shims[8] = {{"cudaLaunchKernel", 0},    {"__cudaLaunchKernel", 0},
                       {"cudaLaunchKernelExC", 0}, {"cuLaunchKernel", 0},
-                      {"cudaMemcpyAsync", 0},
-                      {"cudaMemcpy2DAsync", 0},  {"cudaGraphLaunch", 0}};
-int g_shim_count = 0;
+                      {"cudaMemcpyAsync", 0},     {"cudaMemcpy2DAsync", 0},
+                      {"cudaGraphLaunch", 0}};
+int g_shim_count   = 0;
 
 void note_shim(const char* name) {
     for (int i = 0; i < 8; ++i) {
-        if (std::string_view(g_shims[i].name) == name) { ++g_shims[i].count; return; }
+        if (std::string_view(g_shims[i].name) == name) {
+            ++g_shims[i].count;
+            return;
+        }
     }
 }
 
-int g_round = 0;
+int g_round            = 0;
 bool g_printed_startup = false;
 // False until the phase marker fires: the first bucket spans process start to the first release and
 // INCLUDES startup, so it is labelled startup+round0 rather than round.
@@ -125,7 +134,7 @@ int device_index() {
     return device;
 }
 
-void bump(std::uint64_t Counts::*member, const char* kind) {
+void bump(std::uint64_t Counts::* member, const char* kind) {
     const int device = device_index();
     g_counts[device].*member += 1;
     std::timespec now{};
@@ -134,12 +143,11 @@ void bump(std::uint64_t Counts::*member, const char* kind) {
     if (timing.have_last) {
         const std::int64_t seconds = static_cast<std::int64_t>(now.tv_sec) - timing.last.tv_sec;
         const std::int64_t nanos   = static_cast<std::int64_t>(now.tv_nsec) - timing.last.tv_nsec;
-        const std::uint64_t gap_ns =
-            static_cast<std::uint64_t>(seconds * 1000000000LL + nanos);
+        const std::uint64_t gap_ns = static_cast<std::uint64_t>(seconds * 1000000000LL + nanos);
         timing.total_ns += gap_ns;
         if (gap_ns > timing.max_ns) {
-            timing.max_ns    = gap_ns;
-            timing.max_index = timing.calls;
+            timing.max_ns      = gap_ns;
+            timing.max_index   = timing.calls;
             timing.gap_kind    = kind;
             timing.gap_before  = timing.previous;
             timing.gap_before2 = timing.previous2;
@@ -214,8 +222,7 @@ cudaError_t __wrap_cudaMemcpyAsync(void* dst, const void* src, std::size_t bytes
     return __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
 }
 
-cudaError_t __wrap_cudaMemsetAsync(void* dst, int value, std::size_t bytes,
-                                   cudaStream_t stream) {
+cudaError_t __wrap_cudaMemsetAsync(void* dst, int value, std::size_t bytes, cudaStream_t stream) {
     bump(&Counts::memset, "memset");
     return __real_cudaMemsetAsync(dst, value, bytes, stream);
 }
@@ -275,12 +282,13 @@ extern "C" void ninfer_launch_site(const char* site) {
 // round 0'.
 extern "C" void ninfer_launch_phase_marker(const char* marker) {
     for (int rank = 0; rank < 2; ++rank) {
-        g_snapshot[rank]    = g_counts[rank];
-        g_timing[rank]      = Timing{};
+        g_snapshot[rank]       = g_counts[rank];
+        g_timing[rank]         = Timing{};
         g_site_counts[rank][0] = 0;
     }
     g_phase_labelled = true;
-    std::fprintf(stderr, "[launch-count] phase_marker=%s (counters reset; later rounds are rounds)\n",
+    std::fprintf(stderr,
+                 "[launch-count] phase_marker=%s (counters reset; later rounds are rounds)\n",
                  marker);
 }
 
@@ -290,8 +298,6 @@ extern "C" void ninfer_launch_phase_marker(const char* marker) {
 // cannot be half-covered.
 cudaError_t __real_cuLaunchKernel(CUfunction, unsigned, unsigned, unsigned, unsigned, unsigned,
                                   unsigned, unsigned, CUstream, void**, void**);
-
-
 
 // Called by LocalExecutor at each round release. Prints the DELTA per rank for this round, because
 // a cumulative count says nothing after round 1.
@@ -323,12 +329,10 @@ void ninfer_launch_round_boundary(void) {
                      g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_index),
-                     static_cast<unsigned long long>(g_timing[rank].calls),
-                     g_timing[rank].gap_kind, g_timing[rank].gap_before,
-                     g_timing[rank].gap_before2,
+                     static_cast<unsigned long long>(g_timing[rank].calls), g_timing[rank].gap_kind,
+                     g_timing[rank].gap_before, g_timing[rank].gap_before2,
                      static_cast<unsigned long long>(g_timing[rank].gap_free_mb),
-                     g_timing[rank].gap_device,
-                     g_phase_labelled ? "round" : "startup+round0");
+                     g_timing[rank].gap_device, g_phase_labelled ? "round" : "startup+round0");
         g_timing[rank] = Timing{};
     }
     // THE BOUND PROBE: each rank's free memory read from a thread explicitly bound to that rank,
@@ -343,16 +347,18 @@ void ninfer_launch_round_boundary(void) {
         // against a launch that was fine. That is exactly how 13 identical arm1-failed rows were
         // produced by a diagnostic poisoning the code it was measuring. Skip, say so, and clear.
         if (rank >= visible_devices) {
-            std::fprintf(stderr,
-                         "[launch-count] round=%d bound_probe rank=%d skipped (%d visible device%s)\n",
-                         g_round, rank, visible_devices, visible_devices == 1 ? "" : "s");
+            std::fprintf(
+                stderr,
+                "[launch-count] round=%d bound_probe rank=%d skipped (%d visible device%s)\n",
+                g_round, rank, visible_devices, visible_devices == 1 ? "" : "s");
             continue;
         }
         if (cudaSetDevice(rank) != cudaSuccess) {
-            std::fprintf(stderr, "[launch-count] round=%d bound_probe rank=%d cudaSetDevice FAILED\n",
+            std::fprintf(stderr,
+                         "[launch-count] round=%d bound_probe rank=%d cudaSetDevice FAILED\n",
                          g_round, rank);
-            // A DIAGNOSTIC THAT LEAVES GLOBAL ERROR STATE BEHIND IS A DIAGNOSTIC THAT CHANGES WHAT IT
-            // MEASURES.
+            // A DIAGNOSTIC THAT LEAVES GLOBAL ERROR STATE BEHIND IS A DIAGNOSTIC THAT CHANGES WHAT
+            // IT MEASURES.
             (void)cudaGetLastError();
             continue;
         }
@@ -377,9 +383,10 @@ void ninfer_launch_round_boundary(void) {
     }
     std::fprintf(stderr, "\n");
     if (g_counts[0].total() + g_counts[1].total() == 0) {
-        std::fprintf(stderr,
-                     "[launch-count] ZERO AFTER A ROUND: the instrument is not counting; do not read "
-                     "equal counts as a result\n");
+        std::fprintf(
+            stderr,
+            "[launch-count] ZERO AFTER A ROUND: the instrument is not counting; do not read "
+            "equal counts as a result\n");
     }
     for (int i = 0; i < g_site_count; ++i) {
         std::fprintf(stderr, "[launch-count] round=%d site=%s rank0=%llu rank1=%llu\n", g_round,

@@ -79,9 +79,9 @@ FrameLayout plan_frames(LayoutBuilder& builder, const FrameSpec& spec) {
         out.logits =
             add(builder, DType::BF16, {spec.output_rows, width, batch}, "execution target logits");
         out.target_argmax = add(builder, DType::I32, {width, batch}, "execution target argmax");
-        out.masks         = add(builder, DType::I32,
-                                {dimension((std::uint64_t(spec.public_tokens) + 31) / 32), width, batch},
-                                "execution grammar masks");
+        out.masks = add(builder, DType::I32,
+                        {dimension((std::uint64_t(spec.public_tokens) + 31) / 32), width, batch},
+                        "execution grammar masks");
     }
     if (spec.backend == SpeculativeBackend::Mtp) {
         auto& mtp         = out.mtp.emplace();

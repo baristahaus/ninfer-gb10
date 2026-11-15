@@ -31,8 +31,8 @@ struct ConstructedModel {
     // Program holds references to the pools it built on it.
     std::unique_ptr<ExecutionContext> execution;
     // The two-GPU lane's group-scoped resources: the ONE mailbox and the ONE partial pair (plus the
-    // logits pair) that both Programs share. Declared BEFORE `instance` so it is destroyed AFTER the
-    // Programs that borrow it: the mailbox's pinned slab, its per-device words and the partial
+    // logits pair) that both Programs share. Declared BEFORE `instance` so it is destroyed AFTER
+    // the Programs that borrow it: the mailbox's pinned slab, its per-device words and the partial
     // addresses are baked into every exchange, so nothing that uses them may outlive them. Null at
     // width 1, where nothing is constructed.
     //

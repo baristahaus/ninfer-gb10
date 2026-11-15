@@ -178,7 +178,6 @@ public:
 
     void set_bf16_gemm(ops::Bf16GemmContext* context) noexcept { bf16_gemm_ = context; }
 
-    
     void set_prefill_split_frontier(std::int64_t position) noexcept {
         prefill_split_frontier_ = position;
     }

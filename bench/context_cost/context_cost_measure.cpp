@@ -316,9 +316,9 @@ FitResult fit_nonnegative_model(const std::vector<RegressionPoint>& points,
     result.training   = metrics_for(result.predictions, false, ordering_significance);
     result.validation = metrics_for(result.predictions, true, ordering_significance);
     result.accepted   = result.training.p95_relative_error <= maximum_p95 &&
-                      result.training.ordering_failures == 0 &&
-                      result.validation.p95_relative_error <= maximum_p95 &&
-                      result.validation.ordering_failures == 0;
+                        result.training.ordering_failures == 0 &&
+                        result.validation.p95_relative_error <= maximum_p95 &&
+                        result.validation.ordering_failures == 0;
     return result;
 }
 
@@ -420,9 +420,9 @@ FitResult fit_transfer_roofline(const std::vector<TransferRegressionPoint>& poin
     result.training   = metrics_for(result.predictions, false, ordering_significance);
     result.validation = metrics_for(result.predictions, true, ordering_significance);
     result.accepted   = result.training.p95_relative_error <= maximum_p95 &&
-                      result.training.ordering_failures == 0 &&
-                      result.validation.p95_relative_error <= maximum_p95 &&
-                      result.validation.ordering_failures == 0;
+                        result.training.ordering_failures == 0 &&
+                        result.validation.p95_relative_error <= maximum_p95 &&
+                        result.validation.ordering_failures == 0;
     return result;
 }
 

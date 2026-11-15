@@ -173,8 +173,8 @@ PressurePlanningSession<Variant>::maximal_target(runtime::PlanningCandidateId ca
 }
 
 template <>
-PressureConstructionCursor PressurePlanningSession<Variant>::begin_construction(PressureTargetHandle target,
-                                                                       bool restore) {
+PressureConstructionCursor
+PressurePlanningSession<Variant>::begin_construction(PressureTargetHandle target, bool restore) {
     return impl_->begin_construction(target, restore);
 }
 
@@ -185,8 +185,8 @@ PressurePlanningSession<Variant>::next_construction_option(PressureConstructionC
 }
 
 template <>
-void PressurePlanningSession<Variant>::choose_construction(PressureConstructionCursor& cursor,
-                                                  runtime::PressureConstructionOptionId option) {
+void PressurePlanningSession<Variant>::choose_construction(
+    PressureConstructionCursor& cursor, runtime::PressureConstructionOptionId option) {
     impl_->choose_construction(cursor, option);
 }
 
@@ -212,7 +212,8 @@ PressurePlanningSession<Variant>::assess(PressureTargetHandle target) {
 
 template <>
 PreparedPressureExpansion<Variant>
-PressurePlanningSession<Variant>::prepare_expansion(PressureTargetHandle parent, std::uint32_t maximum_owners) {
+PressurePlanningSession<Variant>::prepare_expansion(PressureTargetHandle parent,
+                                                    std::uint32_t maximum_owners) {
     if (impl_ == nullptr) { throw std::logic_error("pressure planning session is empty"); }
     return impl_->prepare_expansion(parent, maximum_owners);
 }

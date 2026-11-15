@@ -28,10 +28,10 @@ using namespace ninfer;
 
 namespace {
 
-constexpr int kHidden  = 2560;
-constexpr int kStreams = 4;
-constexpr int kHyper   = kStreams * kHidden;
-constexpr int kRank    = 320;
+constexpr int kHidden     = 2560;
+constexpr int kStreams    = 4;
+constexpr int kHyper      = kStreams * kHidden;
+constexpr int kRank       = 320;
 constexpr double kDramGBs = 246.0; // tools/bench/hardware/gb10.json, measured streaming read
 
 struct Options {
@@ -151,12 +151,12 @@ int main(int argc, char** argv) {
         std::vector<Chunk> chunks;
         for (int layer = 0; layer < options.layers; ++layer) {
             for (const Weight* w : {&downs[layer].weight, &ups[layer].weight}) {
-                const auto* base = static_cast<const std::uint8_t*>(w->payload);
+                const auto* base          = static_cast<const std::uint8_t*>(w->payload);
                 const std::uint64_t bytes = w->payload_bytes / 16 * 16;
                 for (std::uint64_t at = 0; at < bytes; at += 65536) {
-                    chunks.push_back({reinterpret_cast<const uint4*>(base + at),
-                                      static_cast<unsigned>(std::min<std::uint64_t>(65536, bytes - at) /
-                                                            16)});
+                    chunks.push_back(
+                        {reinterpret_cast<const uint4*>(base + at),
+                         static_cast<unsigned>(std::min<std::uint64_t>(65536, bytes - at) / 16)});
                 }
             }
         }
@@ -184,8 +184,8 @@ int main(int argc, char** argv) {
             report(0, ("contig projection bytes, grid " + std::to_string(grid)).c_str(),
                    projection_bytes, [&](cudaStream_t s) {
                        contiguous_read_kernel<<<grid, 256, 0, s>>>(
-                           static_cast<const Chunk*>(chunk_list.p),
-                           static_cast<int>(chunks.size()), static_cast<unsigned*>(sink.p));
+                           static_cast<const Chunk*>(chunk_list.p), static_cast<int>(chunks.size()),
+                           static_cast<unsigned*>(sink.p));
                    });
         }
 
@@ -210,33 +210,34 @@ int main(int argc, char** argv) {
             Tensor normalized_t(normalized.p, DType::BF16, {kHyper, tokens});
             Tensor low_rank_t(low_rank.p, DType::BF16, {kRank, tokens});
             Tensor partials_t(partials.p, DType::FP32, {kStreams * kStreams, tokens});
-            WorkspaceArena workspace(ops::hyperconnection_mix_workspace_capacity_bytes(tokens, true));
+            WorkspaceArena workspace(
+                ops::hyperconnection_mix_workspace_capacity_bytes(tokens, true));
 
-            const double op = report(tokens, "combine_mix (whole op)", projection_bytes,
-                                     [&](cudaStream_t s) {
-                                         for (const auto& w : weights) {
-                                             ops::hyperconnection_combine_mix(
-                                                 hyper_t, block_output_t, previous_injection_t, w,
-                                                 block_input_t, &injection_t, workspace, s);
-                                         }
-                                     });
-            const double down = report(tokens, "fp8 down+SiLU alone",
-                                       static_cast<double>(downs[0].weight.payload_bytes),
-                                       [&](cudaStream_t s) {
-                                           for (const auto& w : weights) {
-                                               ops::detail::flash_next::launch_fp8_hc_down_silu(
-                                                   normalized_t, w.down, low_rank_t, s);
-                                           }
-                                       });
-            const double up = report(tokens, "fp8 up+mix alone",
-                                     static_cast<double>(ups[0].weight.payload_bytes),
-                                     [&](cudaStream_t s) {
-                                         for (const auto& w : weights) {
-                                             ops::detail::flash_next::launch_fp8_hc_up_mix(
-                                                 low_rank_t, w.up, normalized_t, &partials_t,
-                                                 block_input_t, &injection_t, s);
-                                         }
-                                     });
+            const double op =
+                report(tokens, "combine_mix (whole op)", projection_bytes, [&](cudaStream_t s) {
+                    for (const auto& w : weights) {
+                        ops::hyperconnection_combine_mix(hyper_t, block_output_t,
+                                                         previous_injection_t, w, block_input_t,
+                                                         &injection_t, workspace, s);
+                    }
+                });
+            const double down =
+                report(tokens, "fp8 down+SiLU alone",
+                       static_cast<double>(downs[0].weight.payload_bytes), [&](cudaStream_t s) {
+                           for (const auto& w : weights) {
+                               ops::detail::flash_next::launch_fp8_hc_down_silu(
+                                   normalized_t, w.down, low_rank_t, s);
+                           }
+                       });
+            const double up =
+                report(tokens, "fp8 up+mix alone", static_cast<double>(ups[0].weight.payload_bytes),
+                       [&](cudaStream_t s) {
+                           for (const auto& w : weights) {
+                               ops::detail::flash_next::launch_fp8_hc_up_mix(
+                                   low_rank_t, w.up, normalized_t, &partials_t, block_input_t,
+                                   &injection_t, s);
+                           }
+                       });
             std::printf("%-4d %-34s %10.2f\n", tokens, "remainder (norm + boundaries)",
                         op - down - up);
         }

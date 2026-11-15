@@ -129,7 +129,7 @@ __launch_bounds__(kSamplerBlock) __global__
             const float raw = __bfloat162float(logits[base + v]);
             const float x =
                 (penalties || cfg.mask.words) ? sampling_adjusted_logit(raw, v, cfg) : raw;
-            keys[item]      = sampling_sort_key(x, v);
+            keys[item] = sampling_sort_key(x, v);
         } else {
             keys[item] = 0ull;
         }

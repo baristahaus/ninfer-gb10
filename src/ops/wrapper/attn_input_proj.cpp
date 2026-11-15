@@ -170,10 +170,9 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Te
             throw std::invalid_argument("exl3 attn_input_proj requires caller workspace");
         }
         const Weight query_w = detail::exl3_dense_slice(weight, 0, kQRows);
-        const Weight key_w = detail::exl3_dense_slice(weight, kQRows, kKvRows);
-        const Weight gate_w = detail::exl3_dense_slice(weight, kQRows + kKvRows, kQRows);
-        const Weight value_w =
-            detail::exl3_dense_slice(weight, kQRows + kKvRows + kQRows, kKvRows);
+        const Weight key_w   = detail::exl3_dense_slice(weight, kQRows, kKvRows);
+        const Weight gate_w  = detail::exl3_dense_slice(weight, kQRows + kKvRows, kQRows);
+        const Weight value_w = detail::exl3_dense_slice(weight, kQRows + kKvRows + kQRows, kKvRows);
         if (cols <= 8) {
             auto scope = workspace->scope();
             detail::exl3_dense_dispatch(x, query_w, q, workspace, stream);
@@ -182,7 +181,7 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Te
             detail::exl3_dense_dispatch(x, value_w, v, workspace, stream);
             return;
         }
-        auto scope = workspace->scope();
+        auto scope            = workspace->scope();
         const auto prime_span = workspace->alloc_bytes(
             static_cast<std::size_t>(kRows) * static_cast<std::size_t>(kHidden) * 2, 256);
         const auto u_span = workspace->alloc_bytes(
@@ -193,9 +192,9 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Te
         detail::exl3_prefill_transform(x, weight, u, stream);
         const auto linear_part = [&](std::int32_t row_begin, std::int32_t rows, Tensor& out) {
             Weight dense;
-            dense.qtype   = QType::BF16;
-            dense.layout  = QuantLayout::Contiguous;
-            dense.ndim    = 2;
+            dense.qtype  = QType::BF16;
+            dense.layout = QuantLayout::Contiguous;
+            dense.ndim   = 2;
             dense.n = dense.shape[0] = dense.padded_shape[0] = rows;
             dense.k = dense.shape[1] = dense.padded_shape[1] = kHidden;
             dense.qdata = static_cast<const std::byte*>(prime.data) +
@@ -270,8 +269,8 @@ std::size_t attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::in
         // capacity; the composed prefill route adds one decoded [14336, 5120] plane and
         // the transformed activation.
         return std::max(
-            detail::exl3_dense_workspace_bytes(
-                6144, 5120, std::min(max_tokens, detail::kExl3DenseMaxTokens)),
+            detail::exl3_dense_workspace_bytes(6144, 5120,
+                                               std::min(max_tokens, detail::kExl3DenseMaxTokens)),
             max_tokens > detail::kExl3DenseMaxTokens
                 ? detail::exl3_prefill_workspace_bytes(parent_rows, input_rows, max_tokens)
                 : std::size_t{0});

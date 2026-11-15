@@ -94,12 +94,11 @@ DeviceKVPagePool& DevicePageStorage::mirror_origin() const {
         const Tensor& plane = planes_[index];
         const auto* start   = static_cast<const std::byte*>(plane.data);
         DeviceKVPlaneLayout planned;
-        planned.geometry = spec_.geometry.planes[index];
-        planned.storage.region.offset =
-            static_cast<std::size_t>(start - base);
-        planned.storage.region.bytes = plane.bytes();
-        planned.storage.dtype        = plane.dtype;
-        planned.storage.shape        = {plane.ne[0], plane.ne[1], plane.ne[2], plane.ne[3]};
+        planned.geometry              = spec_.geometry.planes[index];
+        planned.storage.region.offset = static_cast<std::size_t>(start - base);
+        planned.storage.region.bytes  = plane.bytes();
+        planned.storage.dtype         = plane.dtype;
+        planned.storage.shape         = {plane.ne[0], plane.ne[1], plane.ne[2], plane.ne[3]};
         layout.planes.push_back(planned);
     }
     mirror_origin_ = std::make_unique<DeviceKVPagePool>(backing_, layout);
@@ -155,7 +154,7 @@ void DevicePageStorage::initialize_host_transfer_plan() {
                 if (current <= previous) { break; }
                 const std::size_t device_pitch = current - previous;
                 const std::size_t host_pitch   = host_transfer_planes_[next].host_offset -
-                                               host_transfer_planes_[next - 1].host_offset;
+                                                 host_transfer_planes_[next - 1].host_offset;
                 if (device_pitch < width || device_pitch > pitch_limit || host_pitch < width ||
                     host_pitch > pitch_limit) {
                     break;
@@ -447,16 +446,16 @@ KVExecutionTablePool& ExecutionTableStorage::table_origin() {
     if (table_origin_ != nullptr) { return *table_origin_; }
     if (pages_ == nullptr) { throw std::logic_error("Execution table has no page storage"); }
     KVExecutionTableLayout layout;
-    layout.spec = spec_;
+    layout.spec      = spec_;
     const auto* base = static_cast<const std::byte*>(backing_.data);
     layout.block_tables.region.offset =
         static_cast<std::size_t>(static_cast<const std::byte*>(block_tables_.data) - base);
     layout.block_tables.region.bytes = block_tables_.bytes();
     layout.block_tables.dtype        = block_tables_.dtype;
-    layout.block_tables.shape        = {block_tables_.ne[0], block_tables_.ne[1],
-                                        block_tables_.ne[2], block_tables_.ne[3]};
-    table_origin_ = std::make_unique<KVExecutionTablePool>(backing_, layout,
-                                                           pages_->mirror_origin());
+    layout.block_tables.shape = {block_tables_.ne[0], block_tables_.ne[1], block_tables_.ne[2],
+                                 block_tables_.ne[3]};
+    table_origin_ =
+        std::make_unique<KVExecutionTablePool>(backing_, layout, pages_->mirror_origin());
     return *table_origin_;
 }
 
@@ -576,38 +575,39 @@ runtime::ContextTransferObservation ContextStorage::describe(const ContextAction
         [&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, StateTransferDescription>) {
-                result.direction   = value.direction == StateCopyDirection::DeviceToHost
-                                         ? Direction::DeviceToHost
-                                         : Direction::HostToDevice;
-                result.work        = state_->layout().transfer_work();
-                result.units       = 1;
+                result.direction = value.direction == StateCopyDirection::DeviceToHost
+                                       ? Direction::DeviceToHost
+                                       : Direction::HostToDevice;
+                result.work      = state_->layout().transfer_work();
+                result.units     = 1;
             } else if constexpr (std::is_same_v<T, StateCopy>) {
                 result.direction = Direction::DeviceToDevice;
                 result.work =
                     value.bytes ? TransferWork{value.bytes, 1} : state_->layout().transfer_work();
-                result.units       = 1;
+                result.units = 1;
             } else if constexpr (std::is_same_v<T, PageCopy>) {
                 validate_slot(value.source);
                 validate_slot(value.destination);
                 if (value.source.pool_id != value.destination.pool_id)
                     throw std::invalid_argument("context page copy spans different pools");
-                result.resource = value.source.pool_id == 1 ? runtime::ContextResourceClass::BackendKV
-                                                            : runtime::ContextResourceClass::MainKV;
-                result.direction   = Direction::DeviceToDevice;
-                result.work        = value.source.index == value.destination.index
-                                         ? TransferWork{}
-                                         : pool(value.source.pool_id).pages->device_copy_work(1);
+                result.resource   = value.source.pool_id == 1
+                                        ? runtime::ContextResourceClass::BackendKV
+                                        : runtime::ContextResourceClass::MainKV;
+                result.direction  = Direction::DeviceToDevice;
+                result.work       = value.source.index == value.destination.index
+                                        ? TransferWork{}
+                                        : pool(value.source.pool_id).pages->device_copy_work(1);
                 result.page_count = 1;
             } else if constexpr (std::is_same_v<T, PageTransfer>) {
                 if (value.pages.empty())
                     throw std::invalid_argument("context page transfer is empty");
-                const auto id      = value.pages.front().pool_id;
-                result.resource    = id == 1 ? runtime::ContextResourceClass::BackendKV
-                                             : runtime::ContextResourceClass::MainKV;
-                result.direction   = value.direction == StateCopyDirection::DeviceToHost
-                                         ? Direction::DeviceToHost
-                                         : Direction::HostToDevice;
-                result.work        = pool(id).pages->host_transfer_work(page_indices(value.pages));
+                const auto id     = value.pages.front().pool_id;
+                result.resource   = id == 1 ? runtime::ContextResourceClass::BackendKV
+                                            : runtime::ContextResourceClass::MainKV;
+                result.direction  = value.direction == StateCopyDirection::DeviceToHost
+                                        ? Direction::DeviceToHost
+                                        : Direction::HostToDevice;
+                result.work       = pool(id).pages->host_transfer_work(page_indices(value.pages));
                 result.page_count = static_cast<std::uint32_t>(value.pages.size());
             }
         },

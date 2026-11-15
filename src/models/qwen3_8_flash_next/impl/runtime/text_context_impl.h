@@ -223,10 +223,10 @@ void DFlashFeatureSink::capture_layer(int layer, const Tensor& value, cudaStream
 void DFlashFeatureSink::capture_positions(const Tensor& source, cudaStream_t stream) {
     const std::uint32_t complete_mask = layers.size() == 32 ? ~0U : ((1U << layers.size()) - 1U);
     if (captured_mask != complete_mask) {
-        throw std::logic_error("DFlash target call did not publish every feature layer: captured 0x" +
-                               std::to_string(captured_mask) + " expected 0x" +
-                               std::to_string(complete_mask) + " layers " +
-                               std::to_string(layers.size()));
+        throw std::logic_error(
+            "DFlash target call did not publish every feature layer: captured 0x" +
+            std::to_string(captured_mask) + " expected 0x" + std::to_string(complete_mask) +
+            " layers " + std::to_string(layers.size()));
     }
     if (batch_features != nullptr) {
         if (source.dtype != DType::I32 || source.ne[0] != batch_width ||
@@ -367,11 +367,11 @@ const MtpW& TextContext::mtp_weights() const {
 
 void TextContext::mtp_forward_stem(const Tensor& ids, const Tensor& hidden,
                                    const Tensor* input_embeddings, Tensor& x, Tensor& ah) {
-    cudaStream_t s     = ctx_.stream();
+    cudaStream_t s              = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    const int T        = ids.ne[0] * ids.ne[1];
-    Tensor flat_ids    = ids.view({T});
-    Tensor flat_hidden = hidden.view({kCfg.hidden, T});
+    const int T                 = ids.ne[0] * ids.ne[1];
+    Tensor flat_ids             = ids.view({T});
+    Tensor flat_hidden          = hidden.view({kCfg.hidden, T});
 
     auto roots = workspace_recipe::mtp_stem<TextConfig>(work_, T, input_embeddings == nullptr);
     Tensor emb;
@@ -406,9 +406,9 @@ void TextContext::mtp_forward_tail(Tensor& x, const Tensor& ah, const Tensor& po
                                    const Tensor& rope_positions,
                                    ops::CausalAttentionExecutionEnvelope envelope,
                                    Tensor& mtp_hidden) {
-    cudaStream_t s = ctx_.stream();
+    cudaStream_t s              = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    const int T    = x.ne[1];
+    const int T                 = x.ne[1];
 
     const auto projection = workspace_recipe::mtp_attention_projection<TextConfig>(work_, T);
     Tensor q              = projection.query.view({kCfg.head_dim, kCfg.n_q, T});
@@ -449,7 +449,8 @@ void TextContext::mtp_forward_tail(Tensor& x, const Tensor& ah, const Tensor& po
     } else {
         ops::causal_softmax_attention(qn, kn, v, positions, Tensor{}, io_.backend_kv_table_row,
                                       {kCfg.head_dim, kCfg.n_q, kCfg.n_kv}, kAttnScale,
-                                      batch_mtp_kv_->batch_layer_view(0), envelope, work_, a, execution);
+                                      batch_mtp_kv_->batch_layer_view(0), envelope, work_, a,
+                                      execution);
     }
     ops::sigmoid_mul(gate, a, execution);
 
@@ -513,11 +514,11 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     (void)predictor_hidden;
     throw std::logic_error("Flash-Next MTP selected by a non-Flash target");
 #else
-    cudaStream_t stream = ctx_.stream();
+    cudaStream_t stream         = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    const int tokens    = static_cast<int>(ids.numel());
-    const int batch     = active_sequence_batch_ == 0 ? 1 : active_sequence_batch_;
-    const int width     = tokens / batch;
+    const int tokens            = static_cast<int>(ids.numel());
+    const int batch             = active_sequence_batch_ == 0 ? 1 : active_sequence_batch_;
+    const int width             = tokens / batch;
     if (tokens <= 0 || width * batch != tokens) {
         throw std::invalid_argument("Flash-Next MTP token geometry is invalid");
     }
@@ -545,11 +546,12 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
 
     Tensor normalized_hidden = work_.alloc(DType::BF16, {10240, tokens});
     Tensor hyper             = work_.alloc(DType::BF16, {10240, tokens});
-    ops::rmsnorm(hidden, mtp_.payload->hidden_norm, kCfg.rms_eps, true, normalized_hidden, execution);
+    ops::rmsnorm(hidden, mtp_.payload->hidden_norm, kCfg.rms_eps, true, normalized_hidden,
+                 execution);
     Tensor normalized_hidden_branches = normalized_hidden.view({2560, 4 * tokens});
     Tensor hyper_branches             = hyper.view({2560, 4 * tokens});
-    ops::linear(normalized_hidden_branches, mtp_.payload->hidden_projection, hyper_branches, execution,
-                bf16_gemm_);
+    ops::linear(normalized_hidden_branches, mtp_.payload->hidden_projection, hyper_branches,
+                execution, bf16_gemm_);
     ops::hyperconnection_add_repeated(projected_embedding, hyper, stream);
     Tensor block_input  = work_.alloc(DType::BF16, {2560, tokens});
     Tensor block_output = work_.alloc(DType::BF16, {2560, tokens});
@@ -826,7 +828,8 @@ void TextContext::mtp_forward_batch(const Tensor& ids, const Tensor& hidden,
     const Tensor* rope_positions = explicit_rope_positions;
     if (rope_positions == nullptr) {
         generated_rope_positions = work_.alloc(DType::I32, {T});
-        ops::offset_i32_positions(positions, io_.rope_delta, generated_rope_positions, ctx_.execution_view());
+        ops::offset_i32_positions(positions, io_.rope_delta, generated_rope_positions,
+                                  ctx_.execution_view());
         rope_positions = &generated_rope_positions;
     } else if (rope_positions->dtype != DType::I32 || rope_positions->ne[0] != T ||
                (rope_positions->ne[1] != 1 && rope_positions->ne[1] != 3) ||
@@ -896,7 +899,7 @@ void TextContext::ordinary_decode_batch(const Tensor& ids, const Tensor& cache_p
     require_tensor_shape(hidden, DType::BF16, {kCfg.hidden, batch}, "ordinary decode hidden");
     require_tensor_shape(logits, DType::BF16, {kCfg.vocab, batch}, "ordinary decode logits");
 
-    cudaStream_t stream = ctx_.stream();
+    cudaStream_t stream         = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
     work_.reset();
     {
@@ -959,7 +962,7 @@ void TextContext::target_verify_batch_impl(const Tensor& ids, const Tensor& cach
                          "target verify batch logits");
     require_tensor_shape(target_tokens, DType::I32, {width, batch}, "target verify batch tokens");
 
-    cudaStream_t stream = ctx_.stream();
+    cudaStream_t stream         = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
     work_.reset();
     {
@@ -1059,10 +1062,9 @@ void TextContext::mtp_forward_decode_batch(
     ScopedValue<std::int32_t> batch_binding(active_sequence_batch_, batch);
     ScopedValue<std::int32_t> width_binding(active_sequence_width_, width);
 #ifdef NINFER_QWEN38_FLASH_NEXT
-    Tensor flat_hidden = hidden.view({4 * kCfg.hidden, width * batch});
-    Tensor flat_mtp_hidden = mtp_hidden.view({kCfg.hidden, width * batch});
-    Tensor flat_predictor_hidden =
-        predictor_hidden->view({4 * kCfg.hidden, width * batch});
+    Tensor flat_hidden           = hidden.view({4 * kCfg.hidden, width * batch});
+    Tensor flat_mtp_hidden       = mtp_hidden.view({kCfg.hidden, width * batch});
+    Tensor flat_predictor_hidden = predictor_hidden->view({4 * kCfg.hidden, width * batch});
     mtp_forward_core(ids, flat_hidden, cache_positions, rope_positions, envelope, flat_mtp_hidden,
                      nullptr, &flat_predictor_hidden, selected_qsa_indices, reused_qsa_indices);
 #else
@@ -1080,9 +1082,9 @@ void TextContext::mtp_propose_batch(const Tensor& hidden, Tensor& logits, Tensor
 }
 
 void TextContext::attn_mix(const FullLayerW& w, Tensor& x, int fidx, Phase ph) {
-    cudaStream_t s = ctx_.stream();
+    cudaStream_t s              = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    const int T    = x.ne[1];
+    const int T                 = x.ne[1];
     if (active_causal_attention_envelope_ == nullptr) {
         throw std::logic_error("Text GQA execution envelope is not set");
     }
@@ -1131,7 +1133,8 @@ void TextContext::attn_mix(const FullLayerW& w, Tensor& x, int fidx, Phase ph) {
         ops::causal_softmax_attention(q_batch, k_batch, v_batch, position_batch, valid,
                                       kv_table_rows, {kCfg.head_dim, kCfg.n_q, kCfg.n_kv},
                                       kAttnScale, batch_text_kv_->batch_layer_view(fidx),
-                                      *active_causal_attention_envelope_, work_, a_batch, execution);
+                                      *active_causal_attention_envelope_, work_, a_batch,
+                                      execution);
     } else {
         ops::causal_softmax_attention(qn, kn, v, cache_positions, Tensor{}, kv_table_rows,
                                       {kCfg.head_dim, kCfg.n_q, kCfg.n_kv}, kAttnScale,
@@ -1140,13 +1143,14 @@ void TextContext::attn_mix(const FullLayerW& w, Tensor& x, int fidx, Phase ph) {
     }
     ops::sigmoid_mul(gate, a, execution);
 
-    Variant::attention_output_projection(a.view({kCfg.q_size, T}), *w.o_proj, x, ph, work_, execution);
+    Variant::attention_output_projection(a.view({kCfg.q_size, T}), *w.o_proj, x, ph, work_,
+                                         execution);
 }
 
 void TextContext::gdn_mix(const GdnLayerW& w, Tensor& x, int gidx, Phase ph) {
-    cudaStream_t s = ctx_.stream();
+    cudaStream_t s              = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    const int T    = x.ne[1];
+    const int T                 = x.ne[1];
 
     const auto control = workspace_recipe::gdn_control<TextConfig>(work_, T);
     Tensor h           = control.hidden;
@@ -1201,7 +1205,8 @@ void TextContext::gdn_mix(const GdnLayerW& w, Tensor& x, int gidx, Phase ph) {
             state_.conv_slot(static_cast<std::uint32_t>(gidx), linear_state_source_slot_);
         Tensor conv_state_out =
             state_.conv_slot(static_cast<std::uint32_t>(gidx), linear_state_destination_slot_);
-        ops::causal_conv1d_silu_split(qkv, *w.conv1d, conv_state_in, conv_state_out, qc, kc, vc, execution);
+        ops::causal_conv1d_silu_split(qkv, *w.conv1d, conv_state_in, conv_state_out, qc, kc, vc,
+                                      execution);
     }
 
     Tensor q_recurrent = qc.view({kCfg.gdn_k_dim, kCfg.gdn_k_heads, T});
@@ -1225,12 +1230,11 @@ void TextContext::gdn_mix(const GdnLayerW& w, Tensor& x, int gidx, Phase ph) {
         const Tensor valid = active_valid_columns_ != nullptr ? *active_valid_columns_ : Tensor{};
         if (gdn_state_action_ == GdnStateAction::RecordForReplay) {
             GdnReplayRecordLayer records = replay_records_->layer(gidx, active_sequence_batch_);
-            ops::gated_delta_net_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
-                                               kGdnScale, recurrent_states, valid,
-                                               *active_linear_state_source_slots_,
-                                               ops::GdnRecurrenceRecords{records.key, records.value,
-                                                                         records.gate},
-                                               out_batch, execution);
+            ops::gated_delta_net_replay_record(
+                q_batch, k_batch, v_batch, g_batch, beta_batch, kGdnScale, recurrent_states, valid,
+                *active_linear_state_source_slots_,
+                ops::GdnRecurrenceRecords{records.key, records.value, records.gate}, out_batch,
+                execution);
         } else {
             ops::gated_delta_net_batch_update(
                 q_batch, k_batch, v_batch, g_batch, beta_batch, kGdnScale,
@@ -1251,14 +1255,15 @@ void TextContext::gdn_mix(const GdnLayerW& w, Tensor& x, int gidx, Phase ph) {
         {kCfg.gdn_v_dim, kCfg.gdn_v_heads, T});
     ops::gated_rmsnorm(o, *w.gdn_norm, z, kCfg.rms_eps, on, s);
 
-    Variant::gdn_output_projection(on.view({kCfg.value_dim, T}), *w.out_proj, x, ph, work_, execution);
+    Variant::gdn_output_projection(on.view({kCfg.value_dim, T}), *w.out_proj, x, ph, work_,
+                                   execution);
 }
 
 void TextContext::mlp_tail(const Tensor* post_norm, const MlpW& m, Tensor& x, Phase ph) {
-    cudaStream_t s = ctx_.stream();
+    cudaStream_t s              = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    const int T    = x.ne[1];
-    Tensor h       = workspace_recipe::post_mixer_hidden<TextConfig>(work_, T);
+    const int T                 = x.ne[1];
+    Tensor h                    = workspace_recipe::post_mixer_hidden<TextConfig>(work_, T);
     ops::rmsnorm(x, *post_norm, kCfg.rms_eps, true, h, execution);
 
     Variant::post_mixer(h, *m.payload, x, ph, work_, execution);
@@ -1321,7 +1326,7 @@ void TextContext::run_layers(Tensor& x, Phase ph, Tap& tap) {
 template <class Tap>
 void TextContext::run_flash_next_layers(Tensor& x, Phase ph, Tap& tap) {
     NINFER_PERF_SCOPE(ph == Phase::Prefill ? "ninfer.region/1|target.prefill"
-                                         : "ninfer.region/1|target.verify");
+                                           : "ninfer.region/1|target.verify");
 #ifndef NINFER_QWEN38_FLASH_NEXT
     (void)x;
     (void)ph;
@@ -1338,13 +1343,13 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph, Tap& tap) {
                                  active_linear_state_destination_slots_ == nullptr))) {
         throw std::logic_error("Flash-Next verify state selectors are unavailable");
     }
-    cudaStream_t stream = ctx_.stream();
+    cudaStream_t stream         = ctx_.stream();
     CudaExecutionView execution = ctx_.execution_view();
-    auto schedule_scope = work_.scope();
-    Tensor hyper        = work_.alloc(DType::BF16, {10240, tokens});
-    Tensor block_input  = work_.alloc(DType::BF16, {TextConfig::hidden, tokens});
-    Tensor block_output = work_.alloc(DType::BF16, {TextConfig::hidden, tokens});
-    Tensor injection    = work_.alloc(DType::BF16, {4, tokens});
+    auto schedule_scope         = work_.scope();
+    Tensor hyper                = work_.alloc(DType::BF16, {10240, tokens});
+    Tensor block_input          = work_.alloc(DType::BF16, {TextConfig::hidden, tokens});
+    Tensor block_output         = work_.alloc(DType::BF16, {TextConfig::hidden, tokens});
+    Tensor injection            = work_.alloc(DType::BF16, {4, tokens});
     ops::hyperconnection_repeat(x, hyper, stream);
 
     Tensor positions = active_cache_positions_->view({width, batch});
@@ -1447,7 +1452,7 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph, Tap& tap) {
             if (layer > 0) {
                 // The reference tap is the completed, zero-based layer output averaged over the
                 // four hyper-connection streams (dflash2 capture patch), not the mixed input.
-                auto mean_scope = work_.scope();
+                auto mean_scope    = work_.scope();
                 Tensor mean_hidden = work_.alloc(DType::BF16, {TextConfig::hidden, tokens});
                 ops::hyperconnection_mean(hyper, mean_hidden, stream);
                 tap.capture_layer(layer - 1, mean_hidden, stream);
@@ -1503,8 +1508,7 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph, Tap& tap) {
                 Tensor recurrent_out = state_.recurrent_slot(static_cast<std::uint32_t>(gdn_index),
                                                              linear_state_destination_slot_);
                 ops::flash_next_gdn(block_input, source.projection, conv_in, conv_out, recurrent_in,
-                                    recurrent_out, block_output, work_,
-                                    execution, bf16_gemm_);
+                                    recurrent_out, block_output, work_, execution, bf16_gemm_);
             }
             ++gdn_index;
         }
@@ -1555,11 +1559,11 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
     if (ids.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
         throw std::overflow_error("TextContext::prefill token count exceeds int32");
     }
-    cudaStream_t s           = ctx_.stream();
+    cudaStream_t s                    = ctx_.stream();
     const CudaExecutionView execution = ctx_.execution_view();
-    const int T              = static_cast<int>(ids.size());
-    const int chunk          = static_cast<int>(prefill_chunk_);
-    const std::uint32_t base = text_kv_base_;
+    const int T                       = static_cast<int>(ids.size());
+    const int chunk                   = static_cast<int>(prefill_chunk_);
+    const std::uint32_t base          = text_kv_base_;
 
     if (text_prefill != nullptr) {
         if (multimodal != nullptr || base != text_prefill->begin ||

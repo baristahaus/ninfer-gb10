@@ -30,10 +30,10 @@ __device__ __forceinline__ void gate_mix_position(const float* logits,
     for (int stream = 0; stream < kStreams; ++stream) {
         const float logit = __bfloat162float(__float2bfloat16_rn(logits[stream]));
         const float gate  = 1.0F / (1.0F + expf(-logit));
-        sum               = fmaf(gate,
-                                 __bfloat162float(normalized[position + static_cast<std::int64_t>(kHidden) *
+        sum = fmaf(gate,
+                   __bfloat162float(normalized[position + static_cast<std::int64_t>(kHidden) *
                                                               (stream + kStreams * token)]),
-                                 sum);
+                   sum);
     }
     block_input[position + static_cast<std::int64_t>(kHidden) * token] =
         __float2bfloat16_rn(sum * 0.25F);

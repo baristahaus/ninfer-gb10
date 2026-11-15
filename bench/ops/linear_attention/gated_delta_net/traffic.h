@@ -94,11 +94,11 @@ inline Traffic record_traffic(int qk_heads, int value_heads, int width, std::spa
     Traffic result;
     result.state.read    = physical.state_bytes();
     result.records.write = live.qk_bytes() + live.value_bytes() + 2 * live.gate_bytes();
-    result.logical       = {2 * live.qk_bytes() + live.value_bytes() + 2 * live.gate_bytes() +
-                                result.state.read + sizeof(std::int32_t) * batch * (1 + has_valid_tensor),
-                            physical.value_bytes() + result.records.write};
-    result.active_rows   = batch;
-    result.valid_tokens  = tokens;
+    result.logical = {2 * live.qk_bytes() + live.value_bytes() + 2 * live.gate_bytes() +
+                          result.state.read + sizeof(std::int32_t) * batch * (1 + has_valid_tensor),
+                      physical.value_bytes() + result.records.write};
+    result.active_rows  = batch;
+    result.valid_tokens = tokens;
     return result;
 }
 

@@ -172,9 +172,9 @@ int run_case(const std::vector<int>& cu_seqlens, std::uint32_t seed, StorageProf
         k_tensor       = q_tensor;
         v_tensor       = q_tensor;
         k_tensor.data  = static_cast<std::uint8_t*>(interleaved_storage.data()) +
-                        token_plane * sizeof(std::uint16_t);
-        v_tensor.data = static_cast<std::uint8_t*>(interleaved_storage.data()) +
-                        token_plane * 2 * sizeof(std::uint16_t);
+                         token_plane * sizeof(std::uint16_t);
+        v_tensor.data  = static_cast<std::uint8_t*>(interleaved_storage.data()) +
+                         token_plane * 2 * sizeof(std::uint16_t);
     }
 
     DeviceBuffer d_cu_seqlens = to_device_i32(cu_seqlens);
@@ -199,10 +199,10 @@ int run_case(const std::vector<int>& cu_seqlens, std::uint32_t seed, StorageProf
                 throw std::logic_error("plain case requires exactly one segment");
             }
             ops::softmax_attention(q_tensor, k_tensor, v_tensor, kGeometry, kScale, workspace,
-                                      out_tensor, execution);
+                                   out_tensor, execution);
         } else if (entry == PublicEntry::CuSeqlensArena) {
             ops::packed_softmax_attention(q_tensor, k_tensor, v_tensor, kGeometry, kScale,
-                                             cu_tensor, workspace, out_tensor, execution);
+                                          cu_tensor, workspace, out_tensor, execution);
         } else {
             const int segment_length = cu_seqlens[1] - cu_seqlens[0];
             for (std::size_t segment = 1; segment + 1 < cu_seqlens.size(); ++segment) {
@@ -211,7 +211,7 @@ int run_case(const std::vector<int>& cu_seqlens, std::uint32_t seed, StorageProf
                 }
             }
             ops::packed_softmax_attention(q_tensor, k_tensor, v_tensor, kGeometry, kScale,
-                                             segment_length, out_tensor, execution);
+                                          segment_length, out_tensor, execution);
         }
     };
     DecodeGraphDefinition definition;

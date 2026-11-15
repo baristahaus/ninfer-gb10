@@ -28,8 +28,8 @@ __device__ __forceinline__ float mxfp8_group_scale(std::uint8_t word) {
 // Widen two adjacent E4M3 codes of one group to BF16 with the group scale
 // folded in. The pair never crosses a group boundary: callers pass even
 // in-group column offsets.
-__device__ __forceinline__ __nv_bfloat162
-mxfp8_widen_pair_scaled(std::uint16_t packed_codes, float group_scale) {
+__device__ __forceinline__ __nv_bfloat162 mxfp8_widen_pair_scaled(std::uint16_t packed_codes,
+                                                                  float group_scale) {
     const unsigned widened = fp8_e4m3x2_to_bf16x2_bits(packed_codes);
     const float2 values    = bf16x2_bits_to_float2(widened);
     __nv_bfloat162 result;

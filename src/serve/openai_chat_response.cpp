@@ -103,9 +103,9 @@ CompletionTimings outcome_timings(const GenerationOutcome& outcome) {
     return make_completion_timings(
         static_cast<std::uint32_t>(std::max(0, outcome.prompt_tokens)),
         outcome.stats.reused_prompt_tokens,
-        static_cast<std::uint32_t>(std::max(0, outcome.completion_tokens)),
-        prompt_seconds * 1000.0, generation_seconds * 1000.0,
-        outcome.stats.speculative.drafted_tokens, outcome.stats.speculative.accepted_tokens);
+        static_cast<std::uint32_t>(std::max(0, outcome.completion_tokens)), prompt_seconds * 1000.0,
+        generation_seconds * 1000.0, outcome.stats.speculative.drafted_tokens,
+        outcome.stats.speculative.accepted_tokens);
 }
 
 CompletionTimings observation_timings(std::uint32_t prompt_tokens, std::uint32_t cached_tokens,
@@ -166,9 +166,9 @@ Json tool_calls_json(const std::vector<ToolCall>& calls, bool include_index) {
     Json output = Json::array();
     for (std::size_t index = 0; index < calls.size(); ++index) {
         const ToolCall& call = calls[index];
-        Json value           = {{"id", call.id},
-                                {"type", "function"},
-                                {"function", Json{{"name", call.name}, {"arguments", call.arguments_json}}}};
+        Json value = {{"id", call.id},
+                      {"type", "function"},
+                      {"function", Json{{"name", call.name}, {"arguments", call.arguments_json}}}};
         if (include_index) { value["index"] = static_cast<int>(index); }
         output.push_back(std::move(value));
     }
@@ -370,8 +370,8 @@ std::string OpenAIChatStream::tool_call_progress(std::size_t cumulative_bytes) {
     if (!started_ || finished_ || cumulative_bytes == 0) {
         throw std::logic_error("invalid OpenAI Chat tool-call progress state");
     }
-    Json payload       = base_payload(identity_, "chat.completion.chunk");
-    payload["choices"] = Json::array({stream_choice(Json::object())});
+    Json payload                  = base_payload(identity_, "chat.completion.chunk");
+    payload["choices"]            = Json::array({stream_choice(Json::object())});
     payload["tool_call_progress"] = Json{{"bytes", cumulative_bytes}};
     if (include_usage_) { payload["usage"] = nullptr; }
     return event(std::move(payload));
@@ -452,9 +452,8 @@ std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outco
                       Json::array({Json{{"index", index},
                                         {"id", new_openai_chat_tool_call_id()},
                                         {"type", "function"},
-                                        {"function",
-                                         Json{{"name", call.name},
-                                              {"arguments", call.arguments_json}}}}})}},
+                                        {"function", Json{{"name", call.name},
+                                                          {"arguments", call.arguments_json}}}}})}},
                 nullptr, include_usage_, output_timings));
         }
     } else {

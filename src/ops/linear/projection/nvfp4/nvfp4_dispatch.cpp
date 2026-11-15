@@ -10,13 +10,18 @@ namespace ninfer::ops::detail {
 namespace {
 const std::array kShapes{
 #if NINFER_TARGET_SPARK
-    &kNvfp4N12288K4096, &kNvfp4N4096K6144,
+    &kNvfp4N12288K4096,
+    &kNvfp4N4096K6144,
 #endif
-    &kNvfp4N14336K5120, &kNvfp4N16384K5120, &kNvfp4N34816K5120,
-    &kNvfp4N5120K6144,  &kNvfp4N5120K17408,
+    &kNvfp4N14336K5120,
+    &kNvfp4N16384K5120,
+    &kNvfp4N34816K5120,
+    &kNvfp4N5120K6144,
+    &kNvfp4N5120K17408,
     // The sharded 27B lane: the fused gate_up half and one gate/up role, both over the 5120 width.
     // mlp/gate and mlp/up are NVFP4 in 56 of the 27B's 64 layers, so this is not an FP8-only path.
-    &kNvfp4N17408K5120, &kNvfp4N8704K5120,
+    &kNvfp4N17408K5120,
+    &kNvfp4N8704K5120,
     // mlp/down at width 2: the Columns shard halves K.
     &kNvfp4N5120K8704,
 };

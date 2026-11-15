@@ -9,7 +9,7 @@ void add_append_case(OpSuite& suite, Geometry geometry, KvCacheStorage storage, 
     const std::vector<int> selected(queries.begin(), queries.end());
     const std::vector<std::uint32_t> bounds(limits.begin(), limits.end());
     const bool graph = c.graph_replay || !bounds.empty();
-    const auto id    = std::string("causal_append/") + cache_name(storage) + "/" + geometry.name +
+    const auto id = std::string("causal_append/") + cache_name(storage) + "/" + geometry.name +
                     "/t" + std::to_string(c.tokens) + "/base" + std::to_string(c.base) + "/bound" +
                     std::to_string(c.envelope_max) + "/seed" + std::to_string(c.seed) + "/" +
                     mapping_name(mapping) + (bounds.empty() ? "" : "/envelope_updates");

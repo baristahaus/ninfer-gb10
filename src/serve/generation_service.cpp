@@ -267,7 +267,9 @@ public:
     explicit ContinuationSink(const StreamSink& sink) : sink_(&sink) {}
 
     void start(ninfer::GenerationStart) override {}
+
     void progress(ninfer::PromptProgress) override {}
+
     void timing(ninfer::GenerationTimingObservation) override {}
 
     void publish(ninfer::OutputEvent event) override {
@@ -389,9 +391,8 @@ GenerationService::GenerationService(product::ServeOptions options,
                 kReasoningCloseSerialization &&
             engine_->detokenize_text(reasoning_guard_tokens_.think_close) == kReasoningThinkClose;
         if (!reasoning_retry_enabled_) {
-            std::fprintf(stderr,
-                         "reasoning-close retry off: the tokenizer does not round-trip the "
-                         "canonical close suffix\n");
+            std::fprintf(stderr, "reasoning-close retry off: the tokenizer does not round-trip the "
+                                 "canonical close suffix\n");
         }
     }
 }
@@ -606,8 +607,8 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     return outcome;
 }
 
-void GenerationService::apply_reasoning_retry(PreparedRequest& prepared,
-                                              GenerationOutcome& outcome, const StreamSink* sink,
+void GenerationService::apply_reasoning_retry(PreparedRequest& prepared, GenerationOutcome& outcome,
+                                              const StreamSink* sink,
                                               const ninfer::CancellationView& cancellation) {
     const ReasoningRetryPlan plan = plan_reasoning_retry(
         ReasoningRetryInput{.starts_in_reasoning      = prepared.enable_thinking,
@@ -644,14 +645,14 @@ void GenerationService::apply_reasoning_retry(PreparedRequest& prepared,
 
     ninfer::GenerationResult second;
     try {
-        const auto deadline = Clock::now() + std::chrono::milliseconds(
-                                                options_.launch.engine.pending_timeout_ms);
+        const auto deadline =
+            Clock::now() + std::chrono::milliseconds(options_.launch.engine.pending_timeout_ms);
         ninfer::PreparedPrompt prompt = engine_->prepare_tokens(std::move(tokens));
-        ninfer::GenerationHandle generation = engine_->submit(
-            std::move(prompt), std::move(options),
-            sink != nullptr ? ninfer::OutputConsumerMode::Streaming
-                            : ninfer::OutputConsumerMode::Aggregate,
-            {}, deadline);
+        ninfer::GenerationHandle generation =
+            engine_->submit(std::move(prompt), std::move(options),
+                            sink != nullptr ? ninfer::OutputConsumerMode::Streaming
+                                            : ninfer::OutputConsumerMode::Aggregate,
+                            {}, deadline);
         second = generation.wait(continuation_sink.get(), cancellation);
     } catch (const std::exception& exception) {
         // The first reply stands as it was.
@@ -661,7 +662,7 @@ void GenerationService::apply_reasoning_retry(PreparedRequest& prepared,
 
     stats.continuation_prompt     = second.prompt.prompt_tokens;
     stats.continuation_completion = static_cast<std::uint32_t>(second.generated_token_ids.size());
-    outcome.text                = std::move(second.content);
+    outcome.text                  = std::move(second.content);
     outcome.reasoning += second.reasoning;
     outcome.tool_calls          = std::move(second.tool_calls);
     outcome.tool_call_parse     = second.tool_call_parse;

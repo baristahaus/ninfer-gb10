@@ -68,7 +68,7 @@ std::vector<float> make_context(int columns, std::uint32_t seed) {
         for (int row = 0; row < kHidden; ++row) {
             const std::uint32_t coordinate = static_cast<std::uint32_t>(row) * 29U +
                                              static_cast<std::uint32_t>(column) * 47U + seed * 13U;
-            const int centered = static_cast<int>(coordinate % 257U) - 128;
+            const int centered             = static_cast<int>(coordinate % 257U) - 128;
             result[static_cast<std::size_t>(column) * kHidden + row] =
                 bf16_to_f32(f32_to_bf16(static_cast<float>(centered) * (1.0F / 192.0F)));
         }
@@ -212,12 +212,12 @@ void append_key_oracle(const LayerStorage& layer, const float* input, int head, 
     }
     const double inverse = 1.0 / std::sqrt(square_sum / kHeadDim + kEpsilon);
     for (int pair = 0; pair < kHeadDim / 2; ++pair) {
-        const double first = raw[static_cast<std::size_t>(pair)] * inverse *
-                             layer.norm_host[static_cast<std::size_t>(pair)];
+        const double first  = raw[static_cast<std::size_t>(pair)] * inverse *
+                              layer.norm_host[static_cast<std::size_t>(pair)];
         const double second = raw[static_cast<std::size_t>(pair + kHeadDim / 2)] * inverse *
                               layer.norm_host[static_cast<std::size_t>(pair + kHeadDim / 2)];
-        const double angle = static_cast<double>(position) *
-                             std::pow(kTheta, -2.0 * static_cast<double>(pair) / kHeadDim);
+        const double angle  = static_cast<double>(position) *
+                              std::pow(kTheta, -2.0 * static_cast<double>(pair) / kHeadDim);
         const double cosine = std::cos(angle);
         const double sine   = std::sin(angle);
         expected.push_back(first * cosine - second * sine);

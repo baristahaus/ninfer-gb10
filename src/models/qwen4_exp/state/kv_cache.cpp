@@ -40,9 +40,9 @@ ops::QsaCacheView QsaCache::layer(std::uint32_t layer) const {
     return {{.k_pages       = pages_.plane(base),
              .v_pages       = pages_.plane(base + 1),
              .k_scale_pages = s.key.has_scale() ? pages_.plane(base + 2) : Tensor{},
-             .v_scale_pages = s.value.has_scale() ? pages_.plane(base + 2 + s.key.has_scale())
-                                                  : Tensor{},
-             .block_tables  = tables,
+             .v_scale_pages =
+                 s.value.has_scale() ? pages_.plane(base + 2 + s.key.has_scale()) : Tensor{},
+             .block_tables    = tables,
              .head_dim        = layout_.head_dim,
              .num_kv_heads    = layout_.kv_heads,
              .storage         = s.storage,

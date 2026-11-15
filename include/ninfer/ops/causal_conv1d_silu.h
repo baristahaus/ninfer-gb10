@@ -76,8 +76,7 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
  * `source_slots` is contiguous I32 [B]. All reads index device memory; the op is
  * capture-compatible.
  */
-void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots,
-                             Tensor& scratch, Tensor& record_slots, std::int32_t width,
-                             cudaStream_t stream);
+void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots, Tensor& scratch,
+                             Tensor& record_slots, std::int32_t width, cudaStream_t stream);
 
 } // namespace ninfer::ops

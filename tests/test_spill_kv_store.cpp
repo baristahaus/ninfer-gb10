@@ -29,10 +29,10 @@ int expect_throws(Fn&& fn, const char* label) {
 
 ninfer::KVPageGeometry test_geometry() {
     ninfer::KVPlaneGeometry keys{};
-    keys.dtype          = ninfer::DType::BF16;
-    keys.leading_extent = 8;
-    keys.head_extent    = 128;
-    keys.tokens_per_row = 1;
+    keys.dtype                     = ninfer::DType::BF16;
+    keys.leading_extent            = 8;
+    keys.head_extent               = 128;
+    keys.tokens_per_row            = 1;
     ninfer::KVPlaneGeometry values = keys;
     ninfer::KVPageGeometry page{};
     page.page_tokens = 256;
@@ -44,9 +44,7 @@ std::vector<std::byte> patterned_page_bytes(const ninfer::HostKVPageLayout& layo
                                             std::uint32_t pages, std::uint32_t seed) {
     std::vector<std::byte> bytes(layout.page_stride * pages);
     std::mt19937_64 random(seed);
-    for (auto& value : bytes) {
-        value = static_cast<std::byte>(random() & 0xffU);
-    }
+    for (auto& value : bytes) { value = static_cast<std::byte>(random() & 0xffU); }
     return bytes;
 }
 
@@ -113,9 +111,7 @@ int run() {
         // The coalesced released region is reused in full and reads back whole.
         const std::vector<std::byte> reuse = patterned_page_bytes(layout, 2, 55U);
         const auto reuse_extent            = store.write(reuse.data(), reuse.size());
-        if (reuse_extent.offset != 0) {
-            failures += fail("coalesced free space was not reused");
-        }
+        if (reuse_extent.offset != 0) { failures += fail("coalesced free space was not reused"); }
         back.assign(reuse.size(), std::byte{0});
         store.read(reuse_extent, back.data(), back.size());
         if (back != reuse) { failures += fail("reuse round-trip is not bit-identical"); }

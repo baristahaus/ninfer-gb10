@@ -74,14 +74,14 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     // half (eight D-wide rows), lanes with bit3 set fetch the +8 d-contract half.
     const unsigned k_lane_base = k_sbase + static_cast<unsigned>(b_rin * (D * 2)) +
                                  (static_cast<unsigned>(lane >> 4) * (8 * D * 2));
-    const unsigned k_as = static_cast<unsigned>((b_koff >> 3) << 4);
-    const unsigned k_r  = static_cast<unsigned>(b_rin << 4);
+    const unsigned k_as        = static_cast<unsigned>((b_koff >> 3) << 4);
+    const unsigned k_r         = static_cast<unsigned>(b_rin << 4);
     // V B-fragment via ldmatrix.x4.trans (2 n-tiles/instr): row = k*16 + (bit3)*8 + b_rin,
     // col = n*8 + (lane>>4)*8.
     const unsigned v_lane_base = v_sbase + static_cast<unsigned>(((lane >> 3) & 1) * (8 * D * 2)) +
                                  static_cast<unsigned>(b_rin * (D * 2));
-    const unsigned v_as = static_cast<unsigned>((lane >> 4) << 4);
-    const unsigned v_r  = static_cast<unsigned>(b_rin << 4);
+    const unsigned v_as        = static_cast<unsigned>((lane >> 4) << 4);
+    const unsigned v_r         = static_cast<unsigned>(b_rin << 4);
 
     // Stage Q into smem once via cp.async (overlaps with the K(0) prologue load
     // below); it stays resident for the key loop. Global token stride is D*QHeads.

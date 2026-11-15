@@ -129,7 +129,7 @@ stage_nvfp4_a4_weight(const std::uint8_t* __restrict__ codes,
             const int global_row_begin = row_begin + row_tile * 128;
             const int persistent_tile  = global_row_begin / 128;
             const int first_quartile   = (global_row_begin & 127) / 32;
-            auto* destination          = shared.b_scales[stage] +
+            auto* destination = shared.b_scales[stage] +
                                 ((row_tile * Schedule::kK64PerStage + local_k64) * 32 + row_mod32) *
                                     kScaleBytesPerTask;
             const auto* input =

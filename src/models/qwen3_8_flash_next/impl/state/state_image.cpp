@@ -111,13 +111,13 @@ StateImageHostLayout plan_host_state_image(const StateImageSpec& spec) {
 
     LayoutBuilder builder;
     StateImageHostLayout host;
-    host.spec = spec;
-    const Tensor conv_slot = Tensor::metadata(
-        spec.linear.conv_dtype, {spec.linear.conv_channels, spec.linear.conv_width});
-    const Tensor recurrent_slot = Tensor::metadata(
-        DType::FP32, {spec.linear.key_head_dim, spec.linear.value_head_dim,
-                      spec.linear.value_heads});
-    const Tensor hidden_slot = Tensor::metadata(DType::BF16, {spec.hidden});
+    host.spec              = spec;
+    const Tensor conv_slot = Tensor::metadata(spec.linear.conv_dtype,
+                                              {spec.linear.conv_channels, spec.linear.conv_width});
+    const Tensor recurrent_slot =
+        Tensor::metadata(DType::FP32, {spec.linear.key_head_dim, spec.linear.value_head_dim,
+                                       spec.linear.value_heads});
+    const Tensor hidden_slot     = Tensor::metadata(DType::BF16, {spec.hidden});
     host.linear_conv_layer_bytes = conv_slot.bytes();
     host.linear_conv = builder.add(checked_mul(host.linear_conv_layer_bytes, spec.linear.layers,
                                                "StateImage host convolution bytes overflow"),
@@ -131,8 +131,8 @@ StateImageHostLayout plan_host_state_image(const StateImageSpec& spec) {
                                            "StateImage host continuation hidden");
     if (spec.mtp_hidden) {
         const Tensor mtp_hidden_slot = Tensor::metadata(DType::BF16, {*spec.mtp_hidden});
-        host.mtp_hidden = builder.add(mtp_hidden_slot.bytes(), kStateImageAlignment,
-                                      "StateImage host MTP hidden");
+        host.mtp_hidden              = builder.add(mtp_hidden_slot.bytes(), kStateImageAlignment,
+                                                   "StateImage host MTP hidden");
     }
     if (spec.ple) {
         const Tensor ple_slot =
@@ -195,7 +195,7 @@ StateImageDeviceLayout plan_state_image_device_pool(LayoutBuilder& builder,
         const DFlashLocalStateSpec& dflash = *spec.dflash_local;
         out.dflash_local =
             plan_cyclic_kv_cache_pool(builder, dflash.layers, dflash.capacity, dflash.kv_heads,
-                                 dflash.head_dim, spec.linear.slot_count);
+                                      dflash.head_dim, spec.linear.slot_count);
     }
 
     out.host = plan_host_state_image(spec);
@@ -217,8 +217,7 @@ StateImageSpec shard_state_image_spec(const StateImageSpec& spec, int width, int
             "StateImage shard requires positive GDN head and channel extents");
     }
     if (linear.value_heads % width != 0) {
-        throw std::invalid_argument("StateImage shard needs " +
-                                    std::to_string(linear.value_heads) +
+        throw std::invalid_argument("StateImage shard needs " + std::to_string(linear.value_heads) +
                                     " value heads to divide by width " + std::to_string(width));
     }
     // conv_channels = 2 * key_dim + value_dim, so both segments are recoverable from the spec. Each
@@ -247,10 +246,9 @@ StateImageSpec shard_state_image_spec(const StateImageSpec& spec, int width, int
                 "StateImage shard requires a positive DFlash KV head count");
         }
         if (sharded.dflash_local->kv_heads % width != 0) {
-            throw std::invalid_argument("StateImage shard needs " +
-                                        std::to_string(sharded.dflash_local->kv_heads) +
-                                        " DFlash KV heads to divide by width " +
-                                        std::to_string(width));
+            throw std::invalid_argument(
+                "StateImage shard needs " + std::to_string(sharded.dflash_local->kv_heads) +
+                " DFlash KV heads to divide by width " + std::to_string(width));
         }
         sharded.dflash_local->kv_heads /= width;
     }

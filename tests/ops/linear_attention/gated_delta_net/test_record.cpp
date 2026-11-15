@@ -47,8 +47,8 @@ int verify_equal(const std::string& label, const std::vector<std::uint16_t>& lhs
 
 int run_case(std::int32_t value_heads, std::int32_t width, std::int32_t batch,
              std::vector<std::int32_t> valid_columns, std::uint32_t seed) {
-    const std::int32_t kQkHeads     = value_heads == 24 ? 8 : 16;
-    const bool dense                = valid_columns.empty();
+    const std::int32_t kQkHeads = value_heads == 24 ? 8 : 16;
+    const bool dense            = valid_columns.empty();
     if (dense) { valid_columns.assign(static_cast<std::size_t>(batch), width); }
     const std::int32_t columns       = width * batch;
     const std::int32_t slots         = 8;
@@ -147,20 +147,20 @@ int run_case(std::int32_t value_heads, std::int32_t width, std::int32_t batch,
         for (std::int32_t row = 0; row < batch; ++row) {
             const std::int32_t valid_extent = valid_columns[static_cast<std::size_t>(row)];
             Tensor q_row                    = q.slice(3, row, 1)
-                               .slice(2, 0, valid_extent)
-                               .view({kStateDim, kQkHeads, valid_extent});
-            Tensor k_row = k.slice(3, row, 1)
-                               .slice(2, 0, valid_extent)
-                               .view({kStateDim, kQkHeads, valid_extent});
-            Tensor v_row = v.slice(3, row, 1)
-                               .slice(2, 0, valid_extent)
-                               .view({kStateDim, value_heads, valid_extent});
-            Tensor g_row = g_tensor.slice(2, row, 1)
-                               .slice(1, 0, valid_extent)
-                               .view({value_heads, valid_extent});
-            Tensor beta_row = beta_tensor.slice(2, row, 1)
-                                  .slice(1, 0, valid_extent)
-                                  .view({value_heads, valid_extent});
+                                                  .slice(2, 0, valid_extent)
+                                                  .view({kStateDim, kQkHeads, valid_extent});
+            Tensor k_row                    = k.slice(3, row, 1)
+                                                  .slice(2, 0, valid_extent)
+                                                  .view({kStateDim, kQkHeads, valid_extent});
+            Tensor v_row                    = v.slice(3, row, 1)
+                                                  .slice(2, 0, valid_extent)
+                                                  .view({kStateDim, value_heads, valid_extent});
+            Tensor g_row                    = g_tensor.slice(2, row, 1)
+                                                  .slice(1, 0, valid_extent)
+                                                  .view({value_heads, valid_extent});
+            Tensor beta_row                 = beta_tensor.slice(2, row, 1)
+                                                  .slice(1, 0, valid_extent)
+                                                  .view({value_heads, valid_extent});
             Tensor state_row =
                 reference_states.slice(3, initial_slots[static_cast<std::size_t>(row)], 1)
                     .view({kStateDim, kStateDim, value_heads});

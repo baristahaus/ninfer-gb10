@@ -17,9 +17,7 @@ MemoryArena::MemoryArena(MemorySpan storage) : storage_(storage) { validate_memo
 
 MemoryArena::MemoryArena(std::size_t capacity_bytes) : owns_(true) {
     void* p = nullptr;
-    if (capacity_bytes > 0) {
-        CUDA_CHECK(cudaMalloc(&p, capacity_bytes));
-    }
+    if (capacity_bytes > 0) { CUDA_CHECK(cudaMalloc(&p, capacity_bytes)); }
     storage_ = MemorySpan{p, capacity_bytes, Device::cuda(0)};
 }
 
@@ -37,9 +35,7 @@ MemoryArena& MemoryArena::operator=(MemoryArena&& other) noexcept {
 }
 
 MemoryArena::~MemoryArena() {
-    if (owns_ && storage_.data != nullptr) {
-        cudaFree(storage_.data);
-    }
+    if (owns_ && storage_.data != nullptr) { cudaFree(storage_.data); }
 }
 
 MemorySpan MemoryArena::alloc_bytes(std::size_t bytes, std::size_t alignment) {

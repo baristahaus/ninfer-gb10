@@ -127,9 +127,8 @@ void normalize_flash_next_cache_options(EngineOptions& options) {
     const std::uint64_t default_private = 2ULL * concurrency;
     cache.max_private_continuations =
         cache.max_private_continuations.value_or(static_cast<std::uint32_t>(default_private));
-    cache.max_shared_prefixes =
-        cache.max_shared_prefixes.value_or(std::max(concurrency, static_cast<std::uint32_t>(
-                                                                   kMaximumExplicitPromptCacheMarkers)));
+    cache.max_shared_prefixes = cache.max_shared_prefixes.value_or(
+        std::max(concurrency, static_cast<std::uint32_t>(kMaximumExplicitPromptCacheMarkers)));
     cache.max_long_anchors_per_continuation = cache.max_long_anchors_per_continuation.value_or(2U);
     // Integrated-lane Host quota defaults: the demote-then-restore compound needs a Host
     // destination, and a zero quota makes multi-turn pressure reuse impossible (drop wins by
@@ -137,7 +136,7 @@ void normalize_flash_next_cache_options(EngineOptions& options) {
     // conversation checkpoints (69 MB class); explicit options override.
     if (!cache.host_capacity_bytes && cache.host_state_slots == 0 &&
         cache.host_kv_capacity_bytes == 0) {
-        cache.host_state_slots      = 4;
+        cache.host_state_slots       = 4;
         cache.host_kv_capacity_bytes = 1ULL << 30;
     }
     if (*cache.max_private_continuations < concurrency) {
@@ -164,8 +163,8 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     wait_for_integrated_memory_release(device);
 
     if (options.prefill_chunk == 0) {
-        options.prefill_chunk = device.properties().integrated ? kIntegratedPrefillChunk
-                                                                : kDiscretePrefillChunk;
+        options.prefill_chunk =
+            device.properties().integrated ? kIntegratedPrefillChunk : kDiscretePrefillChunk;
     }
     normalize_flash_next_cache_options(options);
 
@@ -221,14 +220,13 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
             requests.push_back({object, rank_device.device(), artifact::HostAccess::CpuOnly});
         }
         const auto obtainable = obtainable_device_bytes(rank_device, options, true);
-        artifact::TierBudget tier_budget{
-            .device_bytes = obtainable > kTierStartupReserveBytes
-                                ? obtainable - kTierStartupReserveBytes
-                                : 0,
-            .slot_cap     = tail_slot_cap};
-        auto storage = artifact::plan_materialization(reader, requests, rank_plan.tier_inputs(),
-                                                      tier_budget,
-                                                      std::move(rank_plan.materialization()));
+        artifact::TierBudget tier_budget{.device_bytes = obtainable > kTierStartupReserveBytes
+                                                             ? obtainable - kTierStartupReserveBytes
+                                                             : 0,
+                                         .slot_cap     = tail_slot_cap};
+        auto storage =
+            artifact::plan_materialization(reader, requests, rank_plan.tier_inputs(), tier_budget,
+                                           std::move(rank_plan.materialization()));
 
         // SP-4: on an integrated device the device arena, the pinned tiered warm mini-banks, and
         // the Host-resident weights all draw from one MemAvailable; the budget counts them all.
@@ -256,10 +254,10 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
                 std::to_string(obtainable >> 20) + " MiB");
         }
         if (storage.device_capacity_bytes > obtainable) {
-            throw std::invalid_argument(
-                "Flash-Next weights exceed free GPU memory: need " +
-                std::to_string(storage.device_capacity_bytes >> 20) + " MiB, obtainable " +
-                std::to_string(obtainable >> 20) + " MiB");
+            throw std::invalid_argument("Flash-Next weights exceed free GPU memory: need " +
+                                        std::to_string(storage.device_capacity_bytes >> 20) +
+                                        " MiB, obtainable " + std::to_string(obtainable >> 20) +
+                                        " MiB");
         }
         if (tier_pinned != 0 && rank_device.properties().integrated &&
             options.kv_capacity.mode == KvCapacityMode::Automatic) {
@@ -279,9 +277,8 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
 
         StartupPhaseScope materialize_phase(options.startup_observer,
                                             StartupPhase::WeightsMaterialize);
-        auto backing = artifact::materialize(reader, std::move(storage),
-                                             rank_device.transfer_view(),
-                                             &options.startup_observer);
+        auto backing = artifact::materialize(
+            reader, std::move(storage), rank_device.transfer_view(), &options.startup_observer);
         materialize_phase.complete();
         rank_weights.push_back({std::move(rank_plan), std::move(backing)});
     }
@@ -292,8 +289,8 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     if (&ninfer_launch_phase_marker != nullptr) { ninfer_launch_phase_marker("startup_done"); }
 
     const auto stats = rank_weights.front().backing.stats();
-    auto model = Model::construct_loaded_model(std::move(rank_weights.front().plan),
-                                               std::move(rank_weights.front().backing));
+    auto model       = Model::construct_loaded_model(std::move(rank_weights.front().plan),
+                                                     std::move(rank_weights.front().backing));
     auto instance    = std::make_unique<FlashNextInstance>(std::move(model), options);
 
     StartupPhaseScope planning_phase(options.startup_observer, StartupPhase::TargetFinalize);
@@ -321,9 +318,8 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
         obtainable_device_bytes(device, options, false);
 
     auto cost = resolve_context_machine_cost(
-        {.hardware_class = context_cost_hardware_class(device.properties().name,
-                                                       device.properties().major,
-                                                       device.properties().minor),
+        {.hardware_class = context_cost_hardware_class(
+             device.properties().name, device.properties().major, device.properties().minor),
          .prefill_signature = "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1"},
         options.context_cost.preset_path);
     LoadSummary summary;
@@ -331,14 +327,14 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     summary.model_name   = reader.directory().metadata.value("name", "qwen3.8-flash-next-125b-a6b");
     summary.prefill_signature = "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1";
     summary.weight_formats.assign(formats.begin(), formats.end());
-    summary.load_seconds             = std::chrono::duration<double>(Clock::now() - start).count();
-    summary.upload_seconds           = stats.upload_seconds;
-    summary.artifact_bytes_read      = stats.read_bytes;
-    summary.host_to_device_bytes     = stats.h2d_bytes;
-    summary.max_rank_staging_bytes   = stats.peak_staging_bytes;
-    summary.device_object_count      = stats.device_object_count;
-    summary.host_object_count        = stats.host_object_count;
-    summary.context_cost             = std::move(cost.summary);
+    summary.load_seconds           = std::chrono::duration<double>(Clock::now() - start).count();
+    summary.upload_seconds         = stats.upload_seconds;
+    summary.artifact_bytes_read    = stats.read_bytes;
+    summary.host_to_device_bytes   = stats.h2d_bytes;
+    summary.max_rank_staging_bytes = stats.peak_staging_bytes;
+    summary.device_object_count    = stats.device_object_count;
+    summary.host_object_count      = stats.host_object_count;
+    summary.context_cost           = std::move(cost.summary);
 
     ConstructedFlashNextModel constructed;
     constructed.instance     = std::move(instance);

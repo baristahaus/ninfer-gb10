@@ -37,11 +37,12 @@ void launch_recurrent_batch_update(const Tensor& q, const Tensor& k, const Tenso
                                    const Tensor& destination_state_slots, Tensor& out,
                                    cudaStream_t stream);
 
-void launch_recurrent_batch_update_packed_qkv(
-    const Tensor& packed_qkv, std::int32_t qk_heads, std::int32_t value_heads,
-    const Tensor& g, const Tensor& beta, float scale, Tensor& ssm_states,
-    const Tensor& source_state_slots, const Tensor& destination_state_slots,
-    Tensor& out, cudaStream_t stream);
+void launch_recurrent_batch_update_packed_qkv(const Tensor& packed_qkv, std::int32_t qk_heads,
+                                              std::int32_t value_heads, const Tensor& g,
+                                              const Tensor& beta, float scale, Tensor& ssm_states,
+                                              const Tensor& source_state_slots,
+                                              const Tensor& destination_state_slots, Tensor& out,
+                                              cudaStream_t stream);
 
 void launch_recurrent_record(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                              const Tensor& beta, float scale, const Tensor& ssm_states,

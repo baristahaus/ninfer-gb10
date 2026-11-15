@@ -27,7 +27,7 @@ public:
     explicit Bf16GemmContext(cudaStream_t stream);
     ~Bf16GemmContext();
 
-    Bf16GemmContext(const Bf16GemmContext&) = delete;
+    Bf16GemmContext(const Bf16GemmContext&)            = delete;
     Bf16GemmContext& operator=(const Bf16GemmContext&) = delete;
 
     void launch(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
@@ -69,12 +69,10 @@ enum class LinearPolicy : std::uint8_t {
  * `[min_tokens,max_tokens]` interval. Invalid registered profiles, policies, or intervals throw;
  * a legal route that requires no transient storage returns zero.
  */
-[[nodiscard]] std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_rows,
-                                                          std::int32_t input_rows,
-                                                          LinearPolicy policy,
-                                                          std::int32_t min_tokens,
-                                                          std::int32_t max_tokens,
-                                                          std::string_view tag = {});
+[[nodiscard]] std::size_t
+linear_workspace_capacity_bytes(QType qtype, std::int32_t output_rows, std::int32_t input_rows,
+                                LinearPolicy policy, std::int32_t min_tokens,
+                                std::int32_t max_tokens, std::string_view tag = {});
 
 /**
  * Y[n,t] = sum_k decode(W)[n,k] * X[k,t].

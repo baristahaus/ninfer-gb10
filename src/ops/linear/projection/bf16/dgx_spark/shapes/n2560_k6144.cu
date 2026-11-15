@@ -18,7 +18,7 @@ using HotTma     = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<64, 32, 128, 16, 1
 using Prefill128 = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1>, 6144>;
 using Prefill192 = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<160, 192, 64, 80, 48, 2, 1>, 6144>;
 using Large128   = Bf16ScheduleInstance<
-      Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::Grouped, 12, 3>, 6144>;
+    Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1, Bf16MmaRaster::Grouped, 12, 3>, 6144>;
 using Large192 = Bf16ScheduleInstance<
     Bf16A16TmaMmaSchedule<160, 192, 64, 80, 48, 2, 1, Bf16MmaRaster::Grouped, 8>, 6144>;
 

@@ -33,8 +33,8 @@ void selection(QType format, QuantLayout layout, const char* name, const char* e
                                          {"bytes", g.bytes}}});
     f.root["bindings"]   = {{"source", {{"object", "source"}}}};
     f.root["uses"]       = Json::array();
-    f.root["files"]      = Json::array({{{"path", nullptr}, {"payload_bytes", 19001}},
-                                        {{"path", "second.bin"}, {"payload_bytes", g.bytes - 19001}}});
+    f.root["files"] = Json::array({{{"path", nullptr}, {"payload_bytes", 19001}},
+                                   {{"path", "second.bin"}, {"payload_bytes", g.bytes - 19001}}});
     f.write();
     Reader reader(f.entry);
     const auto object = reader.find("source");
@@ -58,7 +58,7 @@ void selection(QType format, QuantLayout layout, const char* name, const char* e
     const auto& d      = parent.geometry;
     const auto equal   = [&](std::uint64_t destination, std::uint64_t source, std::uint64_t bytes) {
         require(std::memcmp(parent.data + destination, f.payload.data() + source, bytes) == 0,
-                  "selected encoded words differ from source coordinates");
+                "selected encoded words differ from source coordinates");
     };
     for (std::uint64_t row = 0; row < 256; ++row) {
         const auto src = origin + (row < 128 ? row + 256 : row - 128);

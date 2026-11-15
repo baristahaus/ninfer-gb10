@@ -28,8 +28,7 @@ struct EngineRun {
 };
 
 EngineRun greedy_run(const char* artifact, const std::string& prompt_text, bool speculative,
-                     ninfer::SpeculativeBackend backend, unsigned draft_tokens,
-                     unsigned outputs) {
+                     ninfer::SpeculativeBackend backend, unsigned draft_tokens, unsigned outputs) {
     ninfer::EngineOptions options;
     options.artifact_path   = artifact;
     options.max_context     = 2304;
@@ -38,8 +37,8 @@ EngineRun greedy_run(const char* artifact, const std::string& prompt_text, bool 
     options.max_concurrency = 2;
     options.use_cuda_graph  = true;
     if (speculative) {
-        options.speculative.backend      = backend;
-        options.speculative.draft_tokens = draft_tokens;
+        options.speculative.backend       = backend;
+        options.speculative.draft_tokens  = draft_tokens;
         options.speculative.proposal_head = ninfer::ProposalHead::Full;
     }
     ninfer::Engine engine(options);
@@ -84,17 +83,17 @@ void compare(const EngineRun& reference, const EngineRun& speculative, const cha
 int main() {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set "
+                     "it to a .ninfer file\n";
         return 77;
     }
     try {
-        const std::string prompt =
-            "Complete this sentence with exactly one short factual clause: "
-            "The primary gas in Earth's atmosphere is";
+        const std::string prompt = "Complete this sentence with exactly one short factual clause: "
+                                   "The primary gas in Earth's atmosphere is";
 
         // The non-speculative reference for every comparison below.
-        const auto reference = greedy_run(artifact, prompt, false, ninfer::SpeculativeBackend::Mtp,
-                                          0, 32);
+        const auto reference =
+            greedy_run(artifact, prompt, false, ninfer::SpeculativeBackend::Mtp, 0, 32);
 
         // MTP: single stream. The draft and verify rounds must reproduce the reference
         // exactly, with at least one rejection proving the fold/commit path ran.
@@ -102,8 +101,8 @@ int main() {
         compare(reference, mtp, "MTP single stream");
 
         // DFlash2: the wide-window record path (the decomposed EXL3 route at T=8).
-        const auto dflash2 = greedy_run(artifact, prompt, true,
-                                        ninfer::SpeculativeBackend::DFlash2, 7, 32);
+        const auto dflash2 =
+            greedy_run(artifact, prompt, true, ninfer::SpeculativeBackend::DFlash2, 7, 32);
         compare(reference, dflash2, "DFlash2 single stream");
 
         // Batched: two concurrent rows through the compact record round (B=2). Each
@@ -111,13 +110,13 @@ int main() {
         // let one row's draft contaminate another's state.
         {
             ninfer::EngineOptions options;
-            options.artifact_path   = artifact;
-            options.max_context     = 2304;
-            options.kv_capacity     = ninfer::KvCapacityPolicy::explicit_capacity(2304 * 2);
-            options.prefill_chunk   = 2304;
-            options.max_concurrency = 2;
-            options.use_cuda_graph  = true;
-            options.speculative.backend       = ninfer::SpeculativeBackend::DFlash2;
+            options.artifact_path       = artifact;
+            options.max_context         = 2304;
+            options.kv_capacity         = ninfer::KvCapacityPolicy::explicit_capacity(2304 * 2);
+            options.prefill_chunk       = 2304;
+            options.max_concurrency     = 2;
+            options.use_cuda_graph      = true;
+            options.speculative.backend = ninfer::SpeculativeBackend::DFlash2;
             options.speculative.draft_tokens  = 7;
             options.speculative.proposal_head = ninfer::ProposalHead::Full;
             ninfer::Engine engine(options);

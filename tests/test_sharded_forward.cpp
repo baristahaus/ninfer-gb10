@@ -76,7 +76,7 @@ std::vector<double> sample(std::size_t count, double seed, double scale) {
     std::vector<double> out(count);
     std::uint64_t state = static_cast<std::uint64_t>(seed);
     for (std::size_t i = 0; i < count; ++i) {
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        state             = state * 6364136223846793005ULL + 1442695040888963407ULL;
         const double unit = static_cast<double>(state >> 11) / 9007199254740992.0; // [0,1)
         out[i]            = (unit * 2.0 - 1.0) * scale;
     }
@@ -102,27 +102,27 @@ double worst_relative(const std::vector<double>& got, const std::vector<double>&
 
 // The 27B's dense MLP shape, shrunk so the oracle runs in FP64 without a 17408x5120 matrix: the
 // ratio of rows to inner to columns is what the composition argument depends on, not the size.
-constexpr int kRows     = 8;
-constexpr int kInner    = 6;
-constexpr int kColumns  = 3;
-constexpr int kWidth    = 2;
+constexpr int kRows    = 8;
+constexpr int kInner   = 6;
+constexpr int kColumns = 3;
+constexpr int kWidth   = 2;
 
 // ------------------------------------------------------------------ 1. row-parallel
 void check_row_parallel() {
-    const auto w = sample(static_cast<std::size_t>(kRows) * kInner, 1, 1.0);
-    const auto x = sample(static_cast<std::size_t>(kInner) * kColumns, 2, 1.0);
+    const auto w     = sample(static_cast<std::size_t>(kRows) * kInner, 1, 1.0);
+    const auto x     = sample(static_cast<std::size_t>(kInner) * kColumns, 2, 1.0);
     const auto whole = reference(w, x, kRows, kInner, kColumns);
 
-    const auto placement = ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Rows, kRows,
-                                                          kWidth);
+    const auto placement =
+        ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Rows, kRows, kWidth);
     std::vector<double> composed(whole.size(), 0.0);
     for (int rank = 0; rank < kWidth; ++rank) {
         const auto range = placement.ranges[static_cast<std::size_t>(rank)];
         // Rank `rank` computes ONLY its own output rows, from the FULL input.
-        std::vector<double> shard_w(
-            w.begin() + range.begin * kInner,
-            w.begin() + (range.begin + range.extent) * kInner);
-        const auto partial = reference(shard_w, x, static_cast<int>(range.extent), kInner, kColumns);
+        std::vector<double> shard_w(w.begin() + range.begin * kInner,
+                                    w.begin() + (range.begin + range.extent) * kInner);
+        const auto partial =
+            reference(shard_w, x, static_cast<int>(range.extent), kInner, kColumns);
         for (int n = 0; n < range.extent; ++n) {
             for (int t = 0; t < kColumns; ++t) {
                 composed[static_cast<std::size_t>(range.begin + n) * kColumns + t] =
@@ -138,19 +138,18 @@ void check_row_parallel() {
 
 // ------------------------------------------------------------------ 2. column-parallel
 void check_column_parallel() {
-    const auto w = sample(static_cast<std::size_t>(kRows) * kInner, 3, 1.0);
-    const auto x = sample(static_cast<std::size_t>(kInner) * kColumns, 4, 1.0);
+    const auto w     = sample(static_cast<std::size_t>(kRows) * kInner, 3, 1.0);
+    const auto x     = sample(static_cast<std::size_t>(kInner) * kColumns, 4, 1.0);
     const auto whole = reference(w, x, kRows, kInner, kColumns);
 
-    const auto placement = ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Columns,
-                                                          kInner, kWidth);
+    const auto placement =
+        ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Columns, kInner, kWidth);
     std::vector<double> sum(whole.size(), 0.0);
     for (int rank = 0; rank < kWidth; ++rank) {
         const auto range = placement.ranges[static_cast<std::size_t>(rank)];
         // Rank `rank` computes a FULL-WIDTH partial over ONLY its own input columns.
-        std::vector<double> shard_x(
-            x.begin() + range.begin * kColumns,
-            x.begin() + (range.begin + range.extent) * kColumns);
+        std::vector<double> shard_x(x.begin() + range.begin * kColumns,
+                                    x.begin() + (range.begin + range.extent) * kColumns);
         std::vector<double> shard_w(static_cast<std::size_t>(kRows) * range.extent);
         for (int n = 0; n < kRows; ++n) {
             for (int k = 0; k < range.extent; ++k) {
@@ -170,19 +169,18 @@ void check_column_parallel() {
 
 // ------------------------------------------------------------------ 3. the residual rule
 void check_residual_added_once() {
-    const auto w = sample(static_cast<std::size_t>(kRows) * kInner, 5, 1.0);
-    const auto x = sample(static_cast<std::size_t>(kInner) * kColumns, 6, 1.0);
+    const auto w        = sample(static_cast<std::size_t>(kRows) * kInner, 5, 1.0);
+    const auto x        = sample(static_cast<std::size_t>(kInner) * kColumns, 6, 1.0);
     const auto residual = sample(static_cast<std::size_t>(kRows) * kColumns, 7, 0.5);
     const auto whole    = reference(w, x, kRows, kInner, kColumns);
 
-    const auto placement = ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Columns,
-                                                          kInner, kWidth);
+    const auto placement =
+        ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Columns, kInner, kWidth);
     std::vector<double> partial_sum(whole.size(), 0.0);
     for (int rank = 0; rank < kWidth; ++rank) {
         const auto range = placement.ranges[static_cast<std::size_t>(rank)];
-        std::vector<double> shard_x(
-            x.begin() + range.begin * kColumns,
-            x.begin() + (range.begin + range.extent) * kColumns);
+        std::vector<double> shard_x(x.begin() + range.begin * kColumns,
+                                    x.begin() + (range.begin + range.extent) * kColumns);
         std::vector<double> shard_w(static_cast<std::size_t>(kRows) * range.extent);
         for (int n = 0; n < kRows; ++n) {
             for (int k = 0; k < range.extent; ++k) {
@@ -200,7 +198,8 @@ void check_residual_added_once() {
     for (std::size_t i = 0; i < after.size(); ++i) { after[i] = partial_sum[i] + residual[i]; }
     std::vector<double> want(whole.size());
     for (std::size_t i = 0; i < want.size(); ++i) { want[i] = whole[i] + residual[i]; }
-    check(equal_within(after, want, 1e-12), "the residual added after the sum appears exactly once");
+    check(equal_within(after, want, 1e-12),
+          "the residual added after the sum appears exactly once");
 
     // The trap: `linear_add` on both ranks, then the sum. Each rank's partial carries the residual,
     // so the composed result carries it twice.
@@ -217,18 +216,17 @@ void check_residual_added_once() {
 // column-parallel projection is NOT bit-identical to the unsharded one. This measures the gap
 // against the FP64 oracle rather than asserting it away.
 void check_bf16_storage_cost() {
-    const auto w = sample(static_cast<std::size_t>(kRows) * kInner, 8, 1.0);
-    const auto x = sample(static_cast<std::size_t>(kInner) * kColumns, 9, 1.0);
+    const auto w     = sample(static_cast<std::size_t>(kRows) * kInner, 8, 1.0);
+    const auto x     = sample(static_cast<std::size_t>(kInner) * kColumns, 9, 1.0);
     const auto whole = reference(w, x, kRows, kInner, kColumns);
 
-    const auto placement = ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Columns,
-                                                          kInner, kWidth);
+    const auto placement =
+        ninfer::artifact::split_evenly(ninfer::artifact::ShardAxis::Columns, kInner, kWidth);
     std::vector<double> composed(whole.size(), 0.0);
     for (int rank = 0; rank < kWidth; ++rank) {
         const auto range = placement.ranges[static_cast<std::size_t>(rank)];
-        std::vector<double> shard_x(
-            x.begin() + range.begin * kColumns,
-            x.begin() + (range.begin + range.extent) * kColumns);
+        std::vector<double> shard_x(x.begin() + range.begin * kColumns,
+                                    x.begin() + (range.begin + range.extent) * kColumns);
         std::vector<double> shard_w(static_cast<std::size_t>(kRows) * range.extent);
         for (int n = 0; n < kRows; ++n) {
             for (int k = 0; k < range.extent; ++k) {

@@ -47,16 +47,13 @@ std::string read_file(const std::filesystem::path& path) {
 // The detokenizer stands in for the Engine's: one token is one character offset from 'a'.
 std::string fake_detokenize(std::span<const TokenId> tokens) {
     std::string text;
-    for (const TokenId token : tokens) {
-        text.push_back(static_cast<char>('a' + token % 26));
-    }
+    for (const TokenId token : tokens) { text.push_back(static_cast<char>('a' + token % 26)); }
     return text;
 }
 
 PrefillMissDumpOptions options_for(const std::filesystem::path& directory,
-                                   std::uint32_t min_tokens = 10,
-                                   double min_match         = 0.5,
-                                   std::size_t history      = 16) {
+                                   std::uint32_t min_tokens = 10, double min_match = 0.5,
+                                   std::size_t history = 16) {
     PrefillMissDumpOptions options;
     options.directory  = directory;
     options.min_tokens = min_tokens;
@@ -115,11 +112,10 @@ int main() {
             const std::filesystem::path directory(report->directory);
             for (const char* name : {"new_prompt.txt", "old_context.txt", "new_prompt.tokens.json",
                                      "old_context.tokens.json", "summary.json"}) {
-                failures += check(std::filesystem::exists(directory / name),
-                                  "the dump is missing a file");
+                failures +=
+                    check(std::filesystem::exists(directory / name), "the dump is missing a file");
             }
-            const auto summary =
-                nlohmann::json::parse(read_file(directory / "summary.json"));
+            const auto summary = nlohmann::json::parse(read_file(directory / "summary.json"));
             failures += check(summary.at("divergence").at("token_index") == 80,
                               "summary.json lost the divergence index");
             failures += check(summary.at("recomputed_shared_tokens") == 80,
@@ -131,8 +127,9 @@ int main() {
                                   reading.at(0).get<std::string>().rfind("client:", 0) == 0 &&
                                   reading.at(1).get<std::string>().rfind("server:", 0) == 0,
                               "summary.json did not report both readings");
-            failures += check(read_file(directory / "new_prompt.txt") == fake_detokenize(new_prompt),
-                              "new_prompt.txt is not the detokenized prompt");
+            failures +=
+                check(read_file(directory / "new_prompt.txt") == fake_detokenize(new_prompt),
+                      "new_prompt.txt is not the detokenized prompt");
         }
     }
 
@@ -149,10 +146,10 @@ int main() {
         if (report) {
             const auto summary = nlohmann::json::parse(
                 read_file(std::filesystem::path(report->directory) / "summary.json"));
-            failures += check(summary.at("reading").size() == 1 &&
-                                  summary.at("reading").at(0).get<std::string>().rfind(
-                                      "client:", 0) == 0,
-                              "summary.json did not report the client-side reading");
+            failures +=
+                check(summary.at("reading").size() == 1 &&
+                          summary.at("reading").at(0).get<std::string>().rfind("client:", 0) == 0,
+                      "summary.json did not report the client-side reading");
         }
     }
 

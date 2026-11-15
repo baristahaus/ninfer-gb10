@@ -341,8 +341,8 @@ int run_case(const FoldProfile profile, std::int32_t width, std::int32_t rows,
             for (int token = 0; token < width; ++token) {
                 Tensor query = q_tensor.slice(2, token, 1).view({kStateDim, kQkHeads, 1});
                 Tensor key   = layer_records.key.slice(3, row, 1)
-                                 .slice(2, token, 1)
-                                 .view({kStateDim, kQkHeads, 1});
+                                   .slice(2, token, 1)
+                                   .view({kStateDim, kQkHeads, 1});
                 Tensor value = layer_records.value.slice(3, row, 1)
                                    .slice(2, token, 1)
                                    .view({kStateDim, profile.value_heads, 1});

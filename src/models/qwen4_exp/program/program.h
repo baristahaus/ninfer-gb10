@@ -36,11 +36,13 @@ public:
     void start_frame(runtime::ExecutionRequest<ExecutionTypes>&&);
     void start(runtime::ExecutionRequest<ExecutionTypes>&&);
     void progress();
+
     // This family issues no cross-rank collectives, so its position in the collective sequence is
     // always zero. It is part of the local executor's rank contract because the executor drives any
     // family's ranks, and the count is what tells it whether a rank is waiting on a peer. See
     // RankProgramImpl::collective_count in the Qwen3.5 family for the populated case.
     [[nodiscard]] std::size_t collective_count() const { return 0; }
+
     void validate_decision(runtime::ExecutionTicket, const runtime::DecisionInput&) const;
     void supply(runtime::ExecutionTicket, runtime::CommandSequence, runtime::DecisionInput&&);
     void prepare_commit(runtime::ExecutionTicket, Commit&) const;

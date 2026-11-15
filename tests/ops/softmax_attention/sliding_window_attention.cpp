@@ -365,7 +365,8 @@ int main(int argc, char** argv) {
     // The Flash-Next DFlash2 draft runs a four-column block over a short context.
     for (int width : {4, 5})
         for (int batch : {1, 8})
-            for (int length : {15, 16, 17}) add(cache, width, batch, length, length, Prefix::Mixed, false);
+            for (int length : {15, 16, 17})
+                add(cache, width, batch, length, length, Prefix::Mixed, false);
     for (int width : {2, 8, 16})
         for (int batch : {1, 8}) {
             const int length = width == 16 ? 262144 : width == 8 ? 4103 : 2048;

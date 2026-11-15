@@ -72,9 +72,8 @@ void bf16_gdn_gating_execute_plan(const Bf16GdnGatingPlan& plan, const Tensor& x
                                   Tensor& g, Tensor& beta, CudaExecutionView execution);
 void bf16_gdn_gating_execute_candidate(Bf16GdnGatingScheduleId schedule, const Tensor& x,
                                        const Weight& a_weight, const Weight& b_weight,
-                                       const Tensor& A_log, const Tensor& dt_bias,
-                                       MemoryArena& ws, Tensor& g, Tensor& beta,
-                                       CudaExecutionView execution);
+                                       const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws,
+                                       Tensor& g, Tensor& beta, CudaExecutionView execution);
 void bf16_gdn_gating_dispatch(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
                               const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws,
                               Tensor& g, Tensor& beta, CudaExecutionView execution);

@@ -51,10 +51,10 @@ std::ptrdiff_t layer_pitch(const std::vector<Tensor>& layers, const char* label)
 
 } // namespace
 
-CyclicKVCachePoolLayout
-plan_cyclic_kv_cache_pool(LayoutBuilder& builder, std::uint32_t layers, std::uint32_t capacity,
-                          std::int32_t num_kv_heads, std::int32_t head_dim,
-                          std::int32_t lane_capacity) {
+CyclicKVCachePoolLayout plan_cyclic_kv_cache_pool(LayoutBuilder& builder, std::uint32_t layers,
+                                                  std::uint32_t capacity, std::int32_t num_kv_heads,
+                                                  std::int32_t head_dim,
+                                                  std::int32_t lane_capacity) {
     if (layers == 0 || capacity == 0 ||
         capacity > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
         num_kv_heads <= 0 || head_dim <= 0 || lane_capacity <= 0) {

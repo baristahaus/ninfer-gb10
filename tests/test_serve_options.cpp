@@ -110,8 +110,7 @@ void test_anchor_options() {
     rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--turn-anchors", "-1"}); });
     rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--turn-anchors"}); });
     rejects([] {
-        (void)parse({"ninfer-serve", "model.ninfer", "--max-long-anchors-per-continuation",
-                     "-1"});
+        (void)parse({"ninfer-serve", "model.ninfer", "--max-long-anchors-per-continuation", "-1"});
     });
 }
 
@@ -121,18 +120,19 @@ void test_recovered_serve_flags() {
     const auto capacities = parse({"ninfer-serve", "model.ninfer", "--host-state-slots", "6",
                                    "--host-kv-mib", "4096", "--max-private-continuations", "4",
                                    "--max-shared-prefixes", "8", "--extra-state-slots", "2"});
-    const auto& cache = capacities.launch.engine.context_cache;
+    const auto& cache     = capacities.launch.engine.context_cache;
     require(cache.host_state_slots == 6, "--host-state-slots did not reach the engine options");
     require(cache.host_kv_capacity_bytes == (4096ULL << 20U),
             "--host-kv-mib did not convert MiB to bytes");
     require(cache.max_private_continuations == 4,
             "--max-private-continuations did not reach the engine options");
-    require(cache.max_shared_prefixes == 8, "--max-shared-prefixes did not reach the engine options");
+    require(cache.max_shared_prefixes == 8,
+            "--max-shared-prefixes did not reach the engine options");
     require(cache.extra_state_slots == 2, "--extra-state-slots did not reach the engine options");
 
     // The startup configuration report must carry the same values: a field with no report case
     // renders as an empty row.
-    const auto view = ninfer::product::configuration_view(capacities);
+    const auto view     = ninfer::product::configuration_view(capacities);
     const auto reported = [&](std::string_view key) -> std::optional<std::uint64_t> {
         for (const auto& item : view.items) {
             if (item.key != key) { continue; }
@@ -160,7 +160,8 @@ void test_recovered_serve_flags() {
     const auto logprobs = parse({"ninfer-serve", "model.ninfer", "--token-logprobs"});
     require(logprobs.launch.engine.token_logprobs, "--token-logprobs did not reach the engine");
     const auto no_logprobs = parse({"ninfer-serve", "model.ninfer", "--no-token-logprobs"});
-    require(!no_logprobs.launch.engine.token_logprobs, "--no-token-logprobs did not clear the flag");
+    require(!no_logprobs.launch.engine.token_logprobs,
+            "--no-token-logprobs did not clear the flag");
 
     // Ranges and the `default` keyword.
     const auto unset = parse({"ninfer-serve", "model.ninfer", "--host-state-slots", "default",
@@ -169,7 +170,8 @@ void test_recovered_serve_flags() {
                 !unset.launch.engine.context_cache.host_kv_capacity_bytes &&
                 !unset.launch.engine.context_cache.max_shared_prefixes,
             "`default` did not clear a capacity");
-    rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--prefill-decode-share", "1001"}); });
+    rejects(
+        [] { (void)parse({"ninfer-serve", "model.ninfer", "--prefill-decode-share", "1001"}); });
     rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--host-state-slots", "-1"}); });
 }
 

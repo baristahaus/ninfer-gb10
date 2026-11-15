@@ -12,17 +12,17 @@ namespace {
 using Geometry = Nvfp4Geometry<5120, 8704>;
 using Gemv =
     Nvfp4A16GemvSchedule<8, 2, 16, 4, Nvfp4ScaleAccess::StagedRaw, Nvfp4CodeCache::Default, 2>;
-using C2      = Nvfp4A16SimtSchedule<4, 1, 2, 16, 2, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                     Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                     Nvfp4SimtBlockOrder::RowsContiguous, 1>;
-using C4      = Nvfp4A16SimtSchedule<4, 1, 2, 16, 4, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                     Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                     Nvfp4SimtBlockOrder::RowsContiguous, 1>;
-using C5      = Nvfp4A16SimtSchedule<4, 1, 2, 16, 5, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                     Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                     Nvfp4SimtBlockOrder::RowsContiguous, 1>;
+using C2 = Nvfp4A16SimtSchedule<4, 1, 2, 16, 2, 1, Nvfp4SimtActivationAccess::TokenPacked,
+                                Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
+                                Nvfp4SimtBlockOrder::RowsContiguous, 1>;
+using C4 = Nvfp4A16SimtSchedule<4, 1, 2, 16, 4, 1, Nvfp4SimtActivationAccess::TokenPacked,
+                                Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
+                                Nvfp4SimtBlockOrder::RowsContiguous, 1>;
+using C5 = Nvfp4A16SimtSchedule<4, 1, 2, 16, 5, 1, Nvfp4SimtActivationAccess::TokenPacked,
+                                Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
+                                Nvfp4SimtBlockOrder::RowsContiguous, 1>;
 // 5120/64 = 80 row tiles, 160 CTAs at T<=64.
-using T32R64  = Nvfp4A4MmaSchedule<32, 64, 256, 2, 4, 2, 2>;
+using T32R64 = Nvfp4A4MmaSchedule<32, 64, 256, 2, 4, 2, 2>;
 // 5120/128 = 40 row tiles: 160 CTAs at T=128, 120 at T=192.
 using T32R128 = Nvfp4A4MmaSchedule<32, 128, 256, 2, 4, 2, 1>;
 using T64R128 = Nvfp4A4MmaSchedule<64, 128, 256, 4, 2, 2, 1>;

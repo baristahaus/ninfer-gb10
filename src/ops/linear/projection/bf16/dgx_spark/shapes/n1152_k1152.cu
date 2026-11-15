@@ -12,12 +12,12 @@ template <class Base>
 using Output = Bf16VisionOutputSchedule<Bf16ScheduleInstance<Base, 1152>>;
 using Tiny   = Output<Bf16A16SlicedKMmaSchedule<16, 8, 3, 128, 2>>;
 using Small  = Bf16VisionOutputSchedule<
-     Bf16KTailSchedule<Bf16ScheduleInstance<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 2>, 1152>>>;
+    Bf16KTailSchedule<Bf16ScheduleInstance<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 2>, 1152>>>;
 using Middle =
     Output<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
                               Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>>;
-using Hot     = Output<Bf16A16MmaSchedule<32, 32, 64, 16, 8, 3, 2, Cache::cg, Cache::cg,
-                                          Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>>;
+using Hot = Output<Bf16A16MmaSchedule<32, 32, 64, 16, 8, 3, 2, Cache::cg, Cache::cg,
+                                      Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>>;
 using Narrow  = Output<Bf16A16TmaMmaSchedule<64, 32, 64, 16, 16, 3, 2>>;
 using Medium  = Output<Bf16A16TmaMmaSchedule<64, 64, 64, 32, 16, 3, 2>>;
 using Wide96  = Output<Bf16A16TmaMmaSchedule<96, 128, 64, 32, 32, 3, 1>>;

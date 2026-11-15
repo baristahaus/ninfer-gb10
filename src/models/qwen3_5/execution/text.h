@@ -28,8 +28,8 @@ struct TextExecutionView {
     // this rank's exchange on this rank's own stream.
     const ShardedCollective* collective = nullptr;
     // Full-width BF16 [hidden, capacity] partials, one per rank's device. BOTH PROGRAMS PASS THE
-    // SAME PAIR, because the combine reads and writes both buffers. Empty until the two-Program lane
-    // supplies it; the sharded helpers reject an empty pair loudly rather than reading nulls.
+    // SAME PAIR, because the combine reads and writes both buffers. Empty until the two-Program
+    // lane supplies it; the sharded helpers reject an empty pair loudly rather than reading nulls.
     std::array<Tensor, 2> partials{};
 };
 
@@ -111,6 +111,7 @@ public:
         }
         return {view_.partials[0].slice(1, 0, tokens), view_.partials[1].slice(1, 0, tokens)};
     }
+
     void finish();
     void set_attention_envelope(ops::CausalAttentionExecutionEnvelope envelope) noexcept;
 

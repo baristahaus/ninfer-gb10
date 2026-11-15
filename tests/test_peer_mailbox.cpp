@@ -43,7 +43,7 @@ int device_count() {
 }
 
 // 640 vectors of 16 bytes: the single-token decode activation size the transport is built for.
-constexpr std::size_t kBytes = 10240;
+constexpr std::size_t kBytes       = 10240;
 constexpr std::uint16_t kBf16One   = 0x3F80; // 1.0
 constexpr std::uint16_t kBf16Two   = 0x4000; // 2.0
 constexpr std::uint16_t kBf16Three = 0x4040; // 3.0
@@ -57,14 +57,15 @@ int test_exchange_sum() {
     failures += check(mailbox.max_bytes() >= kBytes, "max_bytes covers the payload");
     failures += check(!mailbox.hang_reported(), "a fresh mailbox reports no hang");
 
-    void* payload[2] = {nullptr, nullptr};
+    void* payload[2]            = {nullptr, nullptr};
     const std::uint16_t fill[2] = {kBf16One, kBf16Two};
     std::vector<std::uint16_t> host(kBytes / sizeof(std::uint16_t));
     for (int rank = 0; rank < 2; ++rank) {
         const CudaDeviceScope scope(Device::cuda(rank));
         std::fill(host.begin(), host.end(), fill[rank]);
         cudaError_t status = cudaMalloc(&payload[rank], kBytes);
-        failures += check(status == cudaSuccess, "payload allocation on rank " + std::to_string(rank));
+        failures +=
+            check(status == cudaSuccess, "payload allocation on rank " + std::to_string(rank));
         if (status != cudaSuccess) { return failures; }
         status = cudaMemcpy(payload[rank], host.data(), kBytes, cudaMemcpyHostToDevice);
         failures += check(status == cudaSuccess, "payload fill on rank " + std::to_string(rank));
@@ -83,8 +84,7 @@ int test_exchange_sum() {
                           "rank " + std::to_string(rank) + " synchronized");
     }
 
-    failures += check(!mailbox.hang_reported(),
-                      "no poller gave up: both ranks met on the mailbox");
+    failures += check(!mailbox.hang_reported(), "no poller gave up: both ranks met on the mailbox");
 
     // Every element of both payloads must be 1.0 + 2.0.
     for (int rank = 0; rank < 2; ++rank) {
@@ -98,9 +98,10 @@ int test_exchange_sum() {
         for (const std::uint16_t value : host) {
             if (value != kBf16Three) { ++wrong; }
         }
-        failures += check(wrong == 0, "rank " + std::to_string(rank) + " holds the elementwise sum (" +
-                                          std::to_string(wrong) + " of " +
-                                          std::to_string(host.size()) + " elements differ)");
+        failures +=
+            check(wrong == 0, "rank " + std::to_string(rank) + " holds the elementwise sum (" +
+                                  std::to_string(wrong) + " of " + std::to_string(host.size()) +
+                                  " elements differ)");
     }
 
     for (int rank = 0; rank < 2; ++rank) {
@@ -118,10 +119,10 @@ int test_allreduce_sum() {
 
     // Reported rather than asserted: peer access depends on the driver and the board, and this
     // transport does not need it.
-    std::cout << "peer access available: " << (ninfer::ops::peer_access_available(context) ? "yes" : "no")
-              << '\n';
+    std::cout << "peer access available: "
+              << (ninfer::ops::peer_access_available(context) ? "yes" : "no") << '\n';
 
-    void* payload[2] = {nullptr, nullptr};
+    void* payload[2]            = {nullptr, nullptr};
     const std::uint16_t fill[2] = {kBf16One, kBf16Two};
     std::vector<std::uint16_t> host(kBytes / sizeof(std::uint16_t));
     for (int rank = 0; rank < 2; ++rank) {
@@ -146,9 +147,11 @@ int test_allreduce_sum() {
         std::fill(host.begin(), host.end(), 0);
         (void)cudaMemcpy(host.data(), payload[rank], kBytes, cudaMemcpyDeviceToHost);
         std::size_t wrong = 0;
-        for (const std::uint16_t value : host) { if (value != kBf16Three) { ++wrong; } }
-        failures += check(wrong == 0, "allreduce rank " + std::to_string(rank) +
-                                          " holds the elementwise sum");
+        for (const std::uint16_t value : host) {
+            if (value != kBf16Three) { ++wrong; }
+        }
+        failures += check(wrong == 0,
+                          "allreduce rank " + std::to_string(rank) + " holds the elementwise sum");
         (void)cudaFree(payload[rank]);
     }
     return failures;
@@ -162,7 +165,7 @@ int test_allreduce_sum_rank() {
     PeerMailbox mailbox(context, kBytes);
     int failures = 0;
 
-    void* payload[2] = {nullptr, nullptr};
+    void* payload[2]            = {nullptr, nullptr};
     const std::uint16_t fill[2] = {kBf16One, kBf16Two};
     std::vector<std::uint16_t> host(kBytes / sizeof(std::uint16_t));
     for (int rank = 0; rank < 2; ++rank) {
@@ -176,10 +179,10 @@ int test_allreduce_sum_rank() {
 
     // Both ranks derive the same slot from the same index; neither advances a shared counter.
     const int slot = mailbox.slot_for(0, kBytes);
-    ninfer::ops::allreduce_sum_rank(context, mailbox, 0, slot,
-                                    std::span<void* const>(payload, 2), kBytes);
-    ninfer::ops::allreduce_sum_rank(context, mailbox, 1, slot,
-                                    std::span<void* const>(payload, 2), kBytes);
+    ninfer::ops::allreduce_sum_rank(context, mailbox, 0, slot, std::span<void* const>(payload, 2),
+                                    kBytes);
+    ninfer::ops::allreduce_sum_rank(context, mailbox, 1, slot, std::span<void* const>(payload, 2),
+                                    kBytes);
     for (int rank = 0; rank < 2; ++rank) {
         const CudaDeviceScope scope(Device::cuda(rank));
         failures += check(cudaDeviceSynchronize() == cudaSuccess,
@@ -192,7 +195,9 @@ int test_allreduce_sum_rank() {
         std::fill(host.begin(), host.end(), 0);
         (void)cudaMemcpy(host.data(), payload[rank], kBytes, cudaMemcpyDeviceToHost);
         std::size_t wrong = 0;
-        for (const std::uint16_t value : host) { if (value != kBf16Three) { ++wrong; } }
+        for (const std::uint16_t value : host) {
+            if (value != kBf16Three) { ++wrong; }
+        }
         failures += check(wrong == 0, "per-rank allreduce rank " + std::to_string(rank) +
                                           " holds the elementwise sum");
         (void)cudaFree(payload[rank]);
@@ -200,23 +205,22 @@ int test_allreduce_sum_rank() {
     return failures;
 }
 
-
 // ---- stress: the lane's reduce pattern, with self-describing payloads ---------------------------
 //
 // One 27B round issues 4096 column-parallel reduces back to back with NO synchronization between
-// them, alternating two slots, each carrying a different payload. The three tests above cannot see a
-// race in that pattern: each synchronizes after a single exchange and carries a constant fill, so a
-// stale or half-received payload still produces the expected sum. This test reproduces the pattern
-// and makes every received vector self-describing, so a mismatch NAMES the exchange the payload
-// actually came from instead of only failing a comparison.
+// them, alternating two slots, each carrying a different payload. The three tests above cannot see
+// a race in that pattern: each synchronizes after a single exchange and carries a constant fill, so
+// a stale or half-received payload still produces the expected sum. This test reproduces the
+// pattern and makes every received vector self-describing, so a mismatch NAMES the exchange the
+// payload actually came from instead of only failing a comparison.
 //
 // Tag: value = (exchange % 32) * 2 + (vector index & 1) + 1, plus 100 for rank 1. Every value is a
 // small integer, exact in BF16, and exact through the FP32 combine and its one round-to-nearest
 // store, so the expected sum 2 * tag + 100 is exact too. Consecutive exchanges differ by 2, so a
 // payload that is one exchange stale is identifiable from the value alone.
-constexpr std::size_t kStressBytes   = 60 * 1024; // the width-2 decode projection reduce payload
-constexpr int kStressExchanges       = 1024;      // raise for a longer window; 4096 is one round
-constexpr int kStressRankOffset      = 100;
+constexpr std::size_t kStressBytes = 60 * 1024; // the width-2 decode projection reduce payload
+constexpr int kStressExchanges     = 1024;      // raise for a longer window; 4096 is one round
+constexpr int kStressRankOffset    = 100;
 
 int stress_tag(int exchange, int vector_index) {
     return (exchange % 32) * 2 + (vector_index & 1) + 1;
@@ -238,7 +242,7 @@ float bf16_value_of(std::uint16_t bits) {
 int test_exchange_stress() {
     ExecutionContext context(std::vector<int>{0, 1});
     PeerMailbox mailbox(context, kStressBytes);
-    int failures = 0;
+    int failures      = 0;
     const int vectors = static_cast<int>(kStressBytes / sizeof(uint4));
 
     std::vector<void*> payload[2];
@@ -251,15 +255,15 @@ int test_exchange_stress() {
                 return check(false, "stress payload allocation failed");
             }
             for (int i = 0; i < vectors * 8; ++i) {
-                const int tag = stress_tag(k, i / 8) + rank * kStressRankOffset;
+                const int tag                     = stress_tag(k, i / 8) + rank * kStressRankOffset;
                 host[static_cast<std::size_t>(i)] = bf16_bits_of(static_cast<float>(tag));
             }
             (void)cudaMemcpy(payload[rank][k], host.data(), kStressBytes, cudaMemcpyHostToDevice);
         }
     }
 
-    // No synchronization between exchanges: this is the ordering the lane relies on, and the point of
-    // the test is that the transport must not need one.
+    // No synchronization between exchanges: this is the ordering the lane relies on, and the point
+    // of the test is that the transport must not need one.
     for (int k = 0; k < kStressExchanges; ++k) {
         const int slot = mailbox.slot_for(static_cast<std::size_t>(k), kStressBytes);
         for (int rank = 0; rank < 2; ++rank) {
@@ -283,15 +287,14 @@ int test_exchange_stress() {
         const CudaDeviceScope scope(Device::cuda(rank));
         for (int k = 0; k < kStressExchanges; ++k) {
             std::fill(host.begin(), host.end(), 0);
-            if (cudaMemcpy(host.data(), payload[rank][k], kStressBytes,
-                           cudaMemcpyDeviceToHost) != cudaSuccess) {
+            if (cudaMemcpy(host.data(), payload[rank][k], kStressBytes, cudaMemcpyDeviceToHost) !=
+                cudaSuccess) {
                 failures += check(false, "stress read back failed");
                 return failures;
             }
             for (int i = 0; i < vectors * 8; ++i) {
-                const int vector_index = i / 8;
-                const int expected =
-                    2 * stress_tag(k, vector_index) + kStressRankOffset;
+                const int vector_index   = i / 8;
+                const int expected       = 2 * stress_tag(k, vector_index) + kStressRankOffset;
                 const float actual_value = bf16_value_of(host[static_cast<std::size_t>(i)]);
                 if (static_cast<int>(actual_value) == expected) { continue; }
                 ++mismatches;
@@ -315,8 +318,8 @@ int test_exchange_stress() {
                     }
                 }
                 std::cerr << "  stress mismatch: rank " << rank << " exchange " << k << " vector "
-                          << vector_index << " element " << i << " expected " << expected
-                          << " got " << actual_value << " -> " << origin << '\n';
+                          << vector_index << " element " << i << " expected " << expected << " got "
+                          << actual_value << " -> " << origin << '\n';
             }
         }
     }
@@ -340,7 +343,8 @@ int main() {
     if (devices < 2) {
         // This test exercises only the two-device transport, so with fewer devices it skips
         // entirely: exit 77 so ctest reports a skip rather than a pass.
-        std::cerr << "SKIP: two CUDA devices are required for the mailbox transport; fewer are present. Set CUDA_VISIBLE_DEVICES to two devices, for example 0,1\n";
+        std::cerr << "SKIP: two CUDA devices are required for the mailbox transport; fewer are "
+                     "present. Set CUDA_VISIBLE_DEVICES to two devices, for example 0,1\n";
         return 77;
     }
     int failures = 0;

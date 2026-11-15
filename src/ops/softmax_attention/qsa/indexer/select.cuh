@@ -154,7 +154,7 @@ __global__ __launch_bounds__(256, MinBlocks) void indexer_partition_kernel(
             const int i = j * 256 + threadIdx.x;
             keys[j]     = i < count
                               ? common::score_id_order_key(
-                                a.scores[std::int64_t(slot) * a.columns + first + i], first + i)
+                                    a.scores[std::int64_t(slot) * a.columns + first + i], first + i)
                               : 0;
         }
         // A discarded key already has 512 better keys in its own partition, so it cannot

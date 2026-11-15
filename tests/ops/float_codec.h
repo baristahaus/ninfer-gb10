@@ -129,9 +129,9 @@ inline std::uint8_t encode_e2m1_rne_satfinite(float value) {
             const float lower_value  = decode_e2m1(lower);
             const float lower_error  = magnitude - lower_value;
             const float upper_error  = upper_value - magnitude;
-            selected                 = lower_error < upper_error   ? lower
-                                       : upper_error < lower_error ? upper
-                                                                   : ((lower & 1U) == 0U ? lower : upper);
+            selected = lower_error < upper_error   ? lower
+                       : upper_error < lower_error ? upper
+                                                   : ((lower & 1U) == 0U ? lower : upper);
             break;
         }
     }

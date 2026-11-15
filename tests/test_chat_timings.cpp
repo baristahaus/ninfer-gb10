@@ -46,8 +46,8 @@ int main() {
         stats.timings.decode_seconds  = 0.2;
         const Json timings            = timings_for(stats, 100, 100);
         failures += check(timings.at("prompt_ms") == 500.0, "prompt_ms did not use the wall bound");
-        failures += check(timings.at("predicted_ms") == 2000.0,
-                          "predicted_ms did not use the wall bound");
+        failures +=
+            check(timings.at("predicted_ms") == 2000.0, "predicted_ms did not use the wall bound");
         failures += check(timings.at("predicted_per_second") == 49.5,
                           "predicted_per_second is wrong for 99 intervals over 2 s");
         failures += check(timings.at("prompt_per_second") == 200.0,

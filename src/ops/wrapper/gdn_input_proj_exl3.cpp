@@ -75,27 +75,27 @@ void gdn_input_proj_exl3(const Tensor& x, const Weight& weight, Tensor& qkv, Ten
     constexpr std::int32_t kQRows = 2048;
     constexpr std::int32_t kKRows = 2048;
     constexpr std::int32_t kVRows = 6144;
-    const Weight query_w = detail::exl3_dense_slice(weight, 0, kQRows);
-    const Weight key_w   = detail::exl3_dense_slice(weight, kQRows, kKRows);
-    const Weight value_w = detail::exl3_dense_slice(weight, kQRows + kKRows, kVRows);
-    const Weight z_w     = detail::exl3_dense_slice(weight, kQkvRows, kZRows);
+    const Weight query_w          = detail::exl3_dense_slice(weight, 0, kQRows);
+    const Weight key_w            = detail::exl3_dense_slice(weight, kQRows, kKRows);
+    const Weight value_w          = detail::exl3_dense_slice(weight, kQRows + kKRows, kVRows);
+    const Weight z_w              = detail::exl3_dense_slice(weight, kQkvRows, kZRows);
     // The linear routes write token-major [T, rows] outputs, while the caller's qkv
     // is the token-major [T, 10240] fused buffer: each row group projects into its
     // own contiguous staging plane and a 2D copy places it at the group's column
     // range of every token.
-    auto scope = workspace.scope();
+    auto scope         = workspace.scope();
     const auto staging = [&](std::int32_t rows) {
         const auto span = workspace.alloc_bytes(
             static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols) * 2, 256);
         return Tensor(span.data, workspace.device(), DType::BF16, {rows, cols});
     };
-    Tensor q_stage = staging(kQRows);
-    Tensor k_stage = staging(kKRows);
-    Tensor v_stage = staging(kVRows);
+    Tensor q_stage   = staging(kQRows);
+    Tensor k_stage   = staging(kKRows);
+    Tensor v_stage   = staging(kVRows);
     const auto place = [&](const Tensor& stage, std::int32_t row_begin, std::int32_t rows) {
-        CUDA_CHECK(cudaMemcpy2DAsync(
-            static_cast<std::byte*>(qkv.data) + row_begin * 2, kQkvRows * 2, stage.data, rows * 2,
-            rows * 2, cols, cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpy2DAsync(static_cast<std::byte*>(qkv.data) + row_begin * 2,
+                                     kQkvRows * 2, stage.data, rows * 2, rows * 2, cols,
+                                     cudaMemcpyDeviceToDevice, stream));
     };
     if (cols <= detail::kExl3DenseMaxTokens) {
         detail::exl3_dense_dispatch(x, query_w, q_stage, &workspace, stream);

@@ -139,7 +139,8 @@ int main() {
     namespace q35        = ninfer::models::qwen3_5;
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the Vision workspace test did not run. Set it to a .ninfer file that carries a vision component\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the Vision workspace test did not "
+                     "run. Set it to a .ninfer file that carries a vision component\n";
         return 77;
     }
     try {
@@ -154,14 +155,14 @@ int main() {
         ninfer::models::LoadOptions selected;
         ninfer::artifact::Reader reader(artifact);
         // The proposal head follows the artifact's inventory.
-        const ninfer::ProposalHead artifact_head =
-            reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
-                                                           : ninfer::ProposalHead::Full;
-        selected.vision        = true;
-        selected.speculative   = ninfer::SpeculativeBackend::Mtp;
-        selected.proposal_head = artifact_head;
-        auto definition = q35::read_definition(reader, selected);
-        auto profile    = q35::execution::describe_model(*definition);
+        const ninfer::ProposalHead artifact_head = reader.directory().component("text").proposal
+                                                       ? ninfer::ProposalHead::Optimized
+                                                       : ninfer::ProposalHead::Full;
+        selected.vision                          = true;
+        selected.speculative                     = ninfer::SpeculativeBackend::Mtp;
+        selected.proposal_head                   = artifact_head;
+        auto definition                          = q35::read_definition(reader, selected);
+        auto profile                             = q35::execution::describe_model(*definition);
         auto model =
             q35::materialize_model(q35::resolve_load(reader, definition, device.device()), device);
         const q35::execution::Parameters parameters(*model, profile);

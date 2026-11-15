@@ -8,15 +8,18 @@ using Stage  = Q8ActivationStage;
 
 template <int Capacity, class Schedule>
 void launch_sliced(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
-    launch_q8_add_sliced<typename Schedule::template with_problem<8704, Capacity>>(x, w, out, stream);
+    launch_q8_add_sliced<typename Schedule::template with_problem<8704, Capacity>>(x, w, out,
+                                                                                   stream);
 }
 } // namespace
 
 LinearAddLaunch select_q8_linear_add_n5120_k8704(std::int32_t tokens) {
-    // mlp/down's fused residual add at tensor-parallel width 2: the 5120x17408 Columns shard halves K, so the rank presents 5120x8704 where width 1 presents 5120x17408. The MTP draft block reaches it, which is why a width-2 MTP round refused here.
+    // mlp/down's fused residual add at tensor-parallel width 2: the 5120x17408 Columns shard halves
+    // K, so the rank presents 5120x8704 where width 1 presents 5120x17408. The MTP draft block
+    // reaches it, which is why a width-2 MTP round refused here.
     //
-    // The ladder is N5120K17408's, and that is a derivation rather than a copy: every band is chosen
-    // from (rows / kBlockRows) * ceil(tokens / BlockTokens) against the tuned wave, and that
+    // The ladder is N5120K17408's, and that is a derivation rather than a copy: every band is
+    // chosen from (rows / kBlockRows) * ceil(tokens / BlockTokens) against the tuned wave, and that
     // expression mentions neither K nor the row count -- kBlockRows is the schedule family's fixed
     // 16-row tile. K only sets how many 512-wide K tiles each CTA walks (17 here, against the
     // parent's 34), so the bands transfer unchanged. The MTP draft block's hot band is T<=4, which

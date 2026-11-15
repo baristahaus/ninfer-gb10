@@ -3,9 +3,9 @@
 
 namespace ninfer::ops::detail {
 namespace {
-using Geometry   = Fp8Geometry<34816, 5120>;
-using C4         = Fp8A16SimtSchedule<4, 2, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
-                                      Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
+using Geometry = Fp8Geometry<34816, 5120>;
+using C4       = Fp8A16SimtSchedule<4, 2, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
+                                    Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
 using Tma64x128  = Fp8A8TmaMmaSchedule<64, 128, 128, 2, 4, 2, 1>;
 using Tma64x256  = Fp8A8TmaMmaSchedule<64, 256, 128, 2, 4, 2, 1>;
 using Tma128x256 = Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 1>;
@@ -53,10 +53,10 @@ bool uses_a8(std::int32_t, std::int32_t max_tokens) { return max_tokens >= 5; }
 
 std::size_t partial_capacity_bytes(std::int32_t max_tokens) {
     // The boundary is the dispatch's, not a tile-count estimate: `launch_a8` selects Bulk from 193
-    // tokens (the 385..512 window is MidBulk, whose partial is narrower), so the whole band above the
-    // boundary takes Bulk's bytes. No token in 193..256 splits today — the tail stays above the
-    // 85-CTA threshold at this row count — which is why this was latent rather than live; it is still
-    // the same defect the six failing shapes had, and a schedule change would make it fire.
+    // tokens (the 385..512 window is MidBulk, whose partial is narrower), so the whole band above
+    // the boundary takes Bulk's bytes. No token in 193..256 splits today — the tail stays above the
+    // 85-CTA threshold at this row count — which is why this was latent rather than live; it is
+    // still the same defect the six failing shapes had, and a schedule change would make it fire.
     return max_tokens > 192 ? Bulk::kPartialBytes : 0;
 }
 } // namespace

@@ -87,20 +87,28 @@ const char* stream_query_name(cudaError_t status) {
 
 const char* resource_class_name(runtime::ContextResourceClass value) {
     switch (value) {
-    case runtime::ContextResourceClass::State: return "state";
-    case runtime::ContextResourceClass::MainKV: return "main-kv";
-    case runtime::ContextResourceClass::BackendKV: return "backend-kv";
+    case runtime::ContextResourceClass::State:
+        return "state";
+    case runtime::ContextResourceClass::MainKV:
+        return "main-kv";
+    case runtime::ContextResourceClass::BackendKV:
+        return "backend-kv";
     }
     return "unknown";
 }
 
 const char* transfer_direction_name(runtime::ContextTransferDirection value) {
     switch (value) {
-    case runtime::ContextTransferDirection::DeviceToHost: return "d2h";
-    case runtime::ContextTransferDirection::HostToDevice: return "h2d";
-    case runtime::ContextTransferDirection::DeviceToDevice: return "d2d";
-    case runtime::ContextTransferDirection::HostToSpill: return "host-to-spill";
-    case runtime::ContextTransferDirection::SpillToHost: return "spill-to-host";
+    case runtime::ContextTransferDirection::DeviceToHost:
+        return "d2h";
+    case runtime::ContextTransferDirection::HostToDevice:
+        return "h2d";
+    case runtime::ContextTransferDirection::DeviceToDevice:
+        return "d2d";
+    case runtime::ContextTransferDirection::HostToSpill:
+        return "host-to-spill";
+    case runtime::ContextTransferDirection::SpillToHost:
+        return "spill-to-host";
     }
     return "unknown";
 }
@@ -170,22 +178,22 @@ std::string describe_action(const ContextAction& action) {
             } else if constexpr (std::is_same_v<T, MappingUpdate>) {
                 out = "mapping row-pool" + std::to_string(value.row.pool_id) + ":row" +
                       std::to_string(value.row.index) + ":gen" +
-                      std::to_string(value.row.generation) + " logical-begin=" +
-                      std::to_string(value.logical_begin) + " pages=" +
-                      std::to_string(value.pages.size());
+                      std::to_string(value.row.generation) +
+                      " logical-begin=" + std::to_string(value.logical_begin) +
+                      " pages=" + std::to_string(value.pages.size());
                 if (!value.pages.empty()) {
                     append_page_slot(out, " first", value.pages.front());
                     append_page_slot(out, " last", value.pages.back());
                 }
             } else if constexpr (std::is_same_v<T, StateSpillOut>) {
                 out = "spill-out spill-off=" + std::to_string(value.spill.offset) +
-                      " spill-bytes=" + std::to_string(value.spill.bytes) + " spill-gen=" +
-                      std::to_string(value.spill.generation);
+                      " spill-bytes=" + std::to_string(value.spill.bytes) +
+                      " spill-gen=" + std::to_string(value.spill.generation);
                 append_host_extent(out, value.host);
             } else if constexpr (std::is_same_v<T, StateSpillIn>) {
                 out = "spill-in spill-off=" + std::to_string(value.spill.offset) +
-                      " spill-bytes=" + std::to_string(value.spill.bytes) + " spill-gen=" +
-                      std::to_string(value.spill.generation);
+                      " spill-bytes=" + std::to_string(value.spill.bytes) +
+                      " spill-gen=" + std::to_string(value.spill.generation);
                 append_host_extent(out, value.host);
             }
         },
@@ -197,15 +205,24 @@ const char* action_kind_name(const ContextAction& action) {
     return std::visit(
         [](const auto& value) -> const char* {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, StateClear>) return "state-clear";
-            else if constexpr (std::is_same_v<T, StateCopy>) return "state-copy";
-            else if constexpr (std::is_same_v<T, StateTransferDescription>) return "state-transfer";
-            else if constexpr (std::is_same_v<T, PageCopy>) return "page-copy";
-            else if constexpr (std::is_same_v<T, PageTransfer>) return "page-transfer";
-            else if constexpr (std::is_same_v<T, MappingUpdate>) return "mapping-update";
-            else if constexpr (std::is_same_v<T, StateSpillOut>) return "spill-out";
-            else if constexpr (std::is_same_v<T, StateSpillIn>) return "spill-in";
-            else return "unknown";
+            if constexpr (std::is_same_v<T, StateClear>)
+                return "state-clear";
+            else if constexpr (std::is_same_v<T, StateCopy>)
+                return "state-copy";
+            else if constexpr (std::is_same_v<T, StateTransferDescription>)
+                return "state-transfer";
+            else if constexpr (std::is_same_v<T, PageCopy>)
+                return "page-copy";
+            else if constexpr (std::is_same_v<T, PageTransfer>)
+                return "page-transfer";
+            else if constexpr (std::is_same_v<T, MappingUpdate>)
+                return "mapping-update";
+            else if constexpr (std::is_same_v<T, StateSpillOut>)
+                return "spill-out";
+            else if constexpr (std::is_same_v<T, StateSpillIn>)
+                return "spill-in";
+            else
+                return "unknown";
         },
         action);
 }
@@ -244,8 +261,7 @@ std::string segment_pool(const ContextActions& actions, std::size_t begin, std::
                 if constexpr (std::is_same_v<T, PageCopy>) {
                     result = std::to_string(value.source.pool_id);
                 } else if constexpr (std::is_same_v<T, PageTransfer>) {
-                    if (!value.pages.empty())
-                        result = std::to_string(value.pages.front().pool_id);
+                    if (!value.pages.empty()) result = std::to_string(value.pages.front().pool_id);
                 } else if constexpr (std::is_same_v<T, MappingUpdate>) {
                     result = std::to_string(value.row.pool_id);
                 }
@@ -353,7 +369,7 @@ void ContextMigration::enqueue(const ContextActions& actions, CudaExecutionView 
     // line: a StateClear is a memset and a MappingUpdate is an H2D publication, and both are stream
     // work even though neither is a copy segment.
     const bool trace = segments_trace_enabled();
-    const int rank    = device_->device().index();
+    const int rank   = device_->device().index();
     if (trace && segments_.empty())
         std::fprintf(stderr, "[ctx-seg] rank=%d no-copy-segments actions=%zu\n", rank,
                      actions.operations.size());
@@ -375,8 +391,7 @@ void ContextMigration::enqueue(const ContextActions& actions, CudaExecutionView 
                     " pages=%u payload=%" PRIu64 " ops=%u pool=%s identity=%s\n",
                     rank, segment, segments_.size(), resource_class_name(observed.resource),
                     transfer_direction_name(observed.direction), observed.units,
-                    observed.page_count, observed.work.payload_bytes,
-                    observed.work.copy_operations,
+                    observed.page_count, observed.work.payload_bytes, observed.work.copy_operations,
                     segment_pool(actions, part.begin, part.end).c_str(), identity.c_str());
             } else if (!segmented) {
                 std::fprintf(

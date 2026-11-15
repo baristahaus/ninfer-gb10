@@ -68,7 +68,8 @@ int exercise_owner(ninfer::ExecutionContext& execution) {
     const ninfer::models::ShardedGroup* first  = &owner.group();
     const ninfer::models::ShardedGroup* second = &owner.group();
     failures += check(first == second, "the two Programs would not borrow one group");
-    failures += check(first->execution == &execution, "the group does not name its execution group");
+    failures +=
+        check(first->execution == &execution, "the group does not name its execution group");
     failures += check(first->mailbox != nullptr, "the group has no mailbox");
     failures += check(first->partials[0].data != nullptr && first->partials[1].data != nullptr,
                       "a partial buffer is missing");
@@ -76,8 +77,7 @@ int exercise_owner(ninfer::ExecutionContext& execution) {
                       "the two ranks share one partial buffer");
     failures += check(first->partials[0].ne[0] == 8 && first->partials[0].ne[1] == 16,
                       "a partial is not [rows, columns]");
-    failures += check(first->partials[0].dtype == ninfer::DType::BF16,
-                      "a partial is not BF16");
+    failures += check(first->partials[0].dtype == ninfer::DType::BF16, "a partial is not BF16");
     failures += check(owner.partial_device(0) == execution.device(0).device(),
                       "rank 0's partial is not on rank 0's device");
     failures += check(owner.partial_device(1) == execution.device(1).device(),
@@ -109,7 +109,8 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; the owner cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the owner cases did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {
@@ -117,7 +118,8 @@ int main() {
         return 1;
     }
     if (count < 2) {
-        std::cerr << "SKIP: the two-Program collective needs two devices. Set CUDA_VISIBLE_DEVICES to two devices, for example 0,1\n";
+        std::cerr << "SKIP: the two-Program collective needs two devices. Set CUDA_VISIBLE_DEVICES "
+                     "to two devices, for example 0,1\n";
         return failures == 0 ? 77 : 1;
     }
 

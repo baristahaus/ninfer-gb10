@@ -110,9 +110,9 @@ struct DFlashBatchContext {
     Tensor& continuation_hidden_store;
     // The Flash-Next target's verify columns consume PLE rows exactly as the MTP round's do:
     // either pre-staged rows or the host gather stage the round publishes into.
-    const Tensor* ple_embeddings                      = nullptr;
-    ops::FlashNextPleStageMailbox* ple_stage_mailbox   = nullptr;
-    const void* ple_stage_staging                     = nullptr;
+    const Tensor* ple_embeddings                     = nullptr;
+    ops::FlashNextPleStageMailbox* ple_stage_mailbox = nullptr;
+    const void* ple_stage_staging                    = nullptr;
 };
 
 struct DFlashAppendContext {
@@ -157,8 +157,8 @@ struct TargetVerifyFrameView {
     // Pending GDN commits folded by the verify: rows I32 [4,R] over snapshot record rows [0,R).
     const GdnReplayRecords* pending_records = nullptr;
     Tensor pending_folds;
-    const ops::SamplingConfig* sampling    = nullptr;
-    DFlashFeatureSink* feature_sink        = nullptr;
+    const ops::SamplingConfig* sampling = nullptr;
+    DFlashFeatureSink* feature_sink     = nullptr;
 };
 
 void configure_text_card(TextContext& card, const ExecutionCore& execution,

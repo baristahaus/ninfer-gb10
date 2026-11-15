@@ -3,7 +3,6 @@
 #include "core/tensor.h"
 #include "core/device.h"
 
-
 namespace ninfer::ops {
 
 /**

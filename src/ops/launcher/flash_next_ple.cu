@@ -20,12 +20,11 @@ namespace ninfer::ops {
 namespace {
 
 constexpr int kStreams = 4;
-constexpr int kHidden = 2560;
-constexpr int kHyper = kStreams * kHidden;
-constexpr int kState = 9;
+constexpr int kHidden  = 2560;
+constexpr int kHyper   = kStreams * kHidden;
+constexpr int kState   = 9;
 
-__global__ void dequantize_embedding_kernel(const std::uint8_t* input,
-                                            const __nv_bfloat16* scale,
+__global__ void dequantize_embedding_kernel(const std::uint8_t* input, const __nv_bfloat16* scale,
                                             __nv_bfloat16* output, std::int64_t count) {
     const float s = __bfloat162float(*scale);
     for (std::int64_t i = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -56,56 +55,55 @@ __device__ float reduce_sum(float value, float* partial) {
 __global__ void gate_kernel(const __nv_bfloat16* hyper, const __nv_bfloat16* key,
                             const __nv_bfloat16* value, const __nv_bfloat16* query_norm,
                             const __nv_bfloat16* key_norm, __nv_bfloat16* gated) {
-    const int stream = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
+    const int stream        = static_cast<int>(blockIdx.x);
+    const int token         = static_cast<int>(blockIdx.y);
     const std::int64_t base = static_cast<std::int64_t>(token) * kHyper + stream * kHidden;
-    float query_square = 0.0F;
-    float key_square = 0.0F;
+    float query_square      = 0.0F;
+    float key_square        = 0.0F;
     for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
         const float q = __bfloat162float(hyper[base + d]);
         const float k = __bfloat162float(key[base + d]);
-        query_square = fmaf(q, q, query_square);
-        key_square = fmaf(k, k, key_square);
+        query_square  = fmaf(q, q, query_square);
+        key_square    = fmaf(k, k, key_square);
     }
     __shared__ float partial[8];
-    query_square = reduce_sum(query_square, partial);
+    query_square              = reduce_sum(query_square, partial);
     const float query_inverse = rsqrtf(query_square / kHidden + 1.0e-6F);
-    key_square = reduce_sum(key_square, partial);
-    const float key_inverse = rsqrtf(key_square / kHidden + 1.0e-6F);
-    float dot = 0.0F;
+    key_square                = reduce_sum(key_square, partial);
+    const float key_inverse   = rsqrtf(key_square / kHidden + 1.0e-6F);
+    float dot                 = 0.0F;
     for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
         const float q = __bfloat162float(hyper[base + d]) * query_inverse *
                         (1.0F + __bfloat162float(query_norm[stream * kHidden + d]));
         const float k = __bfloat162float(key[base + d]) * key_inverse *
                         (1.0F + __bfloat162float(key_norm[stream * kHidden + d]));
-        dot = fmaf(q, k, dot);
+        dot           = fmaf(q, k, dot);
     }
-    dot = reduce_sum(dot, partial) * rsqrtf(static_cast<float>(kHidden));
+    dot                     = reduce_sum(dot, partial) * rsqrtf(static_cast<float>(kHidden));
     const float transformed = copysignf(sqrtf(fmaxf(fabsf(dot), 1.0e-6F)), dot);
-    const float gate = 1.0F / (1.0F + expf(-transformed));
+    const float gate        = 1.0F / (1.0F + expf(-transformed));
     for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
-        gated[base + d] = __float2bfloat16_rn(
-            gate * __bfloat162float(value[token * kHidden + d]));
+        gated[base + d] = __float2bfloat16_rn(gate * __bfloat162float(value[token * kHidden + d]));
     }
 }
 
 __global__ void grouped_norm_kernel(const __nv_bfloat16* input, const __nv_bfloat16* weight,
                                     __nv_bfloat16* output) {
-    const int stream = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
+    const int stream        = static_cast<int>(blockIdx.x);
+    const int token         = static_cast<int>(blockIdx.y);
     const std::int64_t base = static_cast<std::int64_t>(token) * kHyper + stream * kHidden;
-    float square = 0.0F;
+    float square            = 0.0F;
     for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
         const float x = __bfloat162float(input[base + d]);
-        square = fmaf(x, x, square);
+        square        = fmaf(x, x, square);
     }
     __shared__ float partial[8];
-    square = reduce_sum(square, partial);
+    square              = reduce_sum(square, partial);
     const float inverse = rsqrtf(square / kHidden + 1.0e-6F);
     for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
-        output[base + d] = __float2bfloat16_rn(
-            __bfloat162float(input[base + d]) * inverse *
-            (1.0F + __bfloat162float(weight[stream * kHidden + d])));
+        output[base + d] =
+            __float2bfloat16_rn(__bfloat162float(input[base + d]) * inverse *
+                                (1.0F + __bfloat162float(weight[stream * kHidden + d])));
     }
 }
 
@@ -115,8 +113,8 @@ __global__ void dilated_conv_kernel(const __nv_bfloat16* input, const __nv_bfloa
                                     const __nv_bfloat16* source_state,
                                     __nv_bfloat16* destination_state, const __nv_bfloat16* gated,
                                     __nv_bfloat16* destination, int tokens) {
-    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-         channel < kHyper; channel += static_cast<int>(blockDim.x) * gridDim.x) {
+    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x; channel < kHyper;
+         channel += static_cast<int>(blockDim.x) * gridDim.x) {
         float history[kState];
 #pragma unroll
         for (int i = 0; i < kState; ++i) {
@@ -124,17 +122,21 @@ __global__ void dilated_conv_kernel(const __nv_bfloat16* input, const __nv_bfloa
                 __bfloat162float(source_state[channel + static_cast<std::int64_t>(kHyper) * i]);
         }
         for (int token = 0; token < tokens; ++token) {
-            const float current = __bfloat162float(input[channel + static_cast<std::int64_t>(kHyper) * token]);
+            const float current =
+                __bfloat162float(input[channel + static_cast<std::int64_t>(kHyper) * token]);
             float convolution = __bfloat162float(weight[channel]) * history[0];
             convolution = fmaf(__bfloat162float(weight[channel + kHyper]), history[3], convolution);
-            convolution = fmaf(__bfloat162float(weight[channel + 2 * kHyper]), history[6], convolution);
-            convolution = fmaf(__bfloat162float(weight[channel + 3 * kHyper]), current, convolution);
+            convolution =
+                fmaf(__bfloat162float(weight[channel + 2 * kHyper]), history[6], convolution);
+            convolution =
+                fmaf(__bfloat162float(weight[channel + 3 * kHyper]), current, convolution);
             const float represented_convolution =
                 __bfloat162float(__float2bfloat16_rn(convolution));
             const float silu = __bfloat162float(__float2bfloat16_rn(
                 represented_convolution / (1.0F + expf(-represented_convolution))));
-            destination[channel + static_cast<std::int64_t>(kHyper) * token] =
-                __float2bfloat16_rn(__bfloat162float(gated[channel + static_cast<std::int64_t>(kHyper) * token]) + silu);
+            destination[channel + static_cast<std::int64_t>(kHyper) * token] = __float2bfloat16_rn(
+                __bfloat162float(gated[channel + static_cast<std::int64_t>(kHyper) * token]) +
+                silu);
 #pragma unroll
             for (int i = 0; i < kState - 1; ++i) { history[i] = history[i + 1]; }
             history[kState - 1] = current;
@@ -147,14 +149,15 @@ __global__ void dilated_conv_kernel(const __nv_bfloat16* input, const __nv_bfloa
     }
 }
 
-__global__ void dilated_conv_batch_kernel(
-    const __nv_bfloat16* input, const __nv_bfloat16* weight, __nv_bfloat16* states,
-    const std::int32_t* valid_columns, const std::int32_t* source_slots,
-    const std::int32_t* destination_slots, const __nv_bfloat16* gated,
-    __nv_bfloat16* destination, int width, int batch, std::int64_t slot_stride) {
+__global__ void dilated_conv_batch_kernel(const __nv_bfloat16* input, const __nv_bfloat16* weight,
+                                          __nv_bfloat16* states, const std::int32_t* valid_columns,
+                                          const std::int32_t* source_slots,
+                                          const std::int32_t* destination_slots,
+                                          const __nv_bfloat16* gated, __nv_bfloat16* destination,
+                                          int width, int batch, std::int64_t slot_stride) {
     const int lane = static_cast<int>(blockIdx.y);
-    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-         channel < kHyper; channel += static_cast<int>(blockDim.x) * gridDim.x) {
+    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x; channel < kHyper;
+         channel += static_cast<int>(blockDim.x) * gridDim.x) {
         const __nv_bfloat16* source =
             states + static_cast<std::int64_t>(source_slots[lane]) * slot_stride;
         float history[kState];
@@ -171,16 +174,17 @@ __global__ void dilated_conv_batch_kernel(
                 continue;
             }
             const float current = __bfloat162float(input[index]);
-            float convolution = __bfloat162float(weight[channel]) * history[0];
+            float convolution   = __bfloat162float(weight[channel]) * history[0];
             convolution = fmaf(__bfloat162float(weight[channel + kHyper]), history[3], convolution);
-            convolution = fmaf(__bfloat162float(weight[channel + 2 * kHyper]), history[6], convolution);
-            convolution = fmaf(__bfloat162float(weight[channel + 3 * kHyper]), current, convolution);
+            convolution =
+                fmaf(__bfloat162float(weight[channel + 2 * kHyper]), history[6], convolution);
+            convolution =
+                fmaf(__bfloat162float(weight[channel + 3 * kHyper]), current, convolution);
             const float represented_convolution =
                 __bfloat162float(__float2bfloat16_rn(convolution));
-            const float silu = __bfloat162float(__float2bfloat16_rn(
+            const float silu   = __bfloat162float(__float2bfloat16_rn(
                 represented_convolution / (1.0F + expf(-represented_convolution))));
-            destination[index] = __float2bfloat16_rn(
-                __bfloat162float(gated[index]) + silu);
+            destination[index] = __float2bfloat16_rn(__bfloat162float(gated[index]) + silu);
 #pragma unroll
             for (int i = 0; i < kState - 1; ++i) { history[i] = history[i + 1]; }
             history[kState - 1] = current;
@@ -195,14 +199,15 @@ __global__ void dilated_conv_batch_kernel(
     }
 }
 
-__global__ void dilated_conv_record_kernel(
-    const __nv_bfloat16* input, const __nv_bfloat16* weight, const __nv_bfloat16* states,
-    const std::int32_t* valid_columns, const std::int32_t* source_slots,
-    __nv_bfloat16* records, const __nv_bfloat16* gated, __nv_bfloat16* destination,
-    int width, int batch, std::int64_t slot_stride) {
+__global__ void dilated_conv_record_kernel(const __nv_bfloat16* input, const __nv_bfloat16* weight,
+                                           const __nv_bfloat16* states,
+                                           const std::int32_t* valid_columns,
+                                           const std::int32_t* source_slots, __nv_bfloat16* records,
+                                           const __nv_bfloat16* gated, __nv_bfloat16* destination,
+                                           int width, int batch, std::int64_t slot_stride) {
     const int lane = static_cast<int>(blockIdx.y);
-    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-         channel < kHyper; channel += static_cast<int>(blockDim.x) * gridDim.x) {
+    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x; channel < kHyper;
+         channel += static_cast<int>(blockDim.x) * gridDim.x) {
         const __nv_bfloat16* source =
             states + static_cast<std::int64_t>(source_slots[lane]) * slot_stride;
         float history[kState];
@@ -219,18 +224,19 @@ __global__ void dilated_conv_record_kernel(
                 continue;
             }
             const __nv_bfloat16 current_bits = input[index];
-            records[index] = current_bits;
-            const float current = __bfloat162float(current_bits);
-            float convolution = __bfloat162float(weight[channel]) * history[0];
+            records[index]                   = current_bits;
+            const float current              = __bfloat162float(current_bits);
+            float convolution                = __bfloat162float(weight[channel]) * history[0];
             convolution = fmaf(__bfloat162float(weight[channel + kHyper]), history[3], convolution);
-            convolution = fmaf(__bfloat162float(weight[channel + 2 * kHyper]), history[6], convolution);
-            convolution = fmaf(__bfloat162float(weight[channel + 3 * kHyper]), current, convolution);
+            convolution =
+                fmaf(__bfloat162float(weight[channel + 2 * kHyper]), history[6], convolution);
+            convolution =
+                fmaf(__bfloat162float(weight[channel + 3 * kHyper]), current, convolution);
             const float represented_convolution =
                 __bfloat162float(__float2bfloat16_rn(convolution));
-            const float silu = __bfloat162float(__float2bfloat16_rn(
+            const float silu   = __bfloat162float(__float2bfloat16_rn(
                 represented_convolution / (1.0F + expf(-represented_convolution))));
-            destination[index] = __float2bfloat16_rn(
-                __bfloat162float(gated[index]) + silu);
+            destination[index] = __float2bfloat16_rn(__bfloat162float(gated[index]) + silu);
 #pragma unroll
             for (int i = 0; i < kState - 1; ++i) { history[i] = history[i + 1]; }
             history[kState - 1] = current;
@@ -266,8 +272,8 @@ __global__ void ple_fold_kernel(const __nv_bfloat16* records, __nv_bfloat16* sta
         for (int column = 0; column < row.commit_columns; ++column) {
 #pragma unroll
             for (int i = 0; i < kState - 1; ++i) { history[i] = history[i + 1]; }
-            history[kState - 1] = records[channel + static_cast<std::int64_t>(kHyper) *
-                                               (lane * width + column)];
+            history[kState - 1] =
+                records[channel + static_cast<std::int64_t>(kHyper) * (lane * width + column)];
         }
         __nv_bfloat16* target =
             states + static_cast<std::int64_t>(row.destination_state_slot) * slot_stride;
@@ -287,19 +293,18 @@ void validate(const Tensor& hyper, const Tensor& gathered, const FlashNextPleWei
               const Tensor& state, const Tensor& destination) {
     const int tokens = hyper.ne[1];
     if (tokens <= 0 || hyper.dtype != DType::BF16 || !hyper.is_contiguous() ||
-        hyper.ne[0] != kHyper || gathered.dtype != DType::FP8_E4M3FN ||
-        !gathered.is_contiguous() || gathered.ne[0] != kHidden || gathered.ne[1] != tokens ||
-        destination.dtype != DType::BF16 || !destination.is_contiguous() ||
-        destination.ne[0] != kHyper || destination.ne[1] != tokens || state.dtype != DType::BF16 ||
-        !state.is_contiguous() || state.ne[0] != kHyper || state.ne[1] != kState ||
-        weights.key_projection.n != kHyper || weights.key_projection.k != kHidden ||
-        weights.value_projection.n != kHidden || weights.value_projection.k != kHidden ||
-        weights.key_norm.dtype != DType::BF16 || weights.key_norm.ne[0] != kHyper ||
-        weights.query_norm.dtype != DType::BF16 || weights.query_norm.ne[0] != kHyper ||
-        weights.convolution_norm.dtype != DType::BF16 || weights.convolution_norm.ne[0] != kHyper ||
-        weights.convolution.dtype != DType::BF16 || weights.convolution.ne[0] != kHyper ||
-        weights.convolution.ne[1] != 4 || weights.convolution.ne[2] != 1 ||
-        weights.embedding_scale.dtype != DType::BF16 ||
+        hyper.ne[0] != kHyper || gathered.dtype != DType::FP8_E4M3FN || !gathered.is_contiguous() ||
+        gathered.ne[0] != kHidden || gathered.ne[1] != tokens || destination.dtype != DType::BF16 ||
+        !destination.is_contiguous() || destination.ne[0] != kHyper ||
+        destination.ne[1] != tokens || state.dtype != DType::BF16 || !state.is_contiguous() ||
+        state.ne[0] != kHyper || state.ne[1] != kState || weights.key_projection.n != kHyper ||
+        weights.key_projection.k != kHidden || weights.value_projection.n != kHidden ||
+        weights.value_projection.k != kHidden || weights.key_norm.dtype != DType::BF16 ||
+        weights.key_norm.ne[0] != kHyper || weights.query_norm.dtype != DType::BF16 ||
+        weights.query_norm.ne[0] != kHyper || weights.convolution_norm.dtype != DType::BF16 ||
+        weights.convolution_norm.ne[0] != kHyper || weights.convolution.dtype != DType::BF16 ||
+        weights.convolution.ne[0] != kHyper || weights.convolution.ne[1] != 4 ||
+        weights.convolution.ne[2] != 1 || weights.embedding_scale.dtype != DType::BF16 ||
         weights.embedding_scale.numel() != 1) {
         throw std::invalid_argument("flash_next_ple: invalid exact geometry");
     }
@@ -309,8 +314,8 @@ void validate(const Tensor& hyper, const Tensor& gathered, const FlashNextPleWei
 
 std::size_t flash_next_ple_workspace_capacity_bytes(std::int32_t tokens) {
     if (tokens <= 0) { throw std::invalid_argument("Flash-Next PLE token count must be positive"); }
-    const std::uint64_t elements = static_cast<std::uint64_t>(tokens) *
-                                   (kHidden + kHyper + kHidden + kHyper + kHyper);
+    const std::uint64_t elements =
+        static_cast<std::uint64_t>(tokens) * (kHidden + kHyper + kHidden + kHyper + kHyper);
     if (elements > std::numeric_limits<std::size_t>::max() / sizeof(__nv_bfloat16)) {
         throw std::overflow_error("Flash-Next PLE workspace size overflow");
     }
@@ -334,13 +339,13 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
         }
     }
     const int tokens = hyper.ne[1];
-    auto scope = workspace.scope();
+    auto scope       = workspace.scope();
     Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
     dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
         static_cast<const std::uint8_t*>(gathered_fp8.data),
         static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
         static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
-    Tensor key = workspace.alloc(DType::BF16, {kHyper, tokens});
+    Tensor key   = workspace.alloc(DType::BF16, {kHyper, tokens});
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     linear(embedding, weights.key_projection, key, stream, bf16_gemm);
     linear(embedding, weights.value_projection, value, stream, bf16_gemm);
@@ -370,9 +375,8 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
                                  const FlashNextPleWeights& weights, Tensor& states,
                                  const Tensor& valid_columns, const Tensor& source_slots,
                                  const Tensor& destination_slots, std::int32_t width,
-                                 std::int32_t batch, Tensor& destination,
-                                 MemoryArena& workspace, cudaStream_t stream,
-                                 Bf16GemmContext* bf16_gemm) {
+                                 std::int32_t batch, Tensor& destination, MemoryArena& workspace,
+                                 cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("ple.update", hyper.ne[1], batch, 0, flash_next_work::ple(hyper.ne[1]));
 
     if (width <= 0 || batch <= 0 || batch > 8 || hyper.ne[1] != width * batch ||
@@ -384,16 +388,16 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
          (valid_columns.dtype != DType::I32 || valid_columns.ne[0] != batch))) {
         throw std::invalid_argument("flash_next_ple_batch_update: invalid state geometry");
     }
-    validate(hyper, gathered_fp8, weights,
-             states.slice(2, 0, 1).view({kHyper, kState}), destination);
+    validate(hyper, gathered_fp8, weights, states.slice(2, 0, 1).view({kHyper, kState}),
+             destination);
     const int tokens = width * batch;
-    auto scope = workspace.scope();
+    auto scope       = workspace.scope();
     Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
     dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
         static_cast<const std::uint8_t*>(gathered_fp8.data),
         static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
         static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
-    Tensor key = workspace.alloc(DType::BF16, {kHyper, tokens});
+    Tensor key   = workspace.alloc(DType::BF16, {kHyper, tokens});
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     linear(embedding, weights.key_projection, key, stream, bf16_gemm);
     linear(embedding, weights.value_projection, value, stream, bf16_gemm);
@@ -414,7 +418,8 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
         static_cast<const __nv_bfloat16*>(normalized.data),
         static_cast<const __nv_bfloat16*>(weights.convolution.data),
         static_cast<__nv_bfloat16*>(states.data),
-        valid_columns.data == nullptr ? nullptr : static_cast<const std::int32_t*>(valid_columns.data),
+        valid_columns.data == nullptr ? nullptr
+                                      : static_cast<const std::int32_t*>(valid_columns.data),
         static_cast<const std::int32_t*>(source_slots.data),
         static_cast<const std::int32_t*>(destination_slots.data),
         static_cast<const __nv_bfloat16*>(gated.data),
@@ -427,29 +432,28 @@ void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp
                                   const FlashNextPleWeights& weights, const Tensor& states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   std::int32_t width, std::int32_t batch, Tensor& records,
-                                  Tensor& destination, MemoryArena& workspace,
-                                  cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+                                  Tensor& destination, MemoryArena& workspace, cudaStream_t stream,
+                                  Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("ple.record", hyper.ne[1], batch, 0, flash_next_work::ple(hyper.ne[1]));
 
     if (width <= 0 || batch <= 0 || batch > 8 || hyper.ne[1] != width * batch ||
         states.dtype != DType::BF16 || !states.is_contiguous() || states.ne[0] != kHyper ||
-        states.ne[1] != kState || source_slots.dtype != DType::I32 ||
-        source_slots.ne[0] != batch || valid_columns.dtype != DType::I32 ||
-        valid_columns.ne[0] != batch || records.dtype != DType::BF16 ||
-        !records.is_contiguous() || records.ne[0] != kHyper ||
+        states.ne[1] != kState || source_slots.dtype != DType::I32 || source_slots.ne[0] != batch ||
+        valid_columns.dtype != DType::I32 || valid_columns.ne[0] != batch ||
+        records.dtype != DType::BF16 || !records.is_contiguous() || records.ne[0] != kHyper ||
         records.ne[1] != width || records.ne[2] != batch) {
         throw std::invalid_argument("flash_next_ple_replay_record: invalid state geometry");
     }
-    validate(hyper, gathered_fp8, weights,
-             states.slice(2, 0, 1).view({kHyper, kState}), destination);
+    validate(hyper, gathered_fp8, weights, states.slice(2, 0, 1).view({kHyper, kState}),
+             destination);
     const int tokens = width * batch;
-    auto scope = workspace.scope();
+    auto scope       = workspace.scope();
     Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
     dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
         static_cast<const std::uint8_t*>(gathered_fp8.data),
         static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
         static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
-    Tensor key = workspace.alloc(DType::BF16, {kHyper, tokens});
+    Tensor key   = workspace.alloc(DType::BF16, {kHyper, tokens});
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     // Replay must produce the same represented transition as sequential ordinary decode.
     // Multi-column BF16 GEMMs may select a different reduction kernel than M=1 and perturb
@@ -479,16 +483,14 @@ void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp
         static_cast<const __nv_bfloat16*>(states.data),
         static_cast<const std::int32_t*>(valid_columns.data),
         static_cast<const std::int32_t*>(source_slots.data),
-        static_cast<__nv_bfloat16*>(records.data),
-        static_cast<const __nv_bfloat16*>(gated.data),
+        static_cast<__nv_bfloat16*>(records.data), static_cast<const __nv_bfloat16*>(gated.data),
         static_cast<__nv_bfloat16*>(destination.data), width, batch,
         static_cast<std::int64_t>(kHyper) * kState);
     CUDA_CHECK(cudaGetLastError());
 }
 
 void flash_next_ple_replay_fold(const Tensor& records, Tensor& states,
-                                std::span<const FlashNextPleFoldRow> rows,
-                                cudaStream_t stream) {
+                                std::span<const FlashNextPleFoldRow> rows, cudaStream_t stream) {
     const int width = records.ne[1];
     if (rows.empty() || rows.size() > 8 || width <= 0 || records.dtype != DType::BF16 ||
         !records.is_contiguous() || records.ne[0] != kHyper ||

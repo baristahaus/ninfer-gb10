@@ -13,9 +13,9 @@ BufferLayout plan_buffers(LayoutBuilder& b, const Config& c, const EngineOptions
     const auto batch     = static_cast<std::int32_t>(o.max_concurrency);
     const auto width     = static_cast<std::int32_t>(c.mtp ? o.speculative.draft_tokens + 1 : 1);
     const auto positions = std::max(static_cast<std::int32_t>(chunk), batch * width);
-    const auto tensor    = [&](DType dtype, std::initializer_list<std::int32_t> shape,
+    const auto tensor = [&](DType dtype, std::initializer_list<std::int32_t> shape,
                             const char* label) { return b.add_tensor(dtype, shape, 256, label); };
-    const auto rows      = [&] { return tensor(DType::I32, {batch}, "batch metadata"); };
+    const auto rows   = [&] { return tensor(DType::I32, {batch}, "batch metadata"); };
     BufferLayout out;
     out.batch.ids            = tensor(DType::I32, {positions}, "input IDs");
     out.batch.positions      = tensor(DType::I32, {positions}, "input ordinals");

@@ -136,9 +136,9 @@ int run(const Options& options) {
     const std::uint64_t per_request_capacity =
         options.context_tokens + (measured_rounds + 1ULL) * block;
     const std::uint64_t aligned_request_capacity = (per_request_capacity + 63ULL) & ~63ULL;
-    const std::uint64_t capacity                 = options.batch_size == 1
-                                                       ? per_request_capacity
-                                                       : aligned_request_capacity * options.batch_size;
+    const std::uint64_t capacity = options.batch_size == 1
+                                       ? per_request_capacity
+                                       : aligned_request_capacity * options.batch_size;
     if (per_request_capacity > 262144 || capacity > std::numeric_limits<std::uint32_t>::max()) {
         throw std::invalid_argument("context and measured rounds exceed native capacity");
     }

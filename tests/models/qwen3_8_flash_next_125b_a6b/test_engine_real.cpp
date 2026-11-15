@@ -56,9 +56,11 @@ void configure_prefix_state_dump(const std::vector<ninfer::TokenId>& prompt,
     // The reuse base is where the checkpoint that gets restored was committed; the continuation's
     // end is where both comparison runs commit. One process cannot be re-run at a second frontier,
     // so the default selects both; the capture accepts a comma-separated list.
-    const std::uint32_t reuse_base  = static_cast<std::uint32_t>(prompt.size() + generated.size() - 1);
-    const std::uint32_t prefill_end = static_cast<std::uint32_t>(prompt.size() + generated.size() + 1);
-    const char* override_frontier   = std::getenv("NINFER_PREFIX_STATE_DUMP_FRONTIER");
+    const std::uint32_t reuse_base =
+        static_cast<std::uint32_t>(prompt.size() + generated.size() - 1);
+    const std::uint32_t prefill_end =
+        static_cast<std::uint32_t>(prompt.size() + generated.size() + 1);
+    const char* override_frontier = std::getenv("NINFER_PREFIX_STATE_DUMP_FRONTIER");
     const std::string value = override_frontier != nullptr && *override_frontier != '\0'
                                   ? std::string(override_frontier)
                                   : std::to_string(reuse_base) + "," + std::to_string(prefill_end);
@@ -77,8 +79,8 @@ void configure_prefix_state_dump(const std::vector<ninfer::TokenId>& prompt,
     return stems;
 }
 
-[[nodiscard]] std::set<std::string>
-new_dump_stems(const std::filesystem::path& directory, const std::set<std::string>& before) {
+[[nodiscard]] std::set<std::string> new_dump_stems(const std::filesystem::path& directory,
+                                                   const std::set<std::string>& before) {
     std::set<std::string> created;
     for (const auto& stem : dump_stems(directory)) {
         if (before.count(stem) == 0) { created.insert(stem); }
@@ -88,20 +90,21 @@ new_dump_stems(const std::filesystem::path& directory, const std::set<std::strin
 
 [[nodiscard]] std::vector<char> read_binary(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
-    return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    return std::vector<char>(std::istreambuf_iterator<char>(file),
+                             std::istreambuf_iterator<char>());
 }
 
 struct DumpDifference {
-    bool differs      = false;
-    std::size_t total = 0;
-    std::size_t count = 0;
+    bool differs              = false;
+    std::size_t total         = 0;
+    std::size_t count         = 0;
     std::size_t first_element = 0;
-    char first_reused[24] = {};
-    char first_cold[24]   = {};
-    double max_delta      = 0.0;
-    std::size_t max_element = 0;
-    char max_reused[24]     = {};
-    char max_cold[24]       = {};
+    char first_reused[24]     = {};
+    char first_cold[24]       = {};
+    double max_delta          = 0.0;
+    std::size_t max_element   = 0;
+    char max_reused[24]       = {};
+    char max_cold[24]         = {};
     std::string report; // sizes differ, or empty
 };
 
@@ -113,7 +116,7 @@ struct DumpDifference {
             static_cast<unsigned char>(bytes[0]) |
             (static_cast<std::uint16_t>(static_cast<unsigned char>(bytes[1])) << 8));
         const std::uint32_t wide = static_cast<std::uint32_t>(raw) << 16;
-        float value = 0.0F;
+        float value              = 0.0F;
         std::memcpy(&value, &wide, sizeof(value));
         return static_cast<double>(value);
     }
@@ -136,7 +139,7 @@ struct DumpDifference {
     if (reused.size() != cold.size()) {
         return {.differs = true,
                 .report  = suffix + " sizes differ: reused " + std::to_string(reused.size()) +
-                          " bytes, cold " + std::to_string(cold.size()) + " bytes"};
+                           " bytes, cold " + std::to_string(cold.size()) + " bytes"};
     }
     DumpDifference result;
     result.total = reused.size() / element_bytes;
@@ -170,9 +173,9 @@ struct DumpDifference {
 void report_dump_differences(const std::filesystem::path& directory, const std::string& reused_stem,
                              const std::string& cold_stem, const nlohmann::json& reused_meta,
                              const nlohmann::json& cold_meta) {
-    const auto layers        = reused_meta.value("layers", 0U);
-    const auto conv_width    = reused_meta.value("conv_width", 0);
-    const auto dflash_layers = reused_meta.value("dflash_local_layers", 0U);
+    const auto layers                = reused_meta.value("layers", 0U);
+    const auto conv_width            = reused_meta.value("conv_width", 0);
+    const auto dflash_layers         = reused_meta.value("dflash_local_layers", 0U);
     std::size_t differing_components = 0;
     std::size_t differing_elements   = 0;
     std::size_t compared_elements    = 0;
@@ -231,9 +234,11 @@ void report_dump_differences(const std::filesystem::path& directory, const std::
               << differing_layers << " layer components, " << differing_elements << " of "
               << compared_elements << " compared elements\n";
     if (differing_components == 0) {
-        std::cerr << "prefix state dump: every component of the committed slot is bitwise identical\n";
+        std::cerr
+            << "prefix state dump: every component of the committed slot is bitwise identical\n";
     }
 }
+
 struct DumpMetadata {
     std::string stem;
     std::string phase;
@@ -242,7 +247,7 @@ struct DumpMetadata {
 };
 
 [[nodiscard]] std::optional<DumpMetadata> read_dump_metadata(const std::filesystem::path& directory,
-                                                            const std::string& stem) {
+                                                             const std::string& stem) {
     std::ifstream file(directory / (stem + ".json"));
     if (!file) { return std::nullopt; }
     nlohmann::json meta;
@@ -276,8 +281,8 @@ void compare_copy_identity(const std::filesystem::path& directory,
         return;
     }
     std::cerr << "prefix state dump: copy identity: slot " << materialization.slot << " frontier "
-              << materialization.frontier << " (commit " << commit->stem
-              << " vs materialization " << materialization.stem << ")\n";
+              << materialization.frontier << " (commit " << commit->stem << " vs materialization "
+              << materialization.stem << ")\n";
     nlohmann::json commit_meta;
     nlohmann::json materialization_meta;
     {
@@ -345,25 +350,25 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
     report_dump_differences(directory, reused_stem, cold_stem, reused_meta, cold_meta);
 }
 
-
 ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
-    options.artifact_path                    = artifact;
-    options.max_context                      = 512;
-    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(1024);
+    options.artifact_path = artifact;
+    options.max_context   = 512;
+    options.kv_capacity   = ninfer::KvCapacityPolicy::explicit_capacity(1024);
     // The chunk size decides how many prefill calls a prompt takes, and the GDN recurrence is
     // chunked differently in each. Overriding it is what makes the chunk-invariance comparison
     // runnable: two runs of the same prompt, one in a single prefill call and one split across
     // several, with the KV dump compared layer by layer.
     options.prefill_chunk = 256;
-    if (const char* chunk = std::getenv("NINFER_TEST_PREFILL_CHUNK"); chunk != nullptr && *chunk != '\0') {
+    if (const char* chunk = std::getenv("NINFER_TEST_PREFILL_CHUNK");
+        chunk != nullptr && *chunk != '\0') {
         options.prefill_chunk = static_cast<std::uint32_t>(std::atoi(chunk));
     }
-    options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
-    options.speculative.draft_tokens         = 3;
-    options.speculative.proposal_head        = ninfer::ProposalHead::Full;
-    options.enable_vision                    = true;
-    options.use_cuda_graph                   = true;
+    options.speculative.backend       = ninfer::SpeculativeBackend::Mtp;
+    options.speculative.draft_tokens  = 3;
+    options.speculative.proposal_head = ninfer::ProposalHead::Full;
+    options.enable_vision             = true;
+    options.use_cuda_graph            = true;
     // Maintainer override: the built-in logit/state capture hooks reject graph capture.
     if (const char* no_graphs = std::getenv("NINFER_TEST_NO_GRAPHS");
         no_graphs != nullptr && *no_graphs != '\0') {
@@ -372,9 +377,9 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     // A prefix-state dump run performs synchronous copies at its commits, so it must not capture
     // graphs; the dump is opt-in, so this changes nothing when it is unset.
     if (prefix_state_dump_dir()) { options.use_cuda_graph = false; }
-    options.max_concurrency                  = 2;
-    options.max_pending_requests             = 2;
-    options.context_cache.device_state_slots = 4;
+    options.max_concurrency                         = 2;
+    options.max_pending_requests                    = 2;
+    options.context_cache.device_state_slots        = 4;
     options.context_cache.max_private_continuations = 2;
     options.context_cache.max_shared_prefixes       = 1;
     return options;
@@ -390,7 +395,9 @@ void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens)
 void report_token_divergence(const char* label, const std::vector<ninfer::TokenId>& reused,
                              const std::vector<ninfer::TokenId>& cold) {
     std::size_t index = 0;
-    while (index < reused.size() && index < cold.size() && reused[index] == cold[index]) { ++index; }
+    while (index < reused.size() && index < cold.size() && reused[index] == cold[index]) {
+        ++index;
+    }
     const bool identical = index == reused.size() && index == cold.size();
     std::cerr << "prefix reuse divergence: " << label << ": reused " << reused.size()
               << " tokens, cold " << cold.size() << " tokens, first difference at index " << index;
@@ -448,8 +455,8 @@ bool qad_recipe(const std::string& recipe) {
 // wavelengths"), the recipe's boundary is moved, as a golden is re-recorded; it is never
 // relaxed to a length check.
 struct CrossPathFixture {
-    ninfer::TokenId separator;         // appended after the first output before reuse
-    std::ptrdiff_t resumed_prefix;     // golden tokens a concurrent resumed request carries
+    ninfer::TokenId separator;     // appended after the first output before reuse
+    std::ptrdiff_t resumed_prefix; // golden tokens a concurrent resumed request carries
 };
 
 // One boundary serves every recipe until a recipe's fixture needs its own; the failure
@@ -470,6 +477,7 @@ void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens)
     for (const auto token : tokens) { std::cerr << ' ' << token; }
     std::cerr << '\n';
 }
+
 const std::vector<ninfer::TokenId>& canonical_output() {
     // Re-recorded 2026-10: the FP8 route's exact tie at generated index 2 (5435 and 27891 both
     // at logprob -1.06157 in the recorded environment) no longer reproduces - the vendor GEMM
@@ -487,40 +495,42 @@ const std::vector<ninfer::TokenId>& canonical_output() {
     // provenance. The commit that recorded it (2f8f7517) fails the prefix-reuse assertion in this
     // same test and aborts before reaching this check, so no green run ever validated it; it was
     // recorded by hand or from a build of a lineage master does not share. A clean checkout of
-    // master, built fresh for sm_121a, produces 5435 under BOTH CUDA 13.0 and 13.4 with the artifact
-    // unchanged (dated 2026-10-17), so the toolchain is excluded and the chain is the engine's own.
-    // The choice is the documented exact BF16 tie at generated index 2 (5435 and 27891 both at
-    // logprob -1.06157), so either resolution is defensible and the step 7 perplexity gate is what
-    // measures quality; exactness here pins regressions, not quality.
-    static const std::vector<ninfer::TokenId> golden_sm120a{
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
-    static const std::vector<ninfer::TokenId> golden_sm121a{
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
+    // master, built fresh for sm_121a, produces 5435 under BOTH CUDA 13.0 and 13.4 with the
+    // artifact unchanged (dated 2026-10-17), so the toolchain is excluded and the chain is the
+    // engine's own. The choice is the documented exact BF16 tie at generated index 2 (5435 and
+    // 27891 both at logprob -1.06157), so either resolution is defensible and the step 7 perplexity
+    // gate is what measures quality; exactness here pins regressions, not quality.
+    static const std::vector<ninfer::TokenId> golden_sm120a{29108, 4009, 5435,  660, 7736, 314,
+                                                            279,   9155, 19142, 11,  694,  22602};
+    static const std::vector<ninfer::TokenId> golden_sm121a{29108, 4009, 5435,  660, 7736, 314,
+                                                            279,   9155, 19142, 11,  694,  22602};
     static const int capability = ninfer::DeviceContext(0).compute_capability();
     return capability == 121 ? golden_sm121a : golden_sm120a;
 }
 
 // The MTP VERIFY chain, which is a different evaluation from plain decode: the verify path runs
 // T=2..4 kernels and resolves the documented 27891/5435 near-tie its own way. On sm_120a it agrees
-// with the plain-decode golden; on sm_121a it resolves the tie to 27891 and then follows the model's
-// confident continuation. Measured 2026-11-11 on twofour: plain decode gives the 5435 chain and MTP
-// verify gives the 27891 chain on the same build, same artifact, same prompt - so one shared vector
-// could not express both, and an earlier version of this test conflated them.
+// with the plain-decode golden; on sm_121a it resolves the tie to 27891 and then follows the
+// model's confident continuation. Measured 2026-11-11 on twofour: plain decode gives the 5435 chain
+// and MTP verify gives the 27891 chain on the same build, same artifact, same prompt - so one
+// shared vector could not express both, and an earlier version of this test conflated them.
 const std::vector<ninfer::TokenId>& qad_mtp_output();
 const std::vector<ninfer::TokenId>& canonical_output();
+
 const std::vector<ninfer::TokenId>& mtp_verify_output(const std::string& recipe) {
     if (qad_recipe(recipe)) { return qad_mtp_output(); }
-    static const std::vector<ninfer::TokenId> verify_sm121a{
-        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
-    return ninfer::DeviceContext(0).compute_capability() == 121 ? verify_sm121a : canonical_output();
+    static const std::vector<ninfer::TokenId> verify_sm121a{29108, 4009, 27891, 8964, 579, 16078,
+                                                            321,   1100, 9872,  303,  660, 17425};
+    return ninfer::DeviceContext(0).compute_capability() == 121 ? verify_sm121a
+                                                                : canonical_output();
 }
 
 // The QAD recipe's MTP verify golden: the 27891/5435 near-tie resolves to 5435 under the
 // MXFP8 verify route (see qad_recipe); from there the stream follows the model's confident
 // continuation. The plain decode path still checks the canonical golden exactly.
 const std::vector<ninfer::TokenId>& qad_mtp_output() {
-    static const std::vector<ninfer::TokenId> golden{
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 948};
+    static const std::vector<ninfer::TokenId> golden{29108, 4009, 5435,  660, 7736, 314,
+                                                     279,   9155, 19142, 11,  694,  948};
     return golden;
 }
 
@@ -571,8 +581,9 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
         std::cerr << "Flash-Next greedy text prefix is corrupt or did not complete through MTP\n";
         print_tokens("mtp", first.generated_token_ids);
         print_tokens("expected", expected_prefix);
-        std::cerr << "(backend mtp=" << (first.speculative.backend == ninfer::SpeculativeBackend::Mtp)
-                  << ", rounds " << first.speculative.rounds << ")\n";
+        std::cerr << "(backend mtp="
+                  << (first.speculative.backend == ninfer::SpeculativeBackend::Mtp) << ", rounds "
+                  << first.speculative.rounds << ")\n";
         return 1;
     }
 
@@ -621,11 +632,11 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
         static_cast<std::uint32_t>(prompt.size() + first.generated_token_ids.size() - 1);
     report_token_divergence("two tokens", reused.generated_token_ids, cold.generated_token_ids);
     // Exact token equality against the cold run is NOT assertable, and that is a property of the
-    // fixture rather than a defect: the reused prefix's KV was written by the first request's decode
-    // (T<=16, narrow fused/split route) while a cold prefill of the same tokens uses the wide MMA
-    // route, and the tree gives no cross-route bitwise guarantee. Measured: the two KV pages differ
-    // only in the decode-written columns, both sides are numerically plausible (their mean
-    // magnitudes agree to five significant figures) and neither is zero or unwritten.
+    // fixture rather than a defect: the reused prefix's KV was written by the first request's
+    // decode (T<=16, narrow fused/split route) while a cold prefill of the same tokens uses the
+    // wide MMA route, and the tree gives no cross-route bitwise guarantee. Measured: the two KV
+    // pages differ only in the decode-written columns, both sides are numerically plausible (their
+    // mean magnitudes agree to five significant figures) and neither is zero or unwritten.
     //
     // So the assertion is on the reuse machinery and on the boundary state, which is what this test
     // exists to protect, and the token comparison above stays as the diagnostic that would name a
@@ -633,9 +644,9 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     // something, a wrong generated count, or a divergence at index 0 - the last means the state at
     // the reuse boundary does not hold what the prefix produced, which is a real boundary defect
     // rather than a downstream route difference.
-    const bool boundary_holds = reused.generated_token_ids.empty() ||
-                                cold.generated_token_ids.empty() ||
-                                reused.generated_token_ids.front() == cold.generated_token_ids.front();
+    const bool boundary_holds =
+        reused.generated_token_ids.empty() || cold.generated_token_ids.empty() ||
+        reused.generated_token_ids.front() == cold.generated_token_ids.front();
     if (reused.reused_prompt_tokens != expected_reuse || reused.generated_token_ids.size() != 2 ||
         cold.reused_prompt_tokens != 0 || !boundary_holds) {
         std::cerr << "Flash-Next prefix reuse is incorrect: reused=" << reused.reused_prompt_tokens
@@ -652,19 +663,21 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     // asserted here — earlier runs in this test have captured further checkpoints, so the reused
     // length is allowed to grow — but the reused run must reuse something, or the comparison would
     // silently degrade into cold-versus-cold.
-    // The long prompt must be long enough to CONTAIN a catalogued checkpoint, or there is nothing to
-    // reuse and this degrades into cold-versus-cold. It did: the short request consumed the only
+    // The long prompt must be long enough to CONTAIN a catalogued checkpoint, or there is nothing
+    // to reuse and this degrades into cold-versus-cold. It did: the short request consumed the only
     // in-range checkpoint (frontier 38) and published its own endpoint at frontier 41 - one token
     // past the 40-token prompt - so `prefix_shortlist_key(41)` returned nullopt because
     // 41 > prefix_digests.size() == 40, and the request was rejected as `frontier-beyond-request`
     // with reused_prompt_tokens = 0.
     //
-    // The checkpoint at 41 holds the 40-token prompt plus the short request's first generated token,
-    // so appending exactly that token makes the long prompt 41 tokens whose first 41 match the
-    // checkpoint. The appended token is taken from the short run rather than hard-coded, so this
-    // stays correct if the model or the fixture changes.
+    // The checkpoint at 41 holds the 40-token prompt plus the short request's first generated
+    // token, so appending exactly that token makes the long prompt 41 tokens whose first 41 match
+    // the checkpoint. The appended token is taken from the short run rather than hard-coded, so
+    // this stays correct if the model or the fixture changes.
     std::vector<ninfer::TokenId> long_prompt = continuation;
-    if (!reused.generated_token_ids.empty()) { long_prompt.push_back(reused.generated_token_ids[0]); }
+    if (!reused.generated_token_ids.empty()) {
+        long_prompt.push_back(reused.generated_token_ids[0]);
+    }
     const ninfer::GenerationResult reused_long =
         engine.generate(engine.prepare_tokens(long_prompt), greedy_options(16, true));
     const ninfer::GenerationResult cold_long =
@@ -723,8 +736,7 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     const std::uint32_t expected_stopped_reuse =
         static_cast<std::uint32_t>(prompt.size() + stopped.generated_token_ids.size() - 1);
     if (stopped_reuse.reused_prompt_tokens != expected_stopped_reuse ||
-        stopped_cold.reused_prompt_tokens != 0 ||
-        stopped_reuse.generated_token_ids.size() != 1 ||
+        stopped_cold.reused_prompt_tokens != 0 || stopped_reuse.generated_token_ids.size() != 1 ||
         stopped_cold.generated_token_ids != stopped_reuse.generated_token_ids) {
         std::cerr << "Flash-Next partial MTP terminal reused " << stopped_reuse.reused_prompt_tokens
                   << ", expected " << expected_stopped_reuse << '\n';
@@ -740,11 +752,10 @@ int exercise_ordinary_greedy(const char* artifact,
     ninfer::EngineOptions options    = engine_options(artifact);
     options.speculative.backend      = ninfer::SpeculativeBackend::None;
     options.speculative.draft_tokens = 0;
-    options.enable_vision = false;
+    options.enable_vision            = false;
     ninfer::Engine engine(std::move(options));
-    const ninfer::GenerationResult result =
-        engine.generate(engine.prepare_tokens(canonical_prompt()),
-                        greedy_options(expected_prefix.size(), false));
+    const ninfer::GenerationResult result = engine.generate(
+        engine.prepare_tokens(canonical_prompt()), greedy_options(expected_prefix.size(), false));
     if (result.speculative.backend != ninfer::SpeculativeBackend::None ||
         result.generated_token_ids != expected_prefix) {
         std::cerr << "Flash-Next ordinary greedy output disagrees with the artifact's "
@@ -932,9 +943,8 @@ const std::string& pressured_divergent() {
 ninfer::ChatMessage pressured_text_message(std::string text, ninfer::ChatRole role) {
     ninfer::ChatMessage message;
     message.role = role;
-    message.parts.push_back(ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
-                                                .text = std::move(text),
-                                                .media = {}});
+    message.parts.push_back(ninfer::MessagePart{
+        .kind = ninfer::MessagePartKind::Text, .text = std::move(text), .media = {}});
     return message;
 }
 
@@ -965,18 +975,18 @@ ninfer::PromptInput pressured_turn_input(bool with_question) {
 // under pressure independent of capture timing. The Host quota is set explicitly because a DGX
 // Spark host quota resolves to zero, which would leave no demotion destination at all.
 ninfer::EngineOptions pressured_options(const char* artifact, std::uint32_t device_state_slots) {
-    ninfer::EngineOptions options                = engine_options(artifact);
-    options.max_context                          = 8192;
-    options.kv_capacity                          = ninfer::KvCapacityPolicy::explicit_capacity(8192);
-    options.max_concurrency                      = 2;
-    options.max_pending_requests                 = 2;
-    options.enable_vision                        = false;
-    options.context_cache.device_state_slots     = device_state_slots;
-    options.context_cache.host_state_slots       = 4;
+    ninfer::EngineOptions options            = engine_options(artifact);
+    options.max_context                      = 8192;
+    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+    options.max_concurrency                  = 2;
+    options.max_pending_requests             = 2;
+    options.enable_vision                    = false;
+    options.context_cache.device_state_slots = device_state_slots;
+    options.context_cache.host_state_slots   = 4;
     options.context_cache.host_kv_capacity_bytes = 1ULL << 30;
     // Defer the follow-up's long prefill so its admission is planned while the first turn still
     // runs, deterministic regardless of prefill speed.
-    options.long_prefill_wait_ms                 = 200;
+    options.long_prefill_wait_ms = 200;
     return options;
 }
 
@@ -1014,8 +1024,7 @@ int exercise_own_source_demote_restore(const char* artifact) {
         }
         const auto after_follow_up = engine.runtime_stats();
         if (second.prefix_reuse_path != ninfer::PrefixReusePath::SharedStablePrefix ||
-            second.reused_prompt_tokens < 1024 ||
-            after_follow_up.state_d2h_count == 0 ||
+            second.reused_prompt_tokens < 1024 || after_follow_up.state_d2h_count == 0 ||
             after_follow_up.host_state_occupied_slots == 0 ||
             after_follow_up.pressure_shared_owners_evicted != 0) {
             std::cerr << "Flash-Next follow-up under pressure did not keep its shared source "
@@ -1049,7 +1058,8 @@ int exercise_own_source_demote_restore(const char* artifact) {
     if (roomy_first_result.generated_token_ids != first.generated_token_ids ||
         roomy_second.generated_token_ids != second.generated_token_ids) {
         std::cerr << "Flash-Next pressured shared-source follow-up differs from the unpressured "
-                     "fork (reused " << roomy_second.reused_prompt_tokens << ", path "
+                     "fork (reused "
+                  << roomy_second.reused_prompt_tokens << ", path "
                   << static_cast<int>(roomy_second.prefix_reuse_path) << ")\n";
         print_tokens("pressured", second.generated_token_ids);
         print_tokens("roomy", roomy_second.generated_token_ids);
@@ -1089,9 +1099,8 @@ int exercise_forced_own_source_compound(const char* artifact) {
     const auto text_message = [](std::string text, ninfer::ChatRole role) {
         ninfer::ChatMessage message;
         message.role = role;
-        message.parts.push_back(
-            ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
-                                .text = std::move(text), .media = {}});
+        message.parts.push_back(ninfer::MessagePart{
+            .kind = ninfer::MessagePartKind::Text, .text = std::move(text), .media = {}});
         return message;
     };
     const auto shared_marker = [] {
@@ -1126,9 +1135,8 @@ int exercise_forced_own_source_compound(const char* artifact) {
         input.messages.push_back(text_message(body, ninfer::ChatRole::User));
         ninfer::ChatMessage response;
         response.role = ninfer::ChatRole::Assistant;
-        response.parts.push_back(
-            ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
-                                .text = capture_content, .media = {}});
+        response.parts.push_back(ninfer::MessagePart{
+            .kind = ninfer::MessagePartKind::Text, .text = capture_content, .media = {}});
         input.messages.push_back(std::move(response));
         input.messages.push_back(text_message("Summarize in five words.", ninfer::ChatRole::User));
         input.options.enable_thinking = false;
@@ -1142,43 +1150,42 @@ int exercise_forced_own_source_compound(const char* artifact) {
     ninfer::GenerationResult middle_result;
     ninfer::GenerationResult follow_up_result;
     {
-        ninfer::EngineOptions options                    = engine_options(artifact);
-        options.max_context                              = 8192;
-        options.kv_capacity                              = ninfer::KvCapacityPolicy::explicit_capacity(8192);
-        options.max_concurrency                          = 2;
-        options.max_pending_requests                     = 2;
+        ninfer::EngineOptions options = engine_options(artifact);
+        options.max_context           = 8192;
+        options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+        options.max_concurrency       = 2;
+        options.max_pending_requests  = 2;
         // Three Device state slots in total: the capture endpoint, its turn-closure image and
         // the shared source fill the pool exactly; the consuming middle turn fits without
         // pressure, and the follow-up's admission is left with a one-slot deficit.
-        options.context_cache.device_state_slots         = 1;
-        options.enable_vision                            = false;
-        options.context_cache.host_state_slots           = 4;
-        options.context_cache.host_kv_capacity_bytes     = 2ULL << 30;
-        options.context_cache.max_private_continuations  = 4;
-        options.context_cache.max_shared_prefixes        = 4;
+        options.context_cache.device_state_slots        = 1;
+        options.enable_vision                           = false;
+        options.context_cache.host_state_slots          = 4;
+        options.context_cache.host_kv_capacity_bytes    = 2ULL << 30;
+        options.context_cache.max_private_continuations = 4;
+        options.context_cache.max_shared_prefixes       = 4;
         // Release the follow-up's long prefill 200 ms after submission so its admission is
         // planned while the middle turn still runs and still consumes the capture endpoint.
-        options.long_prefill_wait_ms                     = 200;
+        options.long_prefill_wait_ms = 200;
         ninfer::Engine engine(std::move(options));
         capture = engine.submit(engine.prepare(capture_turn()), greedy_options(64, true)).wait();
         if (capture.generated_token_ids.empty() || capture.content.empty()) {
             std::cerr << "Flash-Next forced-compound capture turn did not generate\n";
             return 1;
         }
-        auto middle_handle =
-            engine.submit(engine.prepare(consuming_middle_turn(capture.content)),
-                          greedy_options(64, true));
+        auto middle_handle = engine.submit(engine.prepare(consuming_middle_turn(capture.content)),
+                                           greedy_options(64, true));
         // Read the middle turn's admission bookkeeping before the follow-up is submitted: the
         // follow-up's own admission pressure lands while the middle turn still runs and would
         // otherwise pollute this snapshot.
         const auto after_middle = engine.runtime_stats();
-        auto follow_up_handle =
-            engine.submit(engine.prepare(follow_up()), greedy_options(8, true));
-        middle_result = middle_handle.wait();
+        auto follow_up_handle = engine.submit(engine.prepare(follow_up()), greedy_options(8, true));
+        middle_result         = middle_handle.wait();
         if (middle_result.prefix_reuse_path != ninfer::PrefixReusePath::PrivateEndpoint ||
             middle_result.reused_prompt_tokens < 1024) {
             std::cerr << "Flash-Next forced-compound middle turn did not consume the capture "
-                         "endpoint (reused " << middle_result.reused_prompt_tokens << ", path "
+                         "endpoint (reused "
+                      << middle_result.reused_prompt_tokens << ", path "
                       << static_cast<int>(middle_result.prefix_reuse_path) << ")\n";
             return 1;
         }
@@ -1189,16 +1196,16 @@ int exercise_forced_own_source_compound(const char* artifact) {
         }
         const auto after = engine.runtime_stats();
         if (after.pressure_shared_owners_degraded == 0 ||
-            after.pressure_shared_owners_evicted != 0 ||
-            after.pressure_checkpoints_dropped != 0 ||
+            after.pressure_shared_owners_evicted != 0 || after.pressure_checkpoints_dropped != 0 ||
             after.pressure_private_owners_degraded != 0 ||
             after.pressure_private_owners_evicted != 0) {
             std::cerr << "Flash-Next forced-compound victim domain was not exactly the shared "
-                         "source (shared degraded " << after.pressure_shared_owners_degraded
-                      << ", shared evicted " << after.pressure_shared_owners_evicted
-                      << ", private degraded " << after.pressure_private_owners_degraded
-                      << ", private evicted " << after.pressure_private_owners_evicted
-                      << ", dropped " << after.pressure_checkpoints_dropped << ")\n";
+                         "source (shared degraded "
+                      << after.pressure_shared_owners_degraded << ", shared evicted "
+                      << after.pressure_shared_owners_evicted << ", private degraded "
+                      << after.pressure_private_owners_degraded << ", private evicted "
+                      << after.pressure_private_owners_evicted << ", dropped "
+                      << after.pressure_checkpoints_dropped << ")\n";
             return 1;
         }
         std::cout << "forced compound: middle consumed " << middle_result.reused_prompt_tokens
@@ -1214,17 +1221,17 @@ int exercise_forced_own_source_compound(const char* artifact) {
     // no checkpoint is destroyed.
     {
         const auto options_for = [&](std::uint32_t device_state_slots) {
-            ninfer::EngineOptions options                    = engine_options(artifact);
-            options.max_context                              = 8192;
-            options.kv_capacity                              = ninfer::KvCapacityPolicy::explicit_capacity(8192);
-            options.max_concurrency                          = 1;
-            options.max_pending_requests                     = 2;
-            options.context_cache.device_state_slots         = device_state_slots;
-            options.enable_vision                            = false;
-            options.context_cache.host_state_slots           = 4;
-            options.context_cache.host_kv_capacity_bytes     = 2ULL << 30;
-            options.context_cache.max_private_continuations  = 4;
-            options.context_cache.max_shared_prefixes        = 4;
+            ninfer::EngineOptions options = engine_options(artifact);
+            options.max_context           = 8192;
+            options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+            options.max_concurrency       = 1;
+            options.max_pending_requests  = 2;
+            options.context_cache.device_state_slots        = device_state_slots;
+            options.enable_vision                           = false;
+            options.context_cache.host_state_slots          = 4;
+            options.context_cache.host_kv_capacity_bytes    = 2ULL << 30;
+            options.context_cache.max_private_continuations = 4;
+            options.context_cache.max_shared_prefixes       = 4;
             return options;
         };
         ninfer::GenerationResult restore_capture;
@@ -1258,23 +1265,23 @@ int exercise_forced_own_source_compound(const char* artifact) {
                 return 1;
             }
             const auto after = engine.runtime_stats();
-            if (after.state_h2d_count == 0 ||
-                after.pressure_shared_owners_degraded != 0 ||
+            if (after.state_h2d_count == 0 || after.pressure_shared_owners_degraded != 0 ||
                 after.pressure_shared_owners_evicted != 0 ||
                 after.pressure_checkpoints_dropped != 0 ||
                 after.pressure_private_owners_evicted != 0) {
                 std::cerr << "Flash-Next forced-compound restore follow-up did not restore the "
-                             "shared source through Host (h2d " << after.state_h2d_count
-                          << ", shared degraded " << after.pressure_shared_owners_degraded
-                          << ", shared evicted " << after.pressure_shared_owners_evicted
-                          << ", private evicted " << after.pressure_private_owners_evicted
-                          << ", dropped " << after.pressure_checkpoints_dropped << ")\n";
+                             "shared source through Host (h2d "
+                          << after.state_h2d_count << ", shared degraded "
+                          << after.pressure_shared_owners_degraded << ", shared evicted "
+                          << after.pressure_shared_owners_evicted << ", private evicted "
+                          << after.pressure_private_owners_evicted << ", dropped "
+                          << after.pressure_checkpoints_dropped << ")\n";
                 return 1;
             }
             std::cout << "forced compound: restore fork reused "
-                      << restore_follow_up.reused_prompt_tokens << ", h2d "
-                      << after.state_h2d_count << ", private demoted "
-                      << after.pressure_private_owners_degraded << ", dropped 0\n";
+                      << restore_follow_up.reused_prompt_tokens << ", h2d " << after.state_h2d_count
+                      << ", private demoted " << after.pressure_private_owners_degraded
+                      << ", dropped 0\n";
         }
 
         // The restored fork must match an unpressured fork token for token.
@@ -1284,8 +1291,7 @@ int exercise_forced_own_source_compound(const char* artifact) {
         const auto roomy_capture_result   = roomy_capture.wait();
         const auto roomy_follow_up_result = roomy_follow_up.wait();
         if (roomy_capture_result.generated_token_ids != restore_capture.generated_token_ids ||
-            roomy_follow_up_result.generated_token_ids !=
-                restore_follow_up.generated_token_ids) {
+            roomy_follow_up_result.generated_token_ids != restore_follow_up.generated_token_ids) {
             std::cerr << "Flash-Next forced-compound restored fork differs from the unpressured "
                          "fork\n";
             print_tokens("pressured", restore_follow_up.generated_token_ids);
@@ -1327,13 +1333,14 @@ bool same_float_bits(float a, float b) { return std::memcmp(&a, &b, sizeof(float
 // fails here, this reports a failed precondition - never a route difference - because an exact
 // control is not legitimate on an engine that is not deterministic.
 
-LogprobRun run_two_request_sequence(ninfer::Engine& engine, const std::vector<ninfer::TokenId>& prompt,
+LogprobRun run_two_request_sequence(ninfer::Engine& engine,
+                                    const std::vector<ninfer::TokenId>& prompt,
                                     std::uint32_t first_tokens, std::uint32_t suffix_tokens) {
     LogprobRun run;
     const auto first =
         engine.generate(engine.prepare_tokens(prompt), greedy_options(first_tokens, true));
-    run.tokens   = first.generated_token_ids;
-    run.logprobs = first.token_logprobs;
+    run.tokens                                = first.generated_token_ids;
+    run.logprobs                              = first.token_logprobs;
     std::vector<ninfer::TokenId> continuation = prompt;
     continuation.insert(continuation.end(), first.generated_token_ids.begin(),
                         first.generated_token_ids.end());
@@ -1350,7 +1357,7 @@ LogprobRun run_two_request_sequence(ninfer::Engine& engine, const std::vector<ni
 // Reports the first difference between two runs that must be identical, naming the position, the
 // token and both values. Returns the number of differences found.
 int compare_exact_runs(const char* label, const LogprobRun& a, const LogprobRun& b) {
-    int differences = 0;
+    int differences   = 0;
     const auto report = [&](const char* what, std::size_t index, double left, double right) {
         ++differences;
         if (differences == 1) {
@@ -1387,9 +1394,9 @@ int compare_exact_runs(const char* label, const LogprobRun& a, const LogprobRun&
 struct PressuredRun {
     std::vector<ninfer::TokenId> tokens;
     std::vector<ninfer::GeneratedTokenLogprob> logprobs;
-    std::uint64_t d2h              = 0;
-    std::uint32_t reused           = 0;
-    bool first_turn_generated      = false;
+    std::uint64_t d2h         = 0;
+    std::uint32_t reused      = 0;
+    bool first_turn_generated = false;
 };
 
 PressuredRun run_pressured_sequence(const ninfer::EngineOptions& options) {
@@ -1399,8 +1406,8 @@ PressuredRun run_pressured_sequence(const ninfer::EngineOptions& options) {
         engine.submit(engine.prepare(pressured_turn_input(false)), greedy_options(64, true));
     auto second_handle =
         engine.submit(engine.prepare(pressured_turn_input(true)), greedy_options(8, true));
-    const auto first  = first_handle.wait();
-    const auto second = second_handle.wait();
+    const auto first         = first_handle.wait();
+    const auto second        = second_handle.wait();
     run.first_turn_generated = !first.generated_token_ids.empty();
     run.tokens               = second.generated_token_ids;
     run.logprobs             = second.token_logprobs;
@@ -1414,14 +1421,13 @@ LogprobRun as_logprob_run(const PressuredRun& run) {
 }
 
 int exercise_route_matched_control(const char* artifact) {
-    const auto& prompt = canonical_prompt();
-    const auto options_for = [&](std::uint32_t device_state_slots,
-                                 std::uint32_t host_state_slots) {
-        ninfer::EngineOptions options             = engine_options(artifact);
-        options.token_logprobs                    = true;
-        options.enable_vision                     = false;
-        options.context_cache.device_state_slots  = device_state_slots;
-        options.context_cache.host_state_slots    = host_state_slots;
+    const auto& prompt     = canonical_prompt();
+    const auto options_for = [&](std::uint32_t device_state_slots, std::uint32_t host_state_slots) {
+        ninfer::EngineOptions options            = engine_options(artifact);
+        options.token_logprobs                   = true;
+        options.enable_vision                    = false;
+        options.context_cache.device_state_slots = device_state_slots;
+        options.context_cache.host_state_slots   = host_state_slots;
         return options;
     };
     constexpr std::uint32_t kFirstTokens  = 6;
@@ -1502,16 +1508,18 @@ int exercise_route_matched_control(const char* artifact) {
     std::cerr << "route-matched control: state paths - device d2h " << device_run.d2h << " (reused "
               << device_run.reused << " prompt tokens), host d2h " << host_run.d2h << " (reused "
               << host_run.reused << " prompt tokens)\n";
-    const int differences =
-        compare_exact_runs("route-matched control", as_logprob_run(device_run), as_logprob_run(host_run));
+    const int differences = compare_exact_runs("route-matched control", as_logprob_run(device_run),
+                                               as_logprob_run(host_run));
     if (differences != 0) {
         std::cerr << "route-matched control: identical call boundaries with only the state path "
-                     "differing produced " << differences << " difference(s)\n";
+                     "differing produced "
+                  << differences << " difference(s)\n";
         return 1;
     }
     std::cerr << "route-matched control: identical call boundaries agree bitwise across the Device "
-                 "and Host state paths (" << device_run.tokens.size() << " tokens, "
-              << device_run.logprobs.size() << " probability reports)\n";
+                 "and Host state paths ("
+              << device_run.tokens.size() << " tokens, " << device_run.logprobs.size()
+              << " probability reports)\n";
     return 0;
 }
 
@@ -1549,9 +1557,9 @@ int exercise_route_matched_control(const char* artifact) {
 // frontier 40 - and that prediction implies the two profiles should agree within tolerance. They do
 // not, so the prediction failed. It does NOT follow that the seed is in the K/V store. Quantization
 // is a nonlinear map: a coarser store amplifies any input difference, whether the seed is upstream
-// of the store or in it. Growth under FP8 therefore tells you the amplification is profile-dependent,
-// which is a different statement from relocating the seed. Reading "FP8 is 4.9x worse" as "the seed
-// is in the store" is exactly the inference this comment exists to prevent.
+// of the store or in it. Growth under FP8 therefore tells you the amplification is
+// profile-dependent, which is a different statement from relocating the seed. Reading "FP8 is 4.9x
+// worse" as "the seed is in the store" is exactly the inference this comment exists to prevent.
 //
 // HISTORY. The first anchor was 0.40 nats, derived from the hidden-state relative-L2 plateau
 // (6-10e-2) rather than from a measurement; it turned out 14x looser than the observed BF16
@@ -1567,8 +1575,8 @@ struct ProfileTolerance {
 // One entry per K/V profile the model family supports. Adding a profile here without a measurement
 // is not allowed: the value has to come from the teacher-forced measurement at that profile.
 constexpr ProfileTolerance kOracleLogprobTolerances[] = {
-    {ninfer::KvCacheStorage::BFloat16, 0.12},        // 4 x measured 0.0281 nats
-    {ninfer::KvCacheStorage::Fp8E4M3Row256, 0.55},   // 4 x measured 0.1380 nats
+    {ninfer::KvCacheStorage::BFloat16, 0.12},      // 4 x measured 0.0281 nats
+    {ninfer::KvCacheStorage::Fp8E4M3Row256, 0.55}, // 4 x measured 0.1380 nats
 };
 
 double oracle_logprob_tolerance(ninfer::KvCacheStorage storage) {
@@ -1594,8 +1602,8 @@ struct ToleranceMeasurement {
 ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCacheStorage storage,
                                             const char* label) {
     ToleranceMeasurement out;
-    const auto& prompt = canonical_prompt();
-    const double tolerance = oracle_logprob_tolerance(storage);
+    const auto& prompt            = canonical_prompt();
+    const double tolerance        = oracle_logprob_tolerance(storage);
     ninfer::EngineOptions options = engine_options(artifact);
     options.token_logprobs        = true;
     options.enable_vision         = false;
@@ -1623,7 +1631,8 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
     if (capture.generated_token_ids !=
         std::vector<ninfer::TokenId>(cold.generated_token_ids.begin(),
                                      cold.generated_token_ids.begin() + kReusedBase)) {
-        std::cerr << label << ": the capture run diverged from the cold run inside the shared "
+        std::cerr << label
+                  << ": the capture run diverged from the cold run inside the shared "
                      "prefix, so the two routes were not fed the same sequence\n";
         out.ok = false;
         return out;
@@ -1634,13 +1643,15 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
     const auto reused = engine.generate(engine.prepare_tokens(continuation),
                                         greedy_options(kTotalTokens - kReusedBase, true));
     if (reused.reused_prompt_tokens == 0) {
-        std::cerr << label << ": the continuation reused nothing, so the two routes are the same "
+        std::cerr << label
+                  << ": the continuation reused nothing, so the two routes are the same "
                      "route and the comparison proves nothing\n";
         out.ok = false;
         return out;
     }
     if (reused.token_logprobs.size() != reused.generated_token_ids.size()) {
-        std::cerr << label << ": the reused run did not report one probability per generated "
+        std::cerr << label
+                  << ": the reused run did not report one probability per generated "
                      "token\n";
         out.ok = false;
         return out;
@@ -1677,18 +1688,17 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
         out.max_delta = std::max(out.max_delta, delta);
         ++out.compared;
         if (delta > tolerance) {
-            std::cerr << label << ": |delta log p| " << delta << " exceeds "
-                      << tolerance << " at position " << position << " (cold "
-                      << cold_report.logprob << ", reused " << reused_report.logprob << ")\n";
+            std::cerr << label << ": |delta log p| " << delta << " exceeds " << tolerance
+                      << " at position " << position << " (cold " << cold_report.logprob
+                      << ", reused " << reused_report.logprob << ")\n";
             out.ok = false;
         }
     }
     std::cerr << label << ": " << out.compared << " position(s) compared, max |delta log p| "
-              << out.max_delta << " nats (tolerance " << tolerance << "); "
-              << out.diverged << " token(s) diverged, " << out.confident_bad
-              << " at a discriminating position; " << out.flat << " of " << out.positions
-              << " position(s) have a top-2 margin <= " << 2.0 * tolerance
-              << " nats\n";
+              << out.max_delta << " nats (tolerance " << tolerance << "); " << out.diverged
+              << " token(s) diverged, " << out.confident_bad << " at a discriminating position; "
+              << out.flat << " of " << out.positions
+              << " position(s) have a top-2 margin <= " << 2.0 * tolerance << " nats\n";
     if (out.confident_bad != 0) { out.ok = false; }
     if (out.flat * 2 >= out.positions) {
         // Honest power report: most positions cannot discriminate, so this prompt is a weak oracle.
@@ -1702,8 +1712,8 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
 }
 
 int exercise_teacher_forced_tolerance(const char* artifact) {
-    const ToleranceMeasurement measured =
-        measure_teacher_forced(artifact, ninfer::KvCacheStorage::BFloat16, "teacher-forced tolerance");
+    const ToleranceMeasurement measured = measure_teacher_forced(
+        artifact, ninfer::KvCacheStorage::BFloat16, "teacher-forced tolerance");
     return measured.ok ? 0 : 1;
 }
 
@@ -1714,8 +1724,8 @@ int exercise_teacher_forced_tolerance(const char* artifact) {
 // Flash-Next supports exactly two K/V profiles - BF16 and FP8 E4M3 with a row-256 scale - so the
 // experiment has two points and both are real precisions rather than a synthetic switch. The
 // measured difference it is asked about is the one from issues ninfer-gb10-53j and ninfer-gb10-e9e:
-// one BF16 ULP in the layer-0 GDN conv/recurrent state, amplified through 36 layers of recurrence to
-// a 21% hidden-state difference and 3407 of 20480 committed-KV bytes at frontier 40.
+// one BF16 ULP in the layer-0 GDN conv/recurrent state, amplified through 36 layers of recurrence
+// to a 21% hidden-state difference and 3407 of 20480 committed-KV bytes at frontier 40.
 //
 // The measurement is the teacher-forced |delta log p| at each precision, because that is the
 // quantity a token decision depends on. The two outcomes mean different things:
@@ -1740,15 +1750,16 @@ int report_precision_scaling(const ToleranceMeasurement& bf16, const ToleranceMe
                  "amplifies any input difference, wherever the seed enters\n";
     if (bf16.diverged != 0 || fp8.diverged != 0) {
         std::cerr << "precision scaling: token divergence at bf16 " << bf16.diverged << ", fp8 "
-                  << fp8.diverged << " (the measurement still bounds the log-probability "
+                  << fp8.diverged
+                  << " (the measurement still bounds the log-probability "
                      "difference at the positions both routes agree on)\n";
     }
     return 0;
 }
 
 int exercise_precision_scaling(const char* artifact) {
-    const ToleranceMeasurement bf16 =
-        measure_teacher_forced(artifact, ninfer::KvCacheStorage::BFloat16, "precision scaling bf16");
+    const ToleranceMeasurement bf16 = measure_teacher_forced(
+        artifact, ninfer::KvCacheStorage::BFloat16, "precision scaling bf16");
     const ToleranceMeasurement fp8 = measure_teacher_forced(
         artifact, ninfer::KvCacheStorage::Fp8E4M3Row256, "precision scaling fp8");
     return report_precision_scaling(bf16, fp8);
@@ -1757,17 +1768,18 @@ int exercise_precision_scaling(const char* artifact) {
 int main() {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B real-engine test did not run. Set it to the 125B .ninfer file\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B real-engine test "
+                     "did not run. Set it to the 125B .ninfer file\n";
         return 77;
     }
-    const std::string recipe       = artifact_recipe(artifact);
-    const bool qad                 = qad_recipe(recipe);
-    const auto& expected_prefix    = mtp_verify_output(recipe);
+    const std::string recipe    = artifact_recipe(artifact);
+    const bool qad              = qad_recipe(recipe);
+    const auto& expected_prefix = mtp_verify_output(recipe);
     configure_prefix_state_dump(canonical_prompt(), expected_prefix);
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     // Focused oracle run. E and T are the instruments this test adds to replace the single-golden
-    // chain, and they are the only sections that need to run when they are being validated against a
-    // new build; the rest of the battery is unchanged and still runs by default.
+    // chain, and they are the only sections that need to run when they are being validated against
+    // a new build; the rest of the battery is unchanged and still runs by default.
     const char* oracle_only = std::getenv("NINFER_TEST_ORACLE_ONLY");
     try {
         if (oracle_only != nullptr && *oracle_only != '\0') {
@@ -1800,7 +1812,7 @@ int main() {
                                                                   : ninfer::ProposalHead::Full);
         }
         for (const auto head : heads) {
-            auto options = engine_options(artifact);
+            auto options                      = engine_options(artifact);
             options.speculative.proposal_head = head;
             ninfer::Engine engine(options);
             const ninfer::LoadSummary load = engine.load_summary();
@@ -1818,9 +1830,9 @@ int main() {
             // battery; a nonzero value means a lifecycle path landed without its accounting
             // contract (docs/serving.md documents the consumer-facing zeros).
             const ninfer::RuntimeStats lane = engine.runtime_stats();
-            if (lane.preemptions != 0 || lane.snapshot_restores != 0 ||
-                lane.replay_restores != 0 || lane.replayed_tokens != 0 ||
-                lane.paused_requests != 0 || lane.replaying_requests != 0) {
+            if (lane.preemptions != 0 || lane.snapshot_restores != 0 || lane.replay_restores != 0 ||
+                lane.replayed_tokens != 0 || lane.paused_requests != 0 ||
+                lane.replaying_requests != 0) {
                 std::cerr << "Flash-Next lane reports nonzero pause/preempt/replay counters:"
                           << " preemptions=" << lane.preemptions
                           << " snapshot_restores=" << lane.snapshot_restores
@@ -1835,8 +1847,7 @@ int main() {
             if (lane.speculative_attempted_per_position.size() != 3 ||
                 lane.speculative_accepted_per_position.size() != 3) {
                 std::cerr << "Flash-Next cumulative per-position vectors are not draft-window"
-                          << " sized: attempted="
-                          << lane.speculative_attempted_per_position.size()
+                          << " sized: attempted=" << lane.speculative_attempted_per_position.size()
                           << " accepted=" << lane.speculative_accepted_per_position.size() << '\n';
                 return 1;
             }

@@ -21,7 +21,7 @@ namespace ninfer::ops {
  * says otherwise.
  */
 struct RopeYarn {
-    float factor                       = 1.0F;    // 1.0 = disabled
+    float factor                       = 1.0F; // 1.0 = disabled
     std::int32_t original_max_position = 262144;
     float beta_fast                    = 32.0F;
     float beta_slow                    = 1.0F;

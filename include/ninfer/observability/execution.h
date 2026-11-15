@@ -144,12 +144,12 @@ struct GenerationTimings {
 // elapsed time, so values from concurrent requests must not be summed. Scheduler yield/relock is
 // reported separately from coordinator calls.
 struct GenerationEngineTiming {
-    double queue_wait_seconds                     = 0.0;
-    double engine_boundary_exposed_seconds        = 0.0;
-    double session_call_exposed_seconds           = 0.0;
-    double executor_poll_exposed_seconds          = 0.0;
-    double engine_commit_output_exposed_seconds   = 0.0;
-    double engine_maintenance_exposed_seconds     = 0.0;
+    double queue_wait_seconds                   = 0.0;
+    double engine_boundary_exposed_seconds      = 0.0;
+    double session_call_exposed_seconds         = 0.0;
+    double executor_poll_exposed_seconds        = 0.0;
+    double engine_commit_output_exposed_seconds = 0.0;
+    double engine_maintenance_exposed_seconds   = 0.0;
     // Master-generation Flash-Next engine counters: Device-side completion wait exposure, kept
     // additive until the routes share one vocabulary.
     double device_wait_exposed_seconds            = 0.0;

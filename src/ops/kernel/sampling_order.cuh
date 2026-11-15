@@ -32,9 +32,9 @@ __device__ __forceinline__ void sampling_insert_candidate(float* vals, int* idxs
 }
 
 // The penalty arithmetic itself: presence applies once to a token that has been seen at all,
-// frequency scales with how often. Every route that adjusts a logit for committed history ends here,
-// so a reported probability and the draw it describes cannot drift apart by arithmetic. What the
-// caller assembles into `count` is its own business, because the sampler's live counts and a
+// frequency scales with how often. Every route that adjusts a logit for committed history ends
+// here, so a reported probability and the draw it describes cannot drift apart by arithmetic. What
+// the caller assembles into `count` is its own business, because the sampler's live counts and a
 // report's draw-time view are different questions about the same round.
 __device__ __forceinline__ float sampling_penalized(float raw, int count,
                                                     const SamplingConfig& config) {

@@ -41,9 +41,9 @@ __global__ __launch_bounds__(kMergeThreads, 2) void linear_topk_merge_kernel(
         const int local_partial = p / kLinearTopK;
         const int rank          = p - local_partial * kLinearTopK;
         const int input_group   = output_group * kLinearTopKMergeFanIn + local_partial;
-        keys[item]              = input_group < input_groups
-                                      ? input_keys[partial_offset(column, input_group, rank, input_groups)]
-                                      : 0;
+        keys[item] = input_group < input_groups
+                         ? input_keys[partial_offset(column, input_group, rank, input_groups)]
+                         : 0;
     }
 
     MergeSort(sort_storage).Sort(keys, common::ScoreIdOrderGreater{});

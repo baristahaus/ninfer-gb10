@@ -112,20 +112,20 @@ public:
                     ops::prepare_linear_weight(inputs[2]), ops::prepare_linear_weight(inputs[3])};
             } else {
                 auto projection = ops::prepare_projection_weights(inputs);
-                const auto* exl3_single_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
-                const bool exl3_single =
-                    exl3_single_weight != nullptr &&
-                    exl3_single_weight->weight.qtype == QType::EXL3;
+                const auto* exl3_single_weight =
+                    std::get_if<ops::SingleProjectionWeight>(&projection);
+                const bool exl3_single = exl3_single_weight != nullptr &&
+                                         exl3_single_weight->weight.qtype == QType::EXL3;
                 if (!exl3_single) {
                     (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
                 }
-                mixer.projection = std::move(projection);
+                mixer.projection      = std::move(projection);
                 mixer.projection_rows = rows;
             }
-            mixer.query_norm = tensor(a->query_norm);
-            mixer.key_norm   = tensor(a->key_norm);
-            mixer.output     = linear(a->output);
-            out.mixer        = std::move(mixer);
+            mixer.query_norm        = tensor(a->query_norm);
+            mixer.key_norm          = tensor(a->key_norm);
+            mixer.output            = linear(a->output);
+            out.mixer               = std::move(mixer);
             out.projection_prefetch = prefetch(std::get<AttentionParameters>(out.mixer), a->query);
         } else {
             const auto& g = std::get<GdnWeights>(w.mixer);
@@ -140,26 +140,27 @@ public:
                 // the paired native form is the Q4/Q5 attention pairing, not this.
                 mixer.role_rows = std::array<LinearParameters, 2>{
                     ops::prepare_linear_weight(std::span<const ops::WeightInput>(inputs.data(), 3)),
-                    ops::prepare_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
+                    ops::prepare_linear_weight(
+                        std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
             } else {
-                auto projection = ops::prepare_projection_weights(inputs);
+                auto projection             = ops::prepare_projection_weights(inputs);
                 const auto* gdn_exl3_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
                 const bool gdn_exl3_single =
                     gdn_exl3_weight != nullptr && gdn_exl3_weight->weight.qtype == QType::EXL3;
                 if (!gdn_exl3_single) {
                     (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
                 }
-                mixer.projection = std::move(projection);
+                mixer.projection      = std::move(projection);
                 mixer.projection_rows = rows;
             }
-            mixer.control = ops::prepare_gdn_control_proj_weights(model_.input(g.a_projection),
-                                                                  model_.input(g.b_projection));
-            mixer.a_log        = tensor(g.a_log);
-            mixer.dt_bias      = tensor(g.dt_bias);
-            mixer.convolution  = tensor(g.convolution);
-            mixer.norm         = tensor(g.norm);
-            mixer.output       = linear(g.output);
-            out.mixer          = std::move(mixer);
+            mixer.control     = ops::prepare_gdn_control_proj_weights(model_.input(g.a_projection),
+                                                                      model_.input(g.b_projection));
+            mixer.a_log       = tensor(g.a_log);
+            mixer.dt_bias     = tensor(g.dt_bias);
+            mixer.convolution = tensor(g.convolution);
+            mixer.norm        = tensor(g.norm);
+            mixer.output      = linear(g.output);
+            out.mixer         = std::move(mixer);
             out.projection_prefetch = prefetch(std::get<GdnParameters>(out.mixer), g.query);
         }
         return out;
@@ -174,16 +175,12 @@ public:
     }
 
     ops::MoeExecutionHints prefetch(const AttentionParameters& mixer, WeightId query) const {
-        if (mixer.role_rows) {
-            return prefetch_weight((*mixer.role_rows)[0].weight, query);
-        }
+        if (mixer.role_rows) { return prefetch_weight((*mixer.role_rows)[0].weight, query); }
         return prefetch(mixer.projection, query);
     }
 
     ops::MoeExecutionHints prefetch(const GdnParameters& mixer, WeightId query) const {
-        if (mixer.role_rows) {
-            return prefetch_weight((*mixer.role_rows)[0].weight, query);
-        }
+        if (mixer.role_rows) { return prefetch_weight((*mixer.role_rows)[0].weight, query); }
         return prefetch(mixer.projection, query);
     }
 

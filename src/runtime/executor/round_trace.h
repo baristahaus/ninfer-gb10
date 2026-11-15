@@ -67,7 +67,7 @@ inline void round_trace(const char* format, ...) {
     va_end(args);
     if (body < 0) { return; }
     const std::size_t body_size = static_cast<std::size_t>(body);
-    const bool truncated       = body_size >= sizeof(line) - used - 1;
+    const bool truncated        = body_size >= sizeof(line) - used - 1;
     if (truncated) {
         static constexpr char marker[] = " [truncated]";
         const std::size_t marker_size  = sizeof(marker) - 1;

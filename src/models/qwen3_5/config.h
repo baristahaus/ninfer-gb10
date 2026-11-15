@@ -44,7 +44,7 @@ struct RopeConfig {
     // Resolved YaRN configuration: the artifact's rope fields above, plus the engine's opt-in
     // factor. `yarn_factor <= 1` is the disabled state; the other three are only read when it is
     // enabled. The native window stays `yarn_original_max_position`; YaRN never rescales it.
-    float yarn_factor                       = 1.0F;
+    float yarn_factor                        = 1.0F;
     std::uint32_t yarn_original_max_position = 0;
     float yarn_beta_fast                     = 32.0F;
     float yarn_beta_slow                     = 1.0F;

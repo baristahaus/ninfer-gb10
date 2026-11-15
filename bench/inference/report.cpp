@@ -99,7 +99,7 @@ const char* finish_name(FinishReason value) {
 
 struct HostField {
     const char* name;
-    std::uint64_t RuntimeHostWorkStats::*member;
+    std::uint64_t RuntimeHostWorkStats::* member;
 };
 
 constexpr HostField kHostFields[] = {

@@ -16,12 +16,12 @@
 //   KVTableOperations(KVExecutionTablePool&)             width 1
 //   KVTableOperations(tp2::MirroredKVExecutionTables&)   width 2
 //
-// Width 1 forwards to the plain pool, so every call site keeps its exact behaviour. Width 2 forwards
-// to the mirror, which runs the origin operation and replays it on rank 1's stream. The call sites
-// are the same in both cases — that is the point of the funnel.
+// Width 1 forwards to the plain pool, so every call site keeps its exact behaviour. Width 2
+// forwards to the mirror, which runs the origin operation and replays it on rank 1's stream. The
+// call sites are the same in both cases — that is the point of the funnel.
 //
-// Header-only: `logical_kv_store.h` is entirely inline and this header sits beside it, so the funnel
-// adds no translation unit and no build-graph edge.
+// Header-only: `logical_kv_store.h` is entirely inline and this header sits beside it, so the
+// funnel adds no translation unit and no build-graph edge.
 //
 // The row lease is owned: `KVTableOperations::acquire` returns a `KVTableRowLease`, which drops the
 // paired rank-1 row on release. A bare `KVExecutionRowLease` would release only rank 0's row and
@@ -89,6 +89,7 @@ private:
 class KVTableOperations {
 public:
     explicit KVTableOperations(KVExecutionTablePool& tables) noexcept : plain_(&tables) {}
+
     explicit KVTableOperations(tp2::MirroredKVExecutionTables& tables) noexcept
         : mirrored_(&tables) {}
 
@@ -105,9 +106,7 @@ public:
     }
 
     [[nodiscard]] KVTableRowLease acquire(std::int32_t row) {
-        if (mirrored_ != nullptr) {
-            return KVTableRowLease(*this, mirrored_->acquire(row));
-        }
+        if (mirrored_ != nullptr) { return KVTableRowLease(*this, mirrored_->acquire(row)); }
         return KVTableRowLease(*this, plain_->acquire(row));
     }
 
@@ -140,16 +139,16 @@ public:
     }
 
 private:
-    KVExecutionTablePool* plain_               = nullptr;
-    tp2::MirroredKVExecutionTables* mirrored_  = nullptr;
+    KVExecutionTablePool* plain_              = nullptr;
+    tp2::MirroredKVExecutionTables* mirrored_ = nullptr;
 };
 
 inline KVTableRowLease::~KVTableRowLease() { (void)release(); }
 
 inline bool KVTableRowLease::release() noexcept {
     if (owner_ == nullptr) { return false; }
-    KVTableOperations* owner = owner_;
-    owner_                   = nullptr;
+    KVTableOperations* owner  = owner_;
+    owner_                    = nullptr;
     KVExecutionRowLease lease = std::move(lease_);
     owner->release(std::move(lease));
     return true;
@@ -159,6 +158,7 @@ inline bool KVTableRowLease::release() noexcept {
 class KVPageOperations {
 public:
     explicit KVPageOperations(DeviceKVPagePool& pages) noexcept : plain_(&pages) {}
+
     explicit KVPageOperations(tp2::MirroredKVPagePool& pages) noexcept : mirrored_(&pages) {}
 
     [[nodiscard]] bool mirrored() const noexcept { return mirrored_ != nullptr; }
@@ -182,8 +182,8 @@ public:
     }
 
 private:
-    DeviceKVPagePool* plain_              = nullptr;
-    tp2::MirroredKVPagePool* mirrored_    = nullptr;
+    DeviceKVPagePool* plain_           = nullptr;
+    tp2::MirroredKVPagePool* mirrored_ = nullptr;
 };
 
 } // namespace ninfer::tp2

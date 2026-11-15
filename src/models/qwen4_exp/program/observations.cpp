@@ -74,12 +74,12 @@ RankMemoryUsage RankProgramImpl::observe_resources() const {
     if (resources.ple_prepare) {
         const auto stats = resources.ple_prepare->stats();
         out.ple          = PleReadStats{stats.rows,
-                               stats.cache_hits,
-                               stats.shared_rows,
-                               stats.shared_pages,
-                               stats.reads,
-                               stats.read_bytes,
-                               resources.ple_upload->uploaded_bytes()};
+                                        stats.cache_hits,
+                                        stats.shared_rows,
+                                        stats.shared_pages,
+                                        stats.reads,
+                                        stats.read_bytes,
+                                        resources.ple_upload->uploaded_bytes()};
     }
     if (!resources.experts) return out;
     const auto cache        = resources.experts->cache_usage();

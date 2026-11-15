@@ -52,7 +52,7 @@ auto ordinary_batch_body(OrdinaryBatchContext& state, std::int32_t batch_size,
         Tensor ple_embeddings;
         const Tensor* active_ple_embeddings = nullptr;
         if (state.ple_embeddings != nullptr) {
-            ple_embeddings = state.ple_embeddings->slice(2, 0, batch_size);
+            ple_embeddings        = state.ple_embeddings->slice(2, 0, batch_size);
             active_ple_embeddings = &ple_embeddings;
         }
         card.ordinary_decode_batch(tokens, cache_positions, rope_positions, kv_rows, state_sources,
@@ -67,11 +67,12 @@ auto ordinary_batch_body(OrdinaryBatchContext& state, std::int32_t batch_size,
             card.set_flash_predictor_hidden_output(nullptr);
         }
         ops::sample(logits, sampled, TextConfig::token_domain, ordinary.sampling, cache_positions,
-                    ops::kSamplePurposeDecode, state.execution.work, state.execution.device.execution_view());
+                    ops::kSamplePurposeDecode, state.execution.work,
+                    state.execution.device.execution_view());
         // The report is the target model's own distribution at this position: no temperature, no
         // penalties. It is therefore a checkpoint property rather than a sampling artefact, and it
-        // reads no sampler state, no committed-token counts and no round-local token array - which is
-        // also why an external scorer can agree with it.
+        // reads no sampler state, no committed-token counts and no round-local token array - which
+        // is also why an external scorer can agree with it.
         if (state.execution.io.report_token_logprobs) {
             Tensor chosen            = ordinary.token_logprobs.slice(0, 0, batch_size);
             Tensor reported_ids      = ordinary.top_ids.slice(1, 0, batch_size);

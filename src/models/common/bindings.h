@@ -55,7 +55,7 @@ resolve_weights(std::vector<PendingWeight>&& pending,
 // object-handle resolution cannot reach it -- see `WeightStorage`.
 [[nodiscard]] std::vector<BoundWeight>
 resolve_weights(std::vector<PendingWeight>&& pending,
-                const artifact::MaterializedArtifact& materialized,
-                std::span<const Device> devices, std::span<const WeightStorage> storage);
+                const artifact::MaterializedArtifact& materialized, std::span<const Device> devices,
+                std::span<const WeightStorage> storage);
 
 } // namespace ninfer::models

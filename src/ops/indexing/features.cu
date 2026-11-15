@@ -27,8 +27,9 @@ __global__ void concat_bf16_features_kernel(const __nv_bfloat16* first, const __
 }
 
 // The packed source is q|k|g|v: two wide ranges and two narrow ones, in that order. The extents are
-// operands, not constants: at tensor-parallel width 2 the Rows shard halves every head count, so the
-// same op presents 7168 packed rows and 12/2/12/2 heads where width 1 presents 14336 and 24/4/24/4.
+// operands, not constants: at tensor-parallel width 2 the Rows shard halves every head count, so
+// the same op presents 7168 packed rows and 12/2/12/2 heads where width 1 presents 14336 and
+// 24/4/24/4.
 __global__ void split_bf16_features_kernel(const __nv_bfloat16* source, __nv_bfloat16* first,
                                            __nv_bfloat16* second, __nv_bfloat16* third,
                                            __nv_bfloat16* fourth, std::int32_t tokens,
@@ -47,12 +48,12 @@ __global__ void split_bf16_features_kernel(const __nv_bfloat16* source, __nv_bfl
         return;
     }
     if (row < wide_rows + narrow_rows) {
-        const int local = row - wide_rows;
+        const int local                                                = row - wide_rows;
         second[static_cast<std::int64_t>(token) * narrow_rows + local] = value;
         return;
     }
     if (row < 2 * wide_rows + narrow_rows) {
-        const int local = row - wide_rows - narrow_rows;
+        const int local                                             = row - wide_rows - narrow_rows;
         third[static_cast<std::int64_t>(token) * wide_rows + local] = value;
         return;
     }
@@ -136,10 +137,12 @@ void split_bf16_features(const Tensor& source, Tensor& first, Tensor& second, Te
     // packed extents come from them: the head extent is shared, the two wide ranges (query, gate)
     // carry one head count and the two narrow ones (key, value) the other, and the source is their
     // concatenation in q|k|g|v order. Asserting those RELATIONS is what keeps a wrong derivation
-    // from moving the failure into the kernel, and it holds at whatever width the caller presents --
-    // 14336 packed rows with 24/4/24/4 heads at width 1, 7168 with 12/2/12/2 at width 2.
+    // from moving the failure into the kernel, and it holds at whatever width the caller presents
+    // -- 14336 packed rows with 24/4/24/4 heads at width 1, 7168 with 12/2/12/2 at width 2.
     const std::int32_t head_dim = first.ne[0];
-    if (head_dim <= 0) { throw std::invalid_argument("split_bf16_features: head extent must be positive"); }
+    if (head_dim <= 0) {
+        throw std::invalid_argument("split_bf16_features: head extent must be positive");
+    }
     const auto expect_operand = [&](const Tensor& operand, const char* name) {
         if (operand.ne[0] != head_dim || operand.ne[2] != tokens || operand.ne[3] != 1) {
             throw std::invalid_argument(std::string("split_bf16_features: ") + name +
@@ -165,10 +168,12 @@ void split_bf16_features(const Tensor& source, Tensor& first, Tensor& second, Te
             "split_bf16_features: the source's rows are not the concatenation of the four ranges");
     }
     if (source.ne[2] != 1 || source.ne[3] != 1) {
-        throw std::invalid_argument("split_bf16_features: the source must be a {rows, tokens} plane");
+        throw std::invalid_argument(
+            "split_bf16_features: the source must be a {rows, tokens} plane");
     }
 
-    split_bf16_features_launch(source, first, second, third, fourth, wide_rows, narrow_rows, stream);
+    split_bf16_features_launch(source, first, second, third, fourth, wide_rows, narrow_rows,
+                               stream);
 }
 
 } // namespace ninfer::ops

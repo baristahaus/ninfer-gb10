@@ -515,8 +515,7 @@ public:
             const auto bound = settle();
             require(bound.sequence && !program_.context_blocks(original) &&
                         transferred(bound, runtime::ContextTransferDirection::DeviceToDevice,
-                                    runtime::ContextResourceClass::MainKV) ==
-                            (prompt_tokens == 65),
+                                    runtime::ContextResourceClass::MainKV) == (prompt_tokens == 65),
                     "active prefix binding did not settle its required tail copy and writer block");
             finish_prefill(*bound.sequence, 0, false);
 
@@ -894,9 +893,9 @@ public:
         auto base         = request(65, true);
         const auto source = checkpoint(base);
         const std::array<q35::CheckpointHandle, 1> allowed{source};
-        for (const auto resource : {runtime::ContextResourceClass::State,
-                                    runtime::ContextResourceClass::MainKV,
-                                    runtime::ContextResourceClass::BackendKV}) {
+        for (const auto resource :
+             {runtime::ContextResourceClass::State, runtime::ContextResourceClass::MainKV,
+              runtime::ContextResourceClass::BackendKV}) {
             if (resource == runtime::ContextResourceClass::BackendKV &&
                 program_.physical_usage().occupied.kv_page_groups[1] == 0) {
                 continue;
@@ -1724,8 +1723,7 @@ public:
                     std::count_if(
                         partial_candidate->transfers.begin(), partial_candidate->transfers.end(),
                         [](const auto& transfer) {
-                            return transfer.resource ==
-                                       runtime::ContextResourceClass::MainKV &&
+                            return transfer.resource == runtime::ContextResourceClass::MainKV &&
                                    transfer.direction ==
                                        runtime::ContextTransferDirection::HostToDevice &&
                                    transfer.page_count == 1;
@@ -1931,7 +1929,6 @@ void shared_capture_alignment(std::shared_ptr<const q35::ModelDefinition> defini
     }
 }
 
-
 void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definition,
                            std::shared_ptr<const q35::ModelShard> model,
                            std::shared_ptr<const q35::execution::ModelProfile> profile,
@@ -1955,7 +1952,7 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
         std::filesystem::temp_directory_path() / "ninfer_session_spill_test.bin";
     std::error_code ignored;
     std::filesystem::remove(spill_path, ignored);
-    options.context_cache.state_spill_path           = spill_path;
+    options.context_cache.state_spill_path = spill_path;
     // The 27B state image is ~147 MB plus the KV pages; the tier must hold a whole
     // checkpoint or `try_spill_checkpoint` cannot reserve the image extent.
     options.context_cache.state_spill_capacity_bytes = 512ULL << 20;
@@ -1974,7 +1971,8 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     // Capture a checkpoint whose coverage starts Device-resident. The prompt is twice the
     // chunk so the 128-token shared prefix is a mid-prefill capture boundary.
     const std::vector<TokenId> prompt(256, 198);
-    auto prepared = ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(prompt));
+    auto prepared =
+        ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(prompt));
     prepared.context_cache.opportunities.push_back(
         {.kind     = PromptCacheMarkerKind::SharedStablePrefix,
          .evidence = SharedCandidateEvidence::ExplicitBoundary,
@@ -1982,8 +1980,8 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     runtime::ResolvedExecutionOptions request;
     request.requested_output_tokens = 8;
     request.allow_prefix_reuse      = true;
-    auto base = program.plan_request(std::move(prepared), request);
-    const auto root = program.inspect_source(base, std::nullopt);
+    auto base                       = program.plan_request(std::move(prepared), request);
+    const auto root                 = program.inspect_source(base, std::nullopt);
     require(root && static_cast<bool>(program.start_binding(base, {0}, *root, nullptr,
                                                             q35::ExecutionUnitKind::Prefill, 0)),
             "spill fixture could not bind its source writer");
@@ -2007,22 +2005,27 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
             "spill fixture could not finish its writer before demotion");
 
     // Demote the whole coverage to Host through the ordinary reclaim path.
-    const auto image = program.checkpoint(handle).continuation().image;
-    auto shortage    = q35::ContextResources{};
+    const auto image     = program.checkpoint(handle).continuation().image;
+    auto shortage        = q35::ContextResources{};
     shortage.state_slots = 1;
     for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
-         !candidates.empty(); candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
-        require(program.start_demote(candidates.front()), "spill fixture could not demote its image");
+         !candidates.empty();
+         candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
+        require(program.start_demote(candidates.front()),
+                "spill fixture could not demote its image");
         require(settle().published, "spill fixture demotion did not complete");
     }
-    shortage = q35::ContextResources{};
+    shortage                   = q35::ContextResources{};
     shortage.kv_page_groups[0] = program.physical_usage().occupied.kv_page_groups[0];
     for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
-         !candidates.empty(); candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
-        require(program.start_demote(candidates.front()), "spill fixture could not demote its pages");
+         !candidates.empty();
+         candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
+        require(program.start_demote(candidates.front()),
+                "spill fixture could not demote its pages");
         require(settle().published, "spill fixture page demotion did not complete");
     }
-    require(program.state_store->host_resident(image) && !program.state_store->device_resident(image),
+    require(program.state_store->host_resident(image) &&
+                !program.state_store->device_resident(image),
             "spill fixture coverage is not host-only before the spill");
     const auto host_before = program.physical_usage().occupied.host_bytes;
 
@@ -2031,9 +2034,10 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     const auto progress = settle();
     require(progress.published && progress.kind == q35::ContextOperationKind::Spill,
             "spill fixture operation did not complete");
-    require(program.state_store->spill_resident(image) && !program.state_store->host_resident(image),
+    require(program.state_store->spill_resident(image) &&
+                !program.state_store->host_resident(image),
             "spill fixture image did not record its spill residency");
-    auto prefix = program.checkpoint(handle).text_prefix();
+    auto prefix       = program.checkpoint(handle).text_prefix();
     const auto mapped = program.text_kv_histories->mapped_pages(prefix.history());
     for (std::uint32_t position = 0; position < mapped; ++position) {
         const auto page = program.text_kv_histories->logical_page(prefix.history(), position);
@@ -2058,7 +2062,6 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     std::filesystem::remove(spill_path, ignored);
 }
 
-
 void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> definition,
                                    std::shared_ptr<const q35::ModelShard> model,
                                    std::shared_ptr<const q35::execution::ModelProfile> profile,
@@ -2067,17 +2070,16 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
     // Slice 5 behavioral acceptance (design 2026-10-24 section 5): a long shared prefix is
     // spilled under host pressure, and a resumed request admits from the spill-resident
     // candidate and prefills only the tail.
-    options.max_context                       = 128;
-    options.kv_capacity                       = KvCapacityPolicy::explicit_capacity(256);
-    options.max_concurrency                   = 2;
-    options.context_cache.enabled             = true;
-    options.context_cache.extra_state_slots   = 2;
+    options.max_context                     = 128;
+    options.kv_capacity                     = KvCapacityPolicy::explicit_capacity(256);
+    options.max_concurrency                 = 2;
+    options.context_cache.enabled           = true;
+    options.context_cache.extra_state_slots = 2;
     // The 27B state image is ~147 MB: the host arena must back the image demotion and the
     // spill tier must hold a whole checkpoint (the original 64 MiB values were authored on
     // a workstation that cannot execute this family).
     options.context_cache.host_capacity_bytes = 256ULL << 20;
-    const auto spill_path =
-        std::filesystem::temp_directory_path() / "ninfer_spill_resume_test.bin";
+    const auto spill_path = std::filesystem::temp_directory_path() / "ninfer_spill_resume_test.bin";
     std::error_code ignored;
     std::filesystem::remove(spill_path, ignored);
     options.context_cache.state_spill_path           = spill_path;
@@ -2087,9 +2089,10 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
     q35::detail::SessionImpl program(definition, std::move(rank.session_plan));
     program.executor_ = &rank.executor();
     native::EventDriver driver(program, rank);
-    const auto settle = [&]() { return driver.settle(); };
+    const auto settle  = [&]() { return driver.settle(); };
     const auto advance = [&](q35::SequenceHandle sequence) {
-        const std::array<q35::ExecutionUnit, 1> units{{{sequence, q35::ExecutionUnitKind::Prefill}}};
+        const std::array<q35::ExecutionUnit, 1> units{
+            {{sequence, q35::ExecutionUnitKind::Prefill}}};
         require(static_cast<bool>(program.reserve_units(units)),
                 "spill acceptance could not reserve its prefill unit");
         auto step = driver.prefill(sequence);
@@ -2103,7 +2106,8 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
 
     // Capture the 64-token shared prefix.
     const std::vector<TokenId> shared(64, 198);
-    auto prepared = ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(shared));
+    auto prepared =
+        ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(shared));
     prepared.context_cache.opportunities.push_back(
         {.kind     = PromptCacheMarkerKind::SharedStablePrefix,
          .evidence = SharedCandidateEvidence::ExplicitBoundary,
@@ -2113,12 +2117,12 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
     capture_request.allow_prefix_reuse      = true;
     auto capture_base = program.plan_request(std::move(prepared), capture_request);
     const auto root   = program.inspect_source(capture_base, std::nullopt);
-    require(root && static_cast<bool>(program.start_binding(
-                        capture_base, {0}, *root, nullptr, q35::ExecutionUnitKind::Prefill, 0)),
+    require(root && static_cast<bool>(program.start_binding(capture_base, {0}, *root, nullptr,
+                                                            q35::ExecutionUnitKind::Prefill, 0)),
             "spill acceptance could not bind its capture writer");
     const auto bound = settle();
     require(bound.sequence.has_value(), "spill acceptance did not publish its capture writer");
-    const auto writer = *bound.sequence;
+    const auto writer        = *bound.sequence;
     const auto captured_step = advance(writer);
     require(captured_step.processed_prompt_tokens == 64 && captured_step.capture_ready,
             "spill acceptance did not reach its capture frontier");
@@ -2130,8 +2134,8 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
             "spill acceptance retained its capture writer");
 
     // Demote the whole coverage to Host, then spill it: the prefix now lives only in the tier.
-    const auto image = program.checkpoint(handle).continuation().image;
-    auto shortage    = q35::ContextResources{};
+    const auto image     = program.checkpoint(handle).continuation().image;
+    auto shortage        = q35::ContextResources{};
     shortage.state_slots = program.physical_usage().occupied.state_slots;
     for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
          !candidates.empty();
@@ -2140,7 +2144,7 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
                 "spill acceptance could not demote its image");
         require(settle().published, "spill acceptance demotion did not complete");
     }
-    shortage = q35::ContextResources{};
+    shortage                   = q35::ContextResources{};
     shortage.kv_page_groups[0] = program.physical_usage().occupied.kv_page_groups[0];
     for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
          !candidates.empty();
@@ -2157,12 +2161,12 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
     // Resume: a new request shares the 64-token prefix and adds a 16-token tail.
     auto resumed_prompt = shared;
     resumed_prompt.insert(resumed_prompt.end(), 16, 199);
-    auto resumed = ninfer::models::qwen::PreparedPromptAccess::take(
-        frontend.prepare_tokens(resumed_prompt));
+    auto resumed =
+        ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(resumed_prompt));
     runtime::ResolvedExecutionOptions resume_request;
     resume_request.requested_output_tokens = 8;
     resume_request.allow_prefix_reuse      = true;
-    auto resume_base = program.plan_request(std::move(resumed), resume_request);
+    auto resume_base  = program.plan_request(std::move(resumed), resume_request);
     const auto source = program.inspect_source(resume_base, handle);
     require(source && source->reused_tokens == 64,
             "spill acceptance did not admit the full spilled prefix");
@@ -2174,12 +2178,13 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
     const auto resumed_bound = settle();
     require(resumed_bound.sequence.has_value(), "spill acceptance resume did not publish");
     const auto resumed_sequence = *resumed_bound.sequence;
-    const auto resumed_step = advance(resumed_sequence);
+    const auto resumed_step     = advance(resumed_sequence);
     require(resumed_step.processed_prompt_tokens == 16,
             "spill acceptance recomputed the spilled prefix instead of page-in restoration");
     require(driver.abort(resumed_sequence).status == runtime::ConsumeStatus::Consumed,
             "spill acceptance retained its resumed request");
-    require(program.release_checkpoint(handle), "spill acceptance could not release its checkpoint");
+    require(program.release_checkpoint(handle),
+            "spill acceptance could not release its checkpoint");
     require(program.state_spill->reserved_bytes() == 0,
             "spill acceptance leaked its spill extents");
     std::filesystem::remove(spill_path, ignored);
@@ -2217,10 +2222,10 @@ void replay_sampling_counts(std::shared_ptr<const q35::ModelDefinition> definiti
         auto source = program.inspect_source(base, std::nullopt);
         require(source && static_cast<bool>(program.start_binding(
                               base, {lane}, *source, resume, q35::ExecutionUnitKind::Decode, 1)),
-                  "sampling-count fixture could not bind its lane");
+                "sampling-count fixture could not bind its lane");
         auto progress = settle();
         require(progress.published && progress.sequence,
-                  "sampling-count fixture did not publish a sequence");
+                "sampling-count fixture did not publish a sequence");
         require(!resume || progress.replaying, "sampling-count resume did not enter replay");
         return *progress.sequence;
     };
@@ -2389,7 +2394,8 @@ SpeculativeBackend selected_backend(std::string_view name) {
 int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: set NINFER_TEST_ARTIFACT to an explicit .ninfer artifact; it is unset or names a file the loader rejected\n";
+        std::cerr << "SKIP: set NINFER_TEST_ARTIFACT to an explicit .ninfer artifact; it is unset "
+                     "or names a file the loader rejected\n";
         return 77;
     }
     if (ninfer::test::skip_without_host_tier("test_native_transactions")) { return 77; }

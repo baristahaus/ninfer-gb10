@@ -1,6 +1,7 @@
 // The artifact loader refuses a network filesystem before it starts a direct read, because a direct
 // read there can wait uninterruptibly inside the kernel. The mapping is exercised directly, so this
-// test needs no NFS mount; the acceptance side uses a real tmpfs and the repository's own directory.
+// test needs no NFS mount; the acceptance side uses a real tmpfs and the repository's own
+// directory.
 
 #include "core/io/file.h"
 
@@ -28,7 +29,7 @@ constexpr std::uint64_t kExt  = 0xEF53;
 constexpr std::uint64_t kTmp  = 0x01021994;
 
 int exercise_mapping() {
-    int failures = 0;
+    int failures     = 0;
     const auto named = [](std::uint64_t type) {
         const char* name = ninfer::io::unsupported_direct_io_filesystem(type);
         return name == nullptr ? std::string() : std::string(name);
@@ -50,7 +51,7 @@ int exercise_mapping() {
 // must be the one the kernel says rather than something the helper invented.
 int exercise_real_filesystems() {
     int failures = 0;
-    struct statfs status {};
+    struct statfs status{};
     if (::statfs("/dev/shm", &status) == 0) {
         const auto type = static_cast<std::uint64_t>(status.f_type);
         failures += check(ninfer::io::filesystem_type("/dev/shm") == type,

@@ -352,7 +352,7 @@ std::string prepare_json_schema(std::string_view source) {
         schema.root = std::move(parsed.value);
     } catch (const Json::exception& error) { fail(Kind::InvalidJsonSchema, {}, error.what()); }
     schema.source_validation = true;
-    schema.draft7            = schema.root.is_object() && schema.root.contains("$schema") &&
+    schema.draft7 = schema.root.is_object() && schema.root.contains("$schema") &&
                     schema.root["$schema"].is_string() &&
                     schema.root["$schema"].get<std::string>().find("draft-07") != std::string::npos;
     schema.check(schema.root, {});

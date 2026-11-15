@@ -153,7 +153,7 @@ std::string PrefillMissDump::write_dump(std::span<const TokenId> prompt,
     };
     // Both readings can hold at once: checkpoints are discrete, so a client-side change can also
     // leave identical tokens to recompute before it.
-    Json reading      = Json::array();
+    Json reading                = Json::array();
     const std::size_t old_after = old.tokens.size() - common_prefix;
     if (old_after >= options_.min_tokens) {
         reading.push_back("client: the request changed or dropped " + std::to_string(old_after) +

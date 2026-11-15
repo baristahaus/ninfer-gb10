@@ -5,7 +5,6 @@
 #include "core/arena.h"
 #include "ninfer/ops/sampling.h"
 
-
 namespace ninfer::ops {
 
 // Capacity for every K/B pair in the inclusive intervals, K=1..15 and B=1..8.

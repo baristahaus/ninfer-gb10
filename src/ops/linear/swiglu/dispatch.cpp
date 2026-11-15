@@ -15,8 +15,7 @@ void validate_swiglu_geometry(QType type, int rows, int k) {
     if (type == QType::BF16 && rows == 15360 && k == 2560) return; // DFlash2 draft gate/up.
     if (rows == 34816 && k == 5120 &&
         (type == QType::Q4_G64_FP16 || type == QType::Q8_G32_FP16 ||
-         type == QType::FP8_E4M3FN_ROW_BF16 || type == QType::NVFP4 ||
-         type == QType::EXL3))
+         type == QType::FP8_E4M3FN_ROW_BF16 || type == QType::NVFP4 || type == QType::EXL3))
         return;
     throw std::invalid_argument("linear_swiglu: unsupported weight geometry");
 }

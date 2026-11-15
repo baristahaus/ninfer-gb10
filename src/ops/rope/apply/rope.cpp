@@ -113,8 +113,9 @@ void rope_qk_impl(const Tensor& positions, int rotary_dim, float theta, const Ro
         throw std::invalid_argument("rope: q/k data must be non-null");
     }
     detail::rope_dispatch(positions, rotary_dim, theta, q, k, multiprocessor_count, stream,
-                          detail::resolve_yarn(yarn.factor, yarn.original_max_position, yarn.beta_fast,
-                               yarn.beta_slow, theta, axes, rotary_dim));
+                          detail::resolve_yarn(yarn.factor, yarn.original_max_position,
+                                               yarn.beta_fast, yarn.beta_slow, theta, axes,
+                                               rotary_dim));
 }
 
 } // namespace
@@ -161,8 +162,9 @@ void rope_single_impl(const Tensor& positions, int rotary_dim, float theta, cons
     common::operand::device(x.device, device, "rope", "input");
     if (x.data == nullptr) { throw std::invalid_argument("rope: tensor data must be non-null"); }
     detail::rope_dispatch(positions, rotary_dim, theta, x, multiprocessor_count, stream,
-                          detail::resolve_yarn(yarn.factor, yarn.original_max_position, yarn.beta_fast,
-                               yarn.beta_slow, theta, axes, rotary_dim));
+                          detail::resolve_yarn(yarn.factor, yarn.original_max_position,
+                                               yarn.beta_fast, yarn.beta_slow, theta, axes,
+                                               rotary_dim));
 }
 
 } // namespace

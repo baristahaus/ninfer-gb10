@@ -39,8 +39,8 @@ extern const Fp8LinearShape kFp8N124160K5120;
 // At tensor-parallel width 2 the sharded parts of a fused object are non-contiguous, so
 // `projection_region_count` exceeds its threshold and `execution/profile.cpp` describes each role
 // separately instead of the whole fused projection:
-//   attention  role per parameter: query 3072, key 512, gate 3072, value 512  -> N3072K5120, N512K5120
-//   GDN        role 0 = query+key+value fused: 1024+1024+3072 = 5120        -> N5120K5120
+//   attention  role per parameter: query 3072, key 512, gate 3072, value 512  -> N3072K5120,
+//   N512K5120 GDN        role 0 = query+key+value fused: 1024+1024+3072 = 5120        -> N5120K5120
 //              role 1 = z alone: 3072                                       -> N3072K5120
 // Width 1 never reaches these: the four parameters bind one contiguous region of the fused object
 // there, the count stays at its threshold, and the whole-projection branch runs.
@@ -58,9 +58,9 @@ extern const Fp8LinearShape kFp8N8704K5120;
 extern const Fp8LinearShape kFp8N5120K3072;
 extern const Fp8LinearShape kFp8N5120K8704;
 
-// The GDN input projection's two width-1 PARENTS. The fused 16384-row object is presented at width 1
-// as a 10240-row qkv parent (query 2048 + key 2048 + value 6144) and a 6144-row z parent, which is
-// the paired form the model consumes when the four parts do not pack into one contiguous parent.
+// The GDN input projection's two width-1 PARENTS. The fused 16384-row object is presented at width
+// 1 as a 10240-row qkv parent (query 2048 + key 2048 + value 6144) and a 6144-row z parent, which
+// is the paired form the model consumes when the four parts do not pack into one contiguous parent.
 // Width 2 takes the four-role split (N5120K5120, N3072K5120) and never presents these.
 extern const Fp8LinearShape kFp8N10240K5120;
 extern const Fp8LinearShape kFp8N6144K5120;

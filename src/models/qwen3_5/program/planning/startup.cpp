@@ -79,9 +79,8 @@ namespace {
 std::uint32_t rank_kv_heads(const execution::TextProfile& profile, std::uint32_t head_dim) {
     for (const auto& block : profile.layers) {
         if (const auto* attention = std::get_if<execution::AttentionProfile>(&block.mixer)) {
-            const std::int32_t rows = attention->role_profiles
-                                          ? (*attention->role_profiles)[1].n
-                                          : attention->projection_rows[1];
+            const std::int32_t rows = attention->role_profiles ? (*attention->role_profiles)[1].n
+                                                               : attention->projection_rows[1];
             if (head_dim == 0 || rows <= 0) { break; }
             return static_cast<std::uint32_t>(rows) / head_dim;
         }
@@ -108,15 +107,14 @@ ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
         throw std::logic_error("Qwen3.5 context cache options are not normalized");
     ResourceSpec spec;
     spec.decoder = {
-        .full_attention_layers     = config.full_attention_layers,
-        .mtp_layers                = 1,
-        .capacity                  = plan.capacity,
-        .kv_heads                  = rank_kv_heads(profile.text,
-                                                   dimension(config.attention->head_dim)),
-        .attention_head_dim        = dimension(config.attention->head_dim),
-        .kv_storage                = plan.kv_storage,
-        .enable_mtp                = plan.features.mtp(),
-        .kv_table_rows             = static_cast<std::int32_t>(plan.max_concurrency),
+        .full_attention_layers = config.full_attention_layers,
+        .mtp_layers            = 1,
+        .capacity              = plan.capacity,
+        .kv_heads              = rank_kv_heads(profile.text, dimension(config.attention->head_dim)),
+        .attention_head_dim    = dimension(config.attention->head_dim),
+        .kv_storage            = plan.kv_storage,
+        .enable_mtp            = plan.features.mtp(),
+        .kv_table_rows         = static_cast<std::int32_t>(plan.max_concurrency),
         .text_physical_page_groups = plan.main_page_groups,
         .mtp_physical_page_groups  = plan.features.mtp() ? plan.main_page_groups : 0,
     };
@@ -126,11 +124,11 @@ ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
                                   "Qwen3.5 StateImage slot count exceeds int32"),
         .linear =
             {
-                .layers        = config.linear_attention_layers,
-                .conv_channels = config.gdn ? static_cast<std::uint32_t>(gdn_rank.conv_channels())
-                                            : 0,
-                .conv_width    = config.gdn ? dimension(config.gdn->linear_conv_kernel_dim - 1) : 0,
-                .value_heads   = config.gdn ? static_cast<std::uint32_t>(gdn_rank.value_heads) : 0,
+                .layers = config.linear_attention_layers,
+                .conv_channels =
+                    config.gdn ? static_cast<std::uint32_t>(gdn_rank.conv_channels()) : 0,
+                .conv_width  = config.gdn ? dimension(config.gdn->linear_conv_kernel_dim - 1) : 0,
+                .value_heads = config.gdn ? static_cast<std::uint32_t>(gdn_rank.value_heads) : 0,
                 .value_head_dim = config.gdn ? dimension(config.gdn->linear_value_head_dim) : 0,
                 .key_head_dim   = config.gdn ? dimension(config.gdn->linear_key_head_dim) : 0,
                 .conv_dtype     = DType::BF16,
@@ -143,13 +141,12 @@ ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
             .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
             .width           = static_cast<std::int32_t>(plan.draft_window + 1),
             .conv_channels = config.gdn ? static_cast<std::uint32_t>(gdn_rank.conv_channels()) : 0,
-            .qk_heads      = config.gdn
-                                 ? static_cast<std::uint32_t>(gdn_rank.key_width /
-                                                             config.gdn->linear_key_head_dim)
-                                 : 0,
-            .value_heads   = config.gdn ? static_cast<std::uint32_t>(gdn_rank.value_heads) : 0,
-            .key_dim         = config.gdn ? dimension(config.gdn->linear_key_head_dim) : 0,
-            .value_dim       = config.gdn ? dimension(config.gdn->linear_value_head_dim) : 0,
+            .qk_heads    = config.gdn ? static_cast<std::uint32_t>(gdn_rank.key_width /
+                                                                   config.gdn->linear_key_head_dim)
+                                      : 0,
+            .value_heads = config.gdn ? static_cast<std::uint32_t>(gdn_rank.value_heads) : 0,
+            .key_dim     = config.gdn ? dimension(config.gdn->linear_key_head_dim) : 0,
+            .value_dim   = config.gdn ? dimension(config.gdn->linear_value_head_dim) : 0,
         };
     }
     if (plan.features.masked_draft()) {
@@ -199,7 +196,7 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
     const ops::CausalAttentionExecutionEnvelope text_envelope{1, plan.capacity};
 
     const auto matrix  = [](WorkspaceLayoutBuilder& layout, DType dtype, std::int32_t rows,
-                           std::int32_t tokens) { (void)layout.alloc(dtype, {rows, tokens}); };
+                            std::int32_t tokens) { (void)layout.alloc(dtype, {rows, tokens}); };
     const auto scratch = [](WorkspaceLayoutBuilder& layout, std::size_t bytes) {
         if (bytes == 0) { return; }
         auto scope = layout.scope();
@@ -264,14 +261,12 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                         (void)workspace::gdn_prefill_conv(layout, config, last);
                         (void)workspace::gdn_prefill_conv(layout, config, last);
                         if (path == GdnWorkspacePath::ReplayRecord) {
-                            matrix(layout, DType::BF16,
-                                   dimension(config.gdn->conv_channels()),
+                            matrix(layout, DType::BF16, dimension(config.gdn->conv_channels()),
                                    3 * batch_size * max_width);
                             (void)layout.alloc(DType::I32, {batch_size});
                             (void)layout.alloc(DType::I32, {batch_size});
                         }
-                        scratch(layout, execution::gdn_projection_workspace_bytes(
-                                            gdn, last, last));
+                        scratch(layout, execution::gdn_projection_workspace_bytes(gdn, last, last));
                     } else if (path == GdnWorkspacePath::Snapshot) {
                         scratch(layout, execution::gdn_snapshot_workspace_bytes(
                                             gdn, batch_size, min_width, max_width));
@@ -787,11 +782,11 @@ make_sequence_planner_impl(std::shared_ptr<const execution::ModelProfile> profil
     planner->inputs  = inputs;
     planner->minimum = build_sequence_candidate(inputs, minimum_pages);
     planner->curve   = runtime::SequenceCapacityCurve{
-          .main_page_tokens                     = static_cast<std::uint32_t>(kPagedKVPageSize),
-          .minimum_main_page_groups             = minimum_pages,
-          .maximum_main_page_groups             = maximum_pages,
-          .minimum_device_reservation_bytes        = planner->minimum->device_reservation_bytes,
-          .bytes_per_additional_main_page_group = 0,
+        .main_page_tokens                     = static_cast<std::uint32_t>(kPagedKVPageSize),
+        .minimum_main_page_groups             = minimum_pages,
+        .maximum_main_page_groups             = maximum_pages,
+        .minimum_device_reservation_bytes     = planner->minimum->device_reservation_bytes,
+        .bytes_per_additional_main_page_group = 0,
     };
     if (minimum_pages < maximum_pages) {
         auto adjacent = build_sequence_candidate(inputs, minimum_pages + 1U);

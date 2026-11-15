@@ -56,8 +56,8 @@ public:
 
     void progress() { implementation.progress(); }
 
-    // The fixture drives one rank and issues no collectives; the count is part of the executor's rank
-    // contract, so it is present here even though it can only be zero.
+    // The fixture drives one rank and issues no collectives; the count is part of the executor's
+    // rank contract, so it is present here even though it can only be zero.
     [[nodiscard]] std::size_t collective_count() const { return 0; }
 
     void supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
@@ -124,10 +124,10 @@ public:
         : definition(std::move(definition)) {
         // The worker borrows the device, so the fixture must own it and keep it alive for at least
         // as long as the executor. Declared before `executor_` for that reason.
-        owned_device_ = std::make_unique<DeviceContext>();
+        owned_device_         = std::make_unique<DeviceContext>();
         DeviceContext& device = *owned_device_;
         device_               = owned_device_.get();
-        auto instance = std::make_unique<runtime::RankModelInstance<ObservedTypes>>(
+        auto instance         = std::make_unique<runtime::RankModelInstance<ObservedTypes>>(
             std::make_unique<SharedModel>(SharedModel{std::move(model)}), profile);
         auto planner        = q35::make_sequence_planner(profile, device, options);
         auto plan           = std::move(planner).finalize(page_groups);
@@ -143,8 +143,8 @@ public:
             resources.decoder.text_kv.pages().transfer_profile();
         if (const auto* backend = resources.backend_kv())
             session_plan.context.pools[1].transfer = backend->pages().transfer_profile();
-        auto worker = std::make_unique<runtime::RankWorker<ObservedTypes>>(device,
-                                                                           std::move(instance));
+        auto worker =
+            std::make_unique<runtime::RankWorker<ObservedTypes>>(device, std::move(instance));
         std::vector<std::unique_ptr<runtime::RankWorker<ObservedTypes>>> workers;
         workers.push_back(std::move(worker));
         executor_ = std::make_unique<runtime::LocalExecutor<ObservedTypes>>(

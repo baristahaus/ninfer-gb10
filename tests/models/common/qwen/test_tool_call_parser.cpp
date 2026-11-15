@@ -109,12 +109,12 @@ int check_parameter_schema_mismatch(const fi::ToolCallOutputContract& contract,
 int test_untyped_parameters() {
     const auto contract = contract_for("get_weather", Json::object());
     const auto parsed   = fi::parse_qwen_tool_call_output("Calling weather.\n"
-                                                            "<tool_call>\n"
-                                                            "<function=get_weather>\n"
-                                                            "<parameter=city>\nParis\n</parameter>\n"
-                                                            "<parameter=days>\n2\n</parameter>\n"
-                                                            "</function>\n"
-                                                            "</tool_call>",
+                                                          "<tool_call>\n"
+                                                          "<function=get_weather>\n"
+                                                          "<parameter=city>\nParis\n</parameter>\n"
+                                                          "<parameter=days>\n2\n</parameter>\n"
+                                                          "</function>\n"
+                                                          "</tool_call>",
                                                           64, contract);
 
     int failures = 0;
@@ -134,7 +134,7 @@ int test_multiple_calls() {
         {tool_definition("first", Json::object()), tool_definition("second", Json::object())});
     const std::string text = tool_call("first", {{"payload", "{\"ok\":true,\"items\":[1,2]}"}}) +
                              "\n" + tool_call("second", {{"value", "plain text"}});
-    const auto parsed = fi::parse_qwen_tool_call_output(text, 64, *contract);
+    const auto parsed      = fi::parse_qwen_tool_call_output(text, 64, *contract);
 
     int failures = 0;
     failures += check(parsed.is_tool_call_response && parsed.tool_calls.size() == 2,

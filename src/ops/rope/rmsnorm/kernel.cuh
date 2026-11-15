@@ -20,10 +20,10 @@ __device__ __forceinline__ RmsnormRopeD128Pair rmsnorm_rope_d128_head(
     const float2 input0_f32  = __bfloat1622float2(input0);
     const float2 input1_f32  = __bfloat1622float2(input1);
     float sum                = input0_f32.x * input0_f32.x + input0_f32.y * input0_f32.y +
-                input1_f32.x * input1_f32.x + input1_f32.y * input1_f32.y;
-    sum           = common::warp_reduce_sum(sum);
-    float inverse = lane == 0 ? rsqrtf(sum * (1.0F / 128.0F) + kEpsilon) : 0.0F;
-    inverse       = __shfl_sync(common::kFullWarpMask, inverse, 0);
+                               input1_f32.x * input1_f32.x + input1_f32.y * input1_f32.y;
+    sum                      = common::warp_reduce_sum(sum);
+    float inverse            = lane == 0 ? rsqrtf(sum * (1.0F / 128.0F) + kEpsilon) : 0.0F;
+    inverse                  = __shfl_sync(common::kFullWarpMask, inverse, 0);
 
     const float2 weight0_f32  = __bfloat1622float2(weight0);
     const float2 weight1_f32  = __bfloat1622float2(weight1);
@@ -48,9 +48,9 @@ __device__ __forceinline__ RmsnormRopeD128Pair rmsnorm_rope_d128_head(
 // the single-K form uses one CTA. Each warp evaluates one complete head.
 template <bool Pair>
 __global__ __launch_bounds__(256) void rmsnorm_rope_d128_kernel(
-    const std::int32_t* __restrict__ positions, float theta, const __nv_bfloat16* __restrict__ q_norm,
-    const __nv_bfloat16* __restrict__ k_norm, __nv_bfloat16* __restrict__ q,
-    __nv_bfloat16* __restrict__ k) {
+    const std::int32_t* __restrict__ positions, float theta,
+    const __nv_bfloat16* __restrict__ q_norm, const __nv_bfloat16* __restrict__ k_norm,
+    __nv_bfloat16* __restrict__ q, __nv_bfloat16* __restrict__ k) {
     constexpr int kPairs = 64;
     const int token      = blockIdx.x;
     const bool query     = Pair && blockIdx.y < 4;

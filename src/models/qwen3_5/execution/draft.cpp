@@ -402,9 +402,9 @@ void propose_batch_impl(DraftExecutionView& execution, const DraftInputs& inputs
                 Tensor key_batch =
                     key.view({dimension(config.attention.head_dim),
                               dimension(config.attention.num_key_value_heads), width, batch_size});
-                Tensor value_batch     = value.view({dimension(config.attention.head_dim),
-                                                     dimension(config.attention.num_key_value_heads),
-                                                     width, batch_size});
+                Tensor value_batch = value.view({dimension(config.attention.head_dim),
+                                                 dimension(config.attention.num_key_value_heads),
+                                                 width, batch_size});
                 Tensor attention_batch = roots.attention.view(
                     {dimension(config.attention.head_dim),
                      dimension(config.attention.num_attention_heads), width, batch_size});
@@ -452,7 +452,7 @@ void propose_batch_impl(DraftExecutionView& execution, const DraftInputs& inputs
                                                static_cast<std::int32_t>(k) * batch_size});
         const std::size_t element_bytes = dtype_size(DType::BF16);
         const std::size_t row_bytes     = static_cast<std::size_t>(dimension(target.hidden_size)) *
-                                      static_cast<std::size_t>(k) * element_bytes;
+                                          static_cast<std::size_t>(k) * element_bytes;
         const std::size_t source_pitch =
             static_cast<std::size_t>(dimension(target.hidden_size)) * width * element_bytes;
         const auto* source =
@@ -478,21 +478,19 @@ void propose_batch_impl(DraftExecutionView& execution, const DraftInputs& inputs
                 if (execution.collective == nullptr) {
                     throw std::logic_error("DFlash: the sharded lane has no collective");
                 }
-                const auto rank_rows =
-                    dimension(execution.parameters.draft->output_head.weight.n);
-                Tensor scratch = execution.work.alloc(DType::BF16, {rank_rows, columns});
+                const auto rank_rows = dimension(execution.parameters.draft->output_head.weight.n);
+                Tensor scratch       = execution.work.alloc(DType::BF16, {rank_rows, columns});
                 project(proposal_hidden, execution.parameters.draft->output_head, scratch,
                         execution.work, execution.cuda);
                 const int rank = execution.collective->rank;
                 Tensor full    = execution.group->logits[static_cast<std::size_t>(rank)];
                 all_gather_logits(*execution.group, rank, execution.collective->reduce_index,
                                   scratch, full, execution.cuda, "draft.logits");
-                Tensor gathered =
-                    sharded_logits_view(*execution.group, rank, vocabulary, columns);
+                Tensor gathered = sharded_logits_view(*execution.group, rank, vocabulary, columns);
                 ops::argmax(gathered, flat_drafts, vocabulary, execution.cuda);
             } else {
-                Tensor logits = execution.work.alloc(
-                    DType::BF16, {dimension(target.vocab_size), columns});
+                Tensor logits =
+                    execution.work.alloc(DType::BF16, {dimension(target.vocab_size), columns});
                 project(proposal_hidden, execution.parameters.draft->output_head, logits,
                         execution.work, execution.cuda);
                 ops::argmax(logits, flat_drafts, vocabulary, execution.cuda);

@@ -84,7 +84,7 @@ void RankProgramImpl::prepare_forward() {
     const auto* forward = std::get_if<ForwardWork>(&f.request.work.operation);
     const bool scoring  = std::holds_alternative<ScoreWork>(f.request.work.operation);
     f.sequence          = scoring || forward->kind == ForwardKind::Prefill ||
-                 forward->kind == ForwardKind::Replay || f.rows.front().ids.size() > 1;
+                          forward->kind == ForwardKind::Replay || f.rows.front().ids.size() > 1;
     if (forward && forward->kind == ForwardKind::Control && forward->rows.front().ids.size() > 1)
         prepare_control_window();
     f.tokens       = f.rows.front().ids.size();
@@ -272,9 +272,9 @@ void RankProgramImpl::sample_forward(std::int32_t batch, bool first_token) {
     auto configs   = device_tensor(*io.sampling);
     auto positions = device_tensor(io.batch.sampling_positions).slice(0, 0, batch);
     auto sampled   = device_tensor(*io.sampled_ids)
-                       .view({static_cast<std::int32_t>(device_tensor(*io.sampled_ids).numel())})
-                       .slice(0, 0, batch);
-    auto scope = resources.workspace.scope();
+                         .view({static_cast<std::int32_t>(device_tensor(*io.sampled_ids).numel())})
+                         .slice(0, 0, batch);
+    auto scope     = resources.workspace.scope();
     ops::sample(logits, sampled, parameters.profile->public_tokens,
                 static_cast<const ops::SamplingConfig*>(configs.data), positions,
                 first_token ? ops::kSamplePurposePrefill : ops::kSamplePurposeDecode,

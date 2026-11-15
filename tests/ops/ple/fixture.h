@@ -26,8 +26,8 @@ struct Words {
         std::size_t span = 1;
         for (int d = 0; d < 4; ++d) span += (tensor.ne[d] - 1) * (tensor.nb[d] / 2);
         host.resize(leading + span, 0x7fa1);
-        device      = std::make_unique<GuardedDeviceBuffer>(host.size() * 2);
-        tensor.data = static_cast<std::uint16_t*>(device->data()) + leading;
+        device        = std::make_unique<GuardedDeviceBuffer>(host.size() * 2);
+        tensor.data   = static_cast<std::uint16_t*>(device->data()) + leading;
         tensor.device = device->device();
     }
 

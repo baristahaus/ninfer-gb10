@@ -46,11 +46,11 @@ ninfer::EngineOptions engine_options(const char* artifact) {
 }
 
 ninfer::EngineOptions maximum_engine_options(const char* artifact) {
-    ninfer::EngineOptions options     = engine_options(artifact);
-    options.max_context               = 262144;
-    options.kv_capacity               = ninfer::KvCapacityPolicy::explicit_capacity(262144);
-    options.speculative.backend       = ninfer::SpeculativeBackend::Mtp;
-    options.speculative.draft_tokens  = 5;
+    ninfer::EngineOptions options    = engine_options(artifact);
+    options.max_context              = 262144;
+    options.kv_capacity              = ninfer::KvCapacityPolicy::explicit_capacity(262144);
+    options.speculative.backend      = ninfer::SpeculativeBackend::Mtp;
+    options.speculative.draft_tokens = 5;
     return options;
 }
 
@@ -345,11 +345,13 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("expected --offload or no arguments");
         const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
         if (artifact == nullptr || *artifact == '\0') {
-            std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
+            std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. "
+                         "Set it to a .ninfer file\n";
             return 77;
         }
         if (!artifact_is_moe(artifact)) {
-            std::cerr << "SKIP: this artifact is a dense model, not the MoE class this test needs. Supply an MoE-class .ninfer artifact via NINFER_TEST_ARTIFACT\n";
+            std::cerr << "SKIP: this artifact is a dense model, not the MoE class this test needs. "
+                         "Supply an MoE-class .ninfer artifact via NINFER_TEST_ARTIFACT\n";
             return 77;
         }
 

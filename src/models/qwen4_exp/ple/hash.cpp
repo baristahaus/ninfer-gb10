@@ -20,9 +20,9 @@ void hash_tokens(std::span<const std::int32_t> ids, std::array<std::int32_t, 2> 
                 std::numeric_limits<std::uint32_t>::max() - std::uint64_t(controls.offsets[h]))
             throw std::invalid_argument("PLE hash head exceeds U32 rows");
     for (std::size_t t = 0; t < ids.size(); ++t) {
-        const auto older = tail[1] == eos ? eos : tail[0];
-        const auto pair  = std::uint64_t(ids[t]) * std::uint64_t(controls.multipliers[0]) ^
-                          std::uint64_t(tail[1]) * std::uint64_t(controls.multipliers[1]);
+        const auto older  = tail[1] == eos ? eos : tail[0];
+        const auto pair   = std::uint64_t(ids[t]) * std::uint64_t(controls.multipliers[0]) ^
+                            std::uint64_t(tail[1]) * std::uint64_t(controls.multipliers[1]);
         const auto triple = pair ^ std::uint64_t(older) * std::uint64_t(controls.multipliers[2]);
         for (std::size_t h = 0; h < kHeads; ++h) {
             const auto word = std::bit_cast<std::int64_t>(h < 8 ? pair : triple);

@@ -11,19 +11,18 @@ namespace {
 // repack gather can present a shape no artifact binding declares, and `ndim`/`shape[]` plus the
 // qdata address are what tell those apart against a binding dump.
 std::string describe_weight(const Weight& w) {
-    std::string out = "N" + std::to_string(w.n) + "K" + std::to_string(w.k) + " [ndim=" +
-                      std::to_string(w.ndim) + " shape=";
+    std::string out = "N" + std::to_string(w.n) + "K" + std::to_string(w.k) +
+                      " [ndim=" + std::to_string(w.ndim) + " shape=";
     for (std::uint32_t axis = 0; axis < w.ndim && axis < 4; ++axis) {
         out += (axis ? "," : "") + std::to_string(w.shape[axis]);
     }
-    out += " qtype=" + std::to_string(static_cast<int>(w.qtype)) + " layout=" +
-           std::to_string(static_cast<int>(w.layout)) + " payload_bytes=" +
-           std::to_string(w.payload_bytes) + " qdata=";
+    out += " qtype=" + std::to_string(static_cast<int>(w.qtype)) +
+           " layout=" + std::to_string(static_cast<int>(w.layout)) +
+           " payload_bytes=" + std::to_string(w.payload_bytes) + " qdata=";
     char text[32];
     std::snprintf(text, sizeof(text), "%p", static_cast<const void*>(w.qdata));
     return out + text + "]";
 }
-
 
 Nvfp4LinearAddPlan select_plan(std::int32_t rows, std::int32_t k, LinearPolicy policy,
                                std::int32_t tokens) {

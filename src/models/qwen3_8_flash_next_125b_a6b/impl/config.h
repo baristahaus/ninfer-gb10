@@ -76,11 +76,11 @@ struct DFlashConfig {
     // The DFlash2 companion checkpoint's config.json declares rope_parameters.rope_theta = 10000
     // (validated against the artifact's dflash2 component record at load). This is the config the
     // masked-draft lane reads (Variant::DFlashConfig); the text target itself is 1e7.
-    static constexpr float rope_theta   = 1.0e4F;
-    static constexpr float attention_scale = 1.0F / 11.3137085F;  // 1/sqrt(128)
+    static constexpr float rope_theta                         = 1.0e4F;
+    static constexpr float attention_scale                    = 1.0F / 11.3137085F; // 1/sqrt(128)
     static constexpr std::array<int, 5> target_feature_layers = {5, 15, 25, 35, 45};
-    static constexpr int selector_rank   = 256;
-    static constexpr int selector_top_k  = 16;
+    static constexpr int selector_rank                        = 256;
+    static constexpr int selector_top_k                       = 16;
 };
 
 // The published DFlash2 draft for Flash-Next (incoai/Qwen3.8-Flash-Next-DFlash2):
@@ -89,24 +89,24 @@ struct DFlashConfig {
 // layers 5/15/25/35/45. Load/bind support only; the draft execution and its
 // schedule hooks are a separate work item.
 struct DFlash2Config {
-    static constexpr bool supported              = DFlashConfig::supported;
-    static constexpr int layers                  = 5;
-    static constexpr int hidden                  = 2560;
-    static constexpr int intermediate            = 7680;
-    static constexpr int query_heads             = 32;
-    static constexpr int kv_heads                = 8;
-    static constexpr int head_dim                = 128;
-    static constexpr int query_size              = query_heads * head_dim;
-    static constexpr int kv_size                 = kv_heads * head_dim;
-    static constexpr int conv_kernel_size        = 2;
-    static constexpr int conv_group_size         = 16;
-    static constexpr int conv_projection_rows    = 2 * conv_kernel_size * (hidden / conv_group_size);
-    static constexpr int selector_rank           = 256;
-    static constexpr int selector_top_k          = 16;
-    static constexpr int block_size              = 8;
-    static constexpr int mask_token_id           = 248077;
-    static constexpr std::size_t target_layers   = 5;
-    static constexpr int feature_projection_cols = target_layers * hidden;
+    static constexpr bool supported            = DFlashConfig::supported;
+    static constexpr int layers                = 5;
+    static constexpr int hidden                = 2560;
+    static constexpr int intermediate          = 7680;
+    static constexpr int query_heads           = 32;
+    static constexpr int kv_heads              = 8;
+    static constexpr int head_dim              = 128;
+    static constexpr int query_size            = query_heads * head_dim;
+    static constexpr int kv_size               = kv_heads * head_dim;
+    static constexpr int conv_kernel_size      = 2;
+    static constexpr int conv_group_size       = 16;
+    static constexpr int conv_projection_rows  = 2 * conv_kernel_size * (hidden / conv_group_size);
+    static constexpr int selector_rank         = 256;
+    static constexpr int selector_top_k        = 16;
+    static constexpr int block_size            = 8;
+    static constexpr int mask_token_id         = 248077;
+    static constexpr std::size_t target_layers = 5;
+    static constexpr int feature_projection_cols                     = target_layers * hidden;
     static constexpr std::array<int, target_layers> target_layer_ids = {5, 15, 25, 35, 45};
     // The companion checkpoint's config.json declares rope_parameters.rope_theta = 10000
     // (validated against the artifact's dflash2 component record at load). The text target
@@ -114,12 +114,12 @@ struct DFlash2Config {
     static constexpr float rope_theta = 1.0e4F;
 };
 
-inline constexpr float kAttentionScale                   = 0.0625F;
-inline constexpr float kGdnScale                         = 0.08838834764831845F;
-inline constexpr std::uint32_t kPrefillChunkAlignment    = 128;
-inline constexpr std::uint32_t kMaximumMtpDraftTokens    = 3;
+inline constexpr float kAttentionScale                    = 0.0625F;
+inline constexpr float kGdnScale                          = 0.08838834764831845F;
+inline constexpr std::uint32_t kPrefillChunkAlignment     = 128;
+inline constexpr std::uint32_t kMaximumMtpDraftTokens     = 3;
 inline constexpr std::uint32_t kMaximumDFlashDraftTokens  = 0;
 inline constexpr std::uint32_t kMaximumDFlash2DraftTokens = DFlash2Config::block_size - 1;
-inline constexpr std::uint32_t kNativeContext            = 262144;
+inline constexpr std::uint32_t kNativeContext             = 262144;
 
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b::detail

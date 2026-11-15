@@ -62,9 +62,9 @@ struct TailFixture {
         valid    = measurement::make_i32(counts);
         accepted = measurement::make_i32(commits);
         const Tensor selected(slots.span(), DType::I32, {o.batch});
-        before = {raw_before.view, rope_before.view, selected};
-        after  = {o.inplace ? raw_before.view : raw_after.view,
-                 o.inplace ? rope_before.view : rope_after.view, selected};
+        before  = {raw_before.view, rope_before.view, selected};
+        after   = {o.inplace ? raw_before.view : raw_after.view,
+                   o.inplace ? rope_before.view : rope_after.view, selected};
         records = {raw_records.view, rope_records.view, Tensor(base.span(), DType::I32, {o.batch}),
                    Tensor(valid.span(), DType::I32, {o.batch})};
         count   = Tensor(accepted.span(), DType::I32, {o.batch});

@@ -30,9 +30,7 @@ bool splits_at(const ShardAxis axis, const std::int64_t extent, const int width)
     try {
         const auto placement = split_evenly(axis, extent, width);
         return placement.ranges.size() == static_cast<std::size_t>(width);
-    } catch (const std::invalid_argument&) {
-        return false;
-    }
+    } catch (const std::invalid_argument&) { return false; }
 }
 
 int test_width_two_is_complete() {
@@ -55,6 +53,7 @@ int test_width_three_is_partial() {
         const char* suffix;
         bool splits;
     };
+
     const Expected expected[] = {
         {"self_attn.k_proj.weight", false},        // 2 KV heads
         {"self_attn.v_proj.weight", false},        // 2 KV heads
@@ -69,14 +68,13 @@ int test_width_three_is_partial() {
         bool found = false;
         for (const auto& shard : parameter_shards()) {
             if (shard.suffix != row.suffix) { continue; }
-            found = true;
+            found       = true;
             bool splits = true;
             for (std::uint8_t index = 0; index < shard.segment_count; ++index) {
                 splits = splits && splits_at(shard.axis, shard.segments[index], 3);
             }
-            failures += check(splits == row.splits,
-                              std::string(row.suffix) + " at width 3 must " +
-                                  (row.splits ? "split" : "refuse"));
+            failures += check(splits == row.splits, std::string(row.suffix) + " at width 3 must " +
+                                                        (row.splits ? "split" : "refuse"));
         }
         failures += check(found, std::string(row.suffix) + " is in the shard table");
     }
@@ -87,11 +85,14 @@ int test_qkv_segmentation() {
     int failures = 0;
     // GDN's QKV projection is three segments, because a contiguous half of the 10240 rows would
     // give rank 0 all of Q and K and rank 1 none of either.
-    const auto& shards  = parameter_shards();
-    const auto* qkv     = &shards.front();
-    bool found_qkv      = false;
+    const auto& shards = parameter_shards();
+    const auto* qkv    = &shards.front();
+    bool found_qkv     = false;
     for (const auto& shard : shards) {
-        if (shard.suffix == "linear_attn.in_proj_qkv.weight") { qkv = &shard; found_qkv = true; }
+        if (shard.suffix == "linear_attn.in_proj_qkv.weight") {
+            qkv       = &shard;
+            found_qkv = true;
+        }
     }
     failures += check(found_qkv, "the QKV projection is in the table");
     if (!found_qkv) { return failures; }
@@ -122,8 +123,7 @@ int test_qkv_segmentation() {
 
 // A reference whose binding covers `extent` elements — the parameter's sharded extent, which is
 // the row count for a Rows parameter and the column count for a Columns one.
-ninfer::artifact::ParameterReference synthetic(std::string name,
-                                               std::vector<std::uint64_t> shape,
+ninfer::artifact::ParameterReference synthetic(std::string name, std::vector<std::uint64_t> shape,
                                                std::uint64_t /*extent*/) {
     ninfer::artifact::ParameterReference reference;
     reference.name  = std::move(name);
@@ -138,15 +138,14 @@ ninfer::artifact::ParameterReference synthetic(std::string name,
     reference.binding.parts.push_back(
         ninfer::artifact::Part{ninfer::artifact::ObjectHandle{0}, 0, elements});
     return reference;
-
 }
 
 int test_shard_parameter() {
     int failures = 0;
 
     // A Rows parameter halves its first axis and its binding.
-    const auto key = shard_parameter(synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512),
-                                     2, 0);
+    const auto key = shard_parameter(
+        synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512), 2, 0);
     failures += check(key.shape[0] == 256 && key.shape[1] == 2560,
                       "the KV projection halves its rows and keeps its columns");
     failures += check(key.binding.elements == 256 * 2560, "the KV binding halves");
@@ -155,8 +154,8 @@ int test_shard_parameter() {
                       "rank 0 owns the first half of the KV projection");
 
     // A Columns parameter halves its second axis.
-    const auto out = shard_parameter(synthetic("model.layers.3.self_attn.o_proj.weight", {2560, 6144}, 6144),
-                                     2, 1);
+    const auto out = shard_parameter(
+        synthetic("model.layers.3.self_attn.o_proj.weight", {2560, 6144}, 6144), 2, 1);
     failures += check(out.shape[0] == 2560 && out.shape[1] == 3072,
                       "the output projection halves its columns and keeps its rows");
 
@@ -166,7 +165,8 @@ int test_shard_parameter() {
     failures += check(qkv.shape[0] == 5120 && qkv.shape[1] == 2560,
                       "the QKV projection keeps its rows' half and its columns");
     failures += check(qkv.binding.parts.size() == 3, "the QKV binding is three slices");
-    failures += check(qkv.binding.elements == 5120 * 2560, "the QKV binding totals the rank's share");
+    failures +=
+        check(qkv.binding.elements == 5120 * 2560, "the QKV binding totals the rank's share");
 
     // A Replicated parameter is untouched.
     const auto norm = shard_parameter(
@@ -185,10 +185,9 @@ int test_shard_parameter() {
     // A binding that disagrees with the table is rejected, not clipped.
     bool threw = false;
     try {
-        (void)shard_parameter(synthetic("model.layers.3.self_attn.k_proj.weight", {256, 2560}, 256), 2, 0);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
+        (void)shard_parameter(synthetic("model.layers.3.self_attn.k_proj.weight", {256, 2560}, 256),
+                              2, 0);
+    } catch (const std::invalid_argument&) { threw = true; }
     failures += check(threw, "a binding that disagrees with the table is rejected");
     return failures;
 }
@@ -201,13 +200,12 @@ int test_shard_transform_factory() {
     int failures = 0;
 
     failures += check(!shard_transform(1, 0), "width 1 returns an empty transform");
-    failures += check(static_cast<bool>(shard_transform(2, 0)),
-                      "width 2 rank 0 returns a transform");
-    failures += check(static_cast<bool>(shard_transform(2, 1)),
-                      "width 2 rank 1 returns a transform");
+    failures +=
+        check(static_cast<bool>(shard_transform(2, 0)), "width 2 rank 0 returns a transform");
+    failures +=
+        check(static_cast<bool>(shard_transform(2, 1)), "width 2 rank 1 returns a transform");
 
-    const auto reference =
-        synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512);
+    const auto reference  = synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512);
     const auto transform0 = shard_transform(2, 0);
     const auto transform1 = shard_transform(2, 1);
     const auto rank0      = transform0(reference);
@@ -234,9 +232,7 @@ int test_shard_transform_factory() {
     bool threw = false;
     try {
         (void)shard_transform(2, 2);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
+    } catch (const std::invalid_argument&) { threw = true; }
     failures += check(threw, "a rank outside the width is refused");
     return failures;
 }
@@ -250,12 +246,16 @@ int test_convolution_segmentation() {
     const auto* conv   = &shards.front();
     bool found         = false;
     for (const auto& shard : shards) {
-        if (shard.suffix == "linear_attn.conv1d.weight") { conv = &shard; found = true; }
+        if (shard.suffix == "linear_attn.conv1d.weight") {
+            conv  = &shard;
+            found = true;
+        }
     }
     failures += check(found, "the convolution is in the table");
     if (!found) { return failures; }
     failures += check(conv->segment_count == 3, "the convolution has three segments");
-    failures += check(total_extent(*conv) == 10240, "the convolution segments cover 10240 channels");
+    failures +=
+        check(total_extent(*conv) == 10240, "the convolution segments cover 10240 channels");
     const auto rank0 = ranges_for(*conv, 2, 0);
     const auto rank1 = ranges_for(*conv, 2, 1);
     failures += check(rank0.size() == 3 && rank0[0] == ninfer::artifact::ShardRange{0, 1024} &&
@@ -279,8 +279,6 @@ int main() {
     failures += test_shard_parameter();
     failures += test_convolution_segmentation();
     failures += test_shard_transform_factory();
-    if (failures == 0) {
-        std::cout << "ok (" << parameter_shards().size() << " parameters)\n";
-    }
+    if (failures == 0) { std::cout << "ok (" << parameter_shards().size() << " parameters)\n"; }
     return failures == 0 ? 0 : 1;
 }

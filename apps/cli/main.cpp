@@ -207,8 +207,8 @@ void print_generation_summary(const ninfer::GenerationResult& result,
     for (std::size_t i = 0; i < description.ranks.size(); ++i) {
         const auto& rank   = description.ranks[i];
         const auto& budget = startup.ranks.at(i);
-        const auto found   = std::find_if(snapshot.ranks.begin(), snapshot.ranks.end(),
-                                          [&](const auto& value) { return value.rank == rank.rank; });
+        const auto found = std::find_if(snapshot.ranks.begin(), snapshot.ranks.end(),
+                                        [&](const auto& value) { return value.rank == rank.rank; });
         if (found == snapshot.ranks.end()) continue;
         const auto& memory       = found->memory;
         const std::string prefix = "rank " + std::to_string(rank.rank) + " ";

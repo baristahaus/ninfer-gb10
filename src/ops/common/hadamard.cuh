@@ -47,9 +47,7 @@ __device__ __forceinline__ void warp_transform_128(Load&& load, Store&& store) {
     for (int step = 1; step <= 16; step <<= 1) {
         float partner[4];
 #pragma unroll
-        for (int q = 0; q < 4; ++q) {
-            partner[q] = __shfl_xor_sync(0xffffffffu, v[q], step);
-        }
+        for (int q = 0; q < 4; ++q) { partner[q] = __shfl_xor_sync(0xffffffffu, v[q], step); }
         const bool low = (lane & step) == 0;
 #pragma unroll
         for (int q = 0; q < 4; ++q) {

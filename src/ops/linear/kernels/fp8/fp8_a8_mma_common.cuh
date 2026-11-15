@@ -69,8 +69,8 @@ fp8_mma_compute_stage(const std::uint8_t* activation_stage, const std::uint8_t* 
     const int a_column_byte = (a_matrix >> 1) * 16;
     const int b_row_offset  = lane & 7;
     const int b_column_byte = ((lane >> 3) & 1) * 16;
-    auto load_fragments     = [&](int k_step, unsigned(&a_fragments)[Schedule::kMmaTokens][4],
-                              unsigned(&b_fragments)[Schedule::kMmaRows][2]) {
+    auto load_fragments     = [&](int k_step, unsigned (&a_fragments)[Schedule::kMmaTokens][4],
+                                  unsigned (&b_fragments)[Schedule::kMmaRows][2]) {
 #pragma unroll
         for (int mma_token = 0; mma_token < Schedule::kMmaTokens; ++mma_token) {
             const int row = warp_token * Schedule::kWarpTokens + mma_token * 16 + a_row_offset;

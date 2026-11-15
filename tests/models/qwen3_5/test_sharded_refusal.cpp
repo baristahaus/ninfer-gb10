@@ -59,9 +59,10 @@ int main() {
     // so this case refuses.
     expect(!sharded_forward_refusal(true, kShardedForwardWired).empty(),
            "mirrors + group bundle + forward NOT wired must refuse (the case dee06f5d ran)");
-    expect(sharded_forward_refusal(true, kShardedForwardWired).find(
-               "sharded forward is not wired") != std::string::npos,
-           "that refusal names the reason");
+    expect(
+        sharded_forward_refusal(true, kShardedForwardWired).find("sharded forward is not wired") !=
+            std::string::npos,
+        "that refusal names the reason");
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

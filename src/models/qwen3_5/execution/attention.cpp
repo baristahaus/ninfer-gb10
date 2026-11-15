@@ -23,7 +23,7 @@ void require_rope_axes(const Tensor& positions, const RopeConfig& config) {
 } // namespace
 
 workspace::AttentionExtents attention_extents(const AttentionParameters& parameters,
-                                             const TextConfig& config) {
+                                              const TextConfig& config) {
     workspace::AttentionExtents out;
     if (parameters.role_rows) {
         const auto& roles = *parameters.role_rows;
@@ -46,10 +46,10 @@ workspace::AttentionExtents attention_extents(const AttentionParameters& paramet
     out.hidden_size = static_cast<std::int32_t>(config.hidden_size);
     if (out.head_dim <= 0 || out.query_width % out.head_dim != 0 ||
         out.key_width % out.head_dim != 0) {
-        throw std::invalid_argument(
-            "attention extents are not a whole number of heads: head_dim " +
-            std::to_string(out.head_dim) + ", query width " + std::to_string(out.query_width) +
-            ", key width " + std::to_string(out.key_width));
+        throw std::invalid_argument("attention extents are not a whole number of heads: head_dim " +
+                                    std::to_string(out.head_dim) + ", query width " +
+                                    std::to_string(out.query_width) + ", key width " +
+                                    std::to_string(out.key_width));
     }
     out.query_heads = out.query_width / out.head_dim;
     out.kv_heads    = out.key_width / out.head_dim;
@@ -63,9 +63,9 @@ std::size_t attention_projection_workspace_bytes(const AttentionProfile& paramet
         // role's capacity, not the sum.
         std::size_t peak = 0;
         for (const auto& role : *parameters.role_profiles) {
-            peak = std::max(peak, ops::linear_workspace_capacity_bytes(
-                                      role.qtype, role.n, role.k, role.policy, first, last,
-                                      "attention_role"));
+            peak = std::max(peak, ops::linear_workspace_capacity_bytes(role.qtype, role.n, role.k,
+                                                                       role.policy, first, last,
+                                                                       "attention_role"));
         }
         return peak;
     }
@@ -86,7 +86,7 @@ void attention_projection(const Tensor& hidden, const AttentionParameters& param
         const std::array<Tensor*, 4> outputs{&query, &key, &gate, &value};
         for (std::size_t i = 0; i < parameters.role_rows->size(); ++i) {
             const auto& role = (*parameters.role_rows)[i];
-            auto call = workspace.scope();
+            auto call        = workspace.scope();
             ops::linear(hidden, role.weight, *outputs[i], role.policy, workspace, execution);
         }
         return;

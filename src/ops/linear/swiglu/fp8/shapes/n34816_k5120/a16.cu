@@ -30,8 +30,8 @@ void launch_small_t(const Tensor& x, const Weight& weight, Tensor& out, cudaStre
     using Rows = SwiGluBranchRows<Schedule::kRowsPerWarp / 2, Intermediate>;
     launch_fp8_a16_simt<Fp8ScheduleInstance<Schedule, kInputRows, 4>>(
         fp8_a16_operands(x, weight),
-        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), Intermediate},
-        SwiGluPairEpilogue{}, stream, Rows{});
+        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), Intermediate}, SwiGluPairEpilogue{},
+        stream, Rows{});
 }
 } // namespace
 

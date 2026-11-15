@@ -201,16 +201,16 @@ void token_launch(const Tensor& x, const RoutedSwiGLUProfile& profile, Access ga
     const auto gate   = [&]<class Codec, int Paths>() {
         const dim3 grid =
             adaptive ? dim3(5 * S::intermediate)
-                       : dim3(S::intermediate, x.ne[1] * ((Contributions + Paths - 1) / Paths));
+                     : dim3(S::intermediate, x.ne[1] * ((Contributions + Paths - 1) / Paths));
         const auto kernel =
             token_gate_up<S, Codec, Access, Routed, Shared, Masked, Paths, Traversal>;
         if (plan.programmatic_input) {
             CUDA_CHECK(pdl::launch_dependent({grid, dim3(Paths * 32), 0, stream}, kernel, input,
-                                               ids, gate_up, shared_gu, mask, member,
-                                               storage.token_activation, x.ne[1], info, true));
+                                             ids, gate_up, shared_gu, mask, member,
+                                             storage.token_activation, x.ne[1], info, true));
         } else {
             kernel<<<grid, Paths * 32, 0, stream>>>(input, ids, gate_up, shared_gu, mask, member,
-                                                      storage.token_activation, x.ne[1], info, false);
+                                                    storage.token_activation, x.ne[1], info, false);
             CUDA_CHECK(cudaGetLastError());
         }
     };

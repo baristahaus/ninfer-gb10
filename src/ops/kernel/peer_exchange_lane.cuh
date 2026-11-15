@@ -22,12 +22,12 @@ namespace ninfer::ops::detail {
 // Probes of __nanosleep(100) polling before the poller gives up and reports. One probe costs about
 // 0.8 us (4M probes measured 3.25 s on two RTX 5070 Ti), so the limit is ~0.8 s.
 //
-// This budget is a DEAD-PEER DETECTOR, not a latency bound: it answers "will the peer ever publish?"
-// and must not answer "was the peer fast enough?". A poller that gives up does not merely wait
-// longer or shorter -- it abandons the exchange, leaves the partial holding only its own operand,
-// and sets the sticky hang word, after which every later poller in the round bails immediately. A
-// budget that is too small therefore converts host jitter into silent garbage, which is the worst
-// trade in the lane.
+// This budget is a DEAD-PEER DETECTOR, not a latency bound: it answers "will the peer ever
+// publish?" and must not answer "was the peer fast enough?". A poller that gives up does not merely
+// wait longer or shorter -- it abandons the exchange, leaves the partial holding only its own
+// operand, and sets the sticky hang word, after which every later poller in the round bails
+// immediately. A budget that is too small therefore converts host jitter into silent garbage, which
+// is the worst trade in the lane.
 inline constexpr std::uint32_t kPeerSpinLimit = 1000000u;
 
 // The FIRST exchange of a rank gets a budget two orders of magnitude larger, because it is the one

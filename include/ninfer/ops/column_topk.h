@@ -9,9 +9,7 @@
 namespace ninfer::ops {
 
 // No workspace is required.
-[[nodiscard]] constexpr std::size_t column_topk_workspace_capacity_bytes() noexcept {
-    return 0;
-}
+[[nodiscard]] constexpr std::size_t column_topk_workspace_capacity_bytes() noexcept { return 0; }
 
 /**
  * Op: column_topk

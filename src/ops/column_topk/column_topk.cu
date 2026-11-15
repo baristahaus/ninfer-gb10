@@ -30,8 +30,8 @@ __device__ __forceinline__ std::uint64_t packed_key(float x, std::int32_t row) {
 }
 
 template <int Rank>
-__device__ __forceinline__ void insert_sorted(std::uint64_t (&values)[Rank],
-                                              std::uint64_t key, int& count) {
+__device__ __forceinline__ void insert_sorted(std::uint64_t (&values)[Rank], std::uint64_t key,
+                                              int& count) {
     if (count == Rank && key <= values[Rank - 1]) { return; }
     int i = count < Rank ? count : Rank - 1;
     while (i > 0 && values[i - 1] < key) {
@@ -53,7 +53,8 @@ __global__ void column_topk_kernel(const __nv_bfloat16* logits, std::int32_t row
     int count = 0;
     for (std::int32_t row = threadIdx.x; row < rows; row += kThreads) {
         // The vocabulary producers store logits token-major: one column's V values are contiguous.
-        const float value = __bfloat162float(logits[static_cast<std::int64_t>(column) * rows + row]);
+        const float value =
+            __bfloat162float(logits[static_cast<std::int64_t>(column) * rows + row]);
         insert_sorted(local, packed_key(value, row), count);
     }
     for (int j = 0; j < Rank; ++j) {
@@ -85,7 +86,7 @@ __global__ void column_topk_kernel(const __nv_bfloat16* logits, std::int32_t row
                 const std::int64_t index = static_cast<std::int64_t>(rank) + Rank * column;
                 if (rank < final_count) {
                     const std::uint64_t key = final_values[rank];
-                    ids[index] = static_cast<std::int32_t>(
+                    ids[index]              = static_cast<std::int32_t>(
                         0xFFFFFFFFu - static_cast<std::uint32_t>(key & 0xFFFFFFFFu));
                     scores[index] = from_monotonic_key(static_cast<std::uint32_t>(key >> 32));
                 } else {
@@ -112,9 +113,8 @@ void column_topk(const Tensor& logits, Tensor& ids, Tensor& scores, CudaExecutio
     const std::int32_t rows    = logits.ne[0];
     const std::int32_t columns = logits.ne[1] * logits.ne[2];
     const std::int32_t rank    = ids.ne[0];
-    if (rows < 1 || columns < 1 || rank < 1 || rank > kMaxRank ||
-        ids.ne[1] != logits.ne[1] || ids.ne[2] != logits.ne[2] ||
-        scores.ne[0] != rank || scores.ne[1] != logits.ne[1] ||
+    if (rows < 1 || columns < 1 || rank < 1 || rank > kMaxRank || ids.ne[1] != logits.ne[1] ||
+        ids.ne[2] != logits.ne[2] || scores.ne[0] != rank || scores.ne[1] != logits.ne[1] ||
         scores.ne[2] != logits.ne[2]) {
         throw std::invalid_argument("column_topk: invalid shape");
     }
@@ -129,11 +129,10 @@ void column_topk(const Tensor& logits, Tensor& ids, Tensor& scores, CudaExecutio
     auto* scores_ptr       = static_cast<float*>(scores.data);
     const dim3 grid(columns);
     switch (rank) {
-#define NINFER_COLUMN_TOPK_CASE(R)                                                             \
-    case R:                                                                                    \
-        column_topk_kernel<R><<<grid, kThreads, 0, execution.stream()>>>(logits_ptr, rows,     \
-                                                                        columns, ids_ptr,      \
-                                                                        scores_ptr);           \
+#define NINFER_COLUMN_TOPK_CASE(R)                                                                 \
+    case R:                                                                                        \
+        column_topk_kernel<R><<<grid, kThreads, 0, execution.stream()>>>(                          \
+            logits_ptr, rows, columns, ids_ptr, scores_ptr);                                       \
         break;
         NINFER_COLUMN_TOPK_CASE(1)
         NINFER_COLUMN_TOPK_CASE(2)

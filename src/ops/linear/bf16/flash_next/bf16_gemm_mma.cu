@@ -50,10 +50,10 @@ void launch_geometry(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
 } // namespace
 
 void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-#define NINFER_BF16_MMA(N, K)                                                                  \
-    if (weight.n == (N) && weight.k == (K)) {                                                  \
-        launch_geometry<Bf16GemvGeometry<(N), (K)>>(x, weight, out, stream);                   \
-        return;                                                                                 \
+#define NINFER_BF16_MMA(N, K)                                                                      \
+    if (weight.n == (N) && weight.k == (K)) {                                                      \
+        launch_geometry<Bf16GemvGeometry<(N), (K)>>(x, weight, out, stream);                       \
+        return;                                                                                    \
     }
 
 

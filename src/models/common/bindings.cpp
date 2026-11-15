@@ -91,7 +91,7 @@ std::vector<BoundWeight> resolve_weights(std::vector<PendingWeight>&& pending,
     std::vector<BoundWeight> out;
     out.reserve(pending.size());
     for (std::size_t i = 0; i < pending.size(); ++i) {
-        auto& item = pending[i];
+        auto& item         = pending[i];
         const auto& parent = materialized.parent(storage[i].request, devices[i]);
         if (storage[i].end > parent.geometry.elements) {
             throw artifact::ArtifactError(item.reference.name +

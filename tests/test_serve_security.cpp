@@ -21,9 +21,11 @@ int test_secure_equals() {
     int failures = 0;
     failures += check(secure_equals("", ""), "two empty strings are equal");
     failures += check(secure_equals("sk-local-key", "sk-local-key"), "identical strings are equal");
-    failures += check(!secure_equals("sk-local-key", "sk-local-kez"), "a one-byte difference differs");
+    failures +=
+        check(!secure_equals("sk-local-key", "sk-local-kez"), "a one-byte difference differs");
     failures += check(!secure_equals("sk-local-key", "sk-local-ke"), "a prefix is not equal");
-    failures += check(!secure_equals("sk-local-ke", "sk-local-key"), "a prefix is not equal reversed");
+    failures +=
+        check(!secure_equals("sk-local-ke", "sk-local-key"), "a prefix is not equal reversed");
     failures += check(!secure_equals("", "sk-local-key"), "empty differs from non-empty");
     failures += check(!secure_equals("sk-local-key", ""), "non-empty differs from empty");
     // A difference in the first byte and a difference in the last must both be reported.
@@ -38,7 +40,7 @@ int test_secure_equals() {
 }
 
 int test_secure_hex() {
-    int failures = 0;
+    int failures              = 0;
     const std::string sixteen = secure_hex(8);
     failures += check(sixteen.size() == 16, "8 bytes render as 16 hex characters");
     failures += check(sixteen.find_first_not_of("0123456789abcdef") == std::string::npos,
@@ -60,17 +62,17 @@ int test_secure_hex() {
 
 int test_is_loopback_host() {
     int failures = 0;
-    for (const std::string_view loopback : {"localhost", "127.0.0.1", "127.1.2.3", "::1", "[::1]",
-                                            "localhost:8000", "127.0.0.1:3080", "[::1]:3080",
-                                            "localhost."}) {
-        failures += check(is_loopback_host(loopback),
-                          "loopback host accepted: " + std::string(loopback));
+    for (const std::string_view loopback :
+         {"localhost", "127.0.0.1", "127.1.2.3", "::1", "[::1]", "localhost:8000", "127.0.0.1:3080",
+          "[::1]:3080", "localhost."}) {
+        failures +=
+            check(is_loopback_host(loopback), "loopback host accepted: " + std::string(loopback));
     }
-    for (const std::string_view foreign : {"", "0.0.0.0", "example.com", "example.com:8000",
-                                           "192.168.1.10", "10.0.0.5:8000", "127.0.0.1.example.com",
-                                           "localhost.example.com", "[2001:db8::1]", "127.0.0"}) {
-        failures += check(!is_loopback_host(foreign),
-                          "non-loopback host refused: " + std::string(foreign));
+    for (const std::string_view foreign :
+         {"", "0.0.0.0", "example.com", "example.com:8000", "192.168.1.10", "10.0.0.5:8000",
+          "127.0.0.1.example.com", "localhost.example.com", "[2001:db8::1]", "127.0.0"}) {
+        failures +=
+            check(!is_loopback_host(foreign), "non-loopback host refused: " + std::string(foreign));
     }
     return failures;
 }
@@ -84,9 +86,11 @@ int test_loopback_guard() {
         bool refused;
         const char* why;
     };
+
     const Case cases[] = {
         // A server on a routable address is not guarded: the operator chose to expose it.
-        {"0.0.0.0", "example.com", "https://example.com", false, false, "routable bind is not guarded"},
+        {"0.0.0.0", "example.com", "https://example.com", false, false,
+         "routable bind is not guarded"},
         {"", "example.com", "https://example.com", false, false, "empty bind is not guarded"},
         // A loopback server with a loopback Host is the normal local client.
         {"127.0.0.1", "127.0.0.1:3080", "", false, false, "loopback host header allowed"},
@@ -95,33 +99,39 @@ int test_loopback_guard() {
         {"127.0.0.1", "", "", false, false, "a missing Host header is allowed"},
         // DNS rebinding: the browser sends the attacker's name to a loopback server.
         {"127.0.0.1", "attacker.example:3080", "", false, true, "foreign host header refused"},
-        {"127.0.0.1", "127.0.0.1.attacker.example", "", false, true, "suffixed loopback name refused"},
+        {"127.0.0.1", "127.0.0.1.attacker.example", "", false, true,
+         "suffixed loopback name refused"},
         {"127.0.0.1", "127.0.0", "", false, true, "a truncated quad is not loopback"},
         {"127.0.0.1", "127.0.0.1.1", "", false, true, "a five-part quad is not loopback"},
         {"127.0.0.1", "127.999.0.1", "", false, true, "an out-of-range octet is not loopback"},
         // Cross-origin browser reads, with --cors off.
-        {"127.0.0.1", "127.0.0.1", "https://attacker.example", false, true, "foreign origin refused"},
+        {"127.0.0.1", "127.0.0.1", "https://attacker.example", false, true,
+         "foreign origin refused"},
         {"127.0.0.1", "127.0.0.1", "null", false, true, "sandboxed origin refused"},
-        {"127.0.0.1", "127.0.0.1", "http://localhost:5173", false, false, "loopback origin allowed"},
-        {"127.0.0.1", "127.0.0.1", "http://127.0.0.1:5173", false, false, "IPv4 loopback origin allowed"},
-        {"127.0.0.1", "127.0.0.1", "http://[::1]:5173", false, false, "IPv6 loopback origin allowed"},
+        {"127.0.0.1", "127.0.0.1", "http://localhost:5173", false, false,
+         "loopback origin allowed"},
+        {"127.0.0.1", "127.0.0.1", "http://127.0.0.1:5173", false, false,
+         "IPv4 loopback origin allowed"},
+        {"127.0.0.1", "127.0.0.1", "http://[::1]:5173", false, false,
+         "IPv6 loopback origin allowed"},
         // A non-browser client sends no Origin; the Host check still applies.
         {"127.0.0.1", "attacker.example", "", false, true, "foreign host without origin refused"},
         // --cors is the operator's explicit opt-in to browser origins: the Origin check yields,
         // the Host check does not, because rebinding defence does not depend on the caller.
-        {"127.0.0.1", "127.0.0.1", "https://app.example", true, false, "cors waives the origin check"},
+        {"127.0.0.1", "127.0.0.1", "https://app.example", true, false,
+         "cors waives the origin check"},
         {"127.0.0.1", "127.0.0.1", "null", true, false, "cors waives the sandboxed origin check"},
-        {"127.0.0.1", "attacker.example", "https://app.example", true, true, "cors does not waive rebinding"},
+        {"127.0.0.1", "attacker.example", "https://app.example", true, true,
+         "cors does not waive rebinding"},
     };
     int failures = 0;
     for (const Case& c : cases) {
-        const bool refused =
-            refuse_loopback_foreign_request(c.bind, c.host, c.origin, c.cors);
-        failures += check(refused == c.refused,
-                          std::string("loopback guard: ") + c.why +
-                              " (bind=" + std::string(c.bind) + " host=" + std::string(c.host) +
-                              " origin=" + std::string(c.origin) +
-                              " cors=" + (c.cors ? "on" : "off") + ")");
+        const bool refused = refuse_loopback_foreign_request(c.bind, c.host, c.origin, c.cors);
+        failures +=
+            check(refused == c.refused,
+                  std::string("loopback guard: ") + c.why + " (bind=" + std::string(c.bind) +
+                      " host=" + std::string(c.host) + " origin=" + std::string(c.origin) +
+                      " cors=" + (c.cors ? "on" : "off") + ")");
     }
     return failures;
 }

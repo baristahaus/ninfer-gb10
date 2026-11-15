@@ -643,8 +643,8 @@ int exercise_nested_tool_markers(const char* artifact) {
     request.execution.sampling.temperature    = 0.0F;
     request.execution.allow_prefix_reuse      = true;
     // Manual probes, not grammar-constrained generation; tools are declaration-only.
-    request.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
-    request.stop.include_model_defaults       = false;
+    request.tool_choice.constraints     = ninfer::ToolConstraintMode::Automatic;
+    request.stop.include_model_defaults = false;
 
     // A single source creates both markers. Each probe changes the user suffix so the
     // private response/endpoint cannot satisfy the shared-prefix conformance check.
@@ -769,7 +769,7 @@ int exercise_anthropic_prefix_regression(const char* artifact) {
         ninfer::ChatMessage user;
         user.role = ninfer::ChatRole::User;
         user.parts.push_back(ninfer::MessagePart{
-             .kind = ninfer::MessagePartKind::Text, .text = std::move(text), .media = {}});
+            .kind = ninfer::MessagePartKind::Text, .text = std::move(text), .media = {}});
         input.messages.push_back(std::move(user));
         return input;
     };
@@ -1123,8 +1123,8 @@ int exercise_rewrite_checkpoints(ninfer::Engine& engine) {
         result.execution.sampling.temperature    = 0.0F;
         result.execution.allow_prefix_reuse      = reuse;
         // Manual rounds with structured tool history; tools are declaration-only.
-        result.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
-        result.stop.include_model_defaults       = false;
+        result.tool_choice.constraints     = ninfer::ToolConstraintMode::Automatic;
+        result.stop.include_model_defaults = false;
         return result;
     };
 
@@ -1231,8 +1231,8 @@ int exercise_agent_continuation(const char* artifact) {
     request.execution.allow_prefix_reuse      = true;
     // The scenario drives a manual agent trajectory; tools are declared without the
     // grammar protection that would require the model's default stop tokens.
-    request.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
-    request.stop.include_model_defaults       = false;
+    request.tool_choice.constraints     = ninfer::ToolConstraintMode::Automatic;
+    request.stop.include_model_defaults = false;
     const auto opener_tokens =
         static_cast<std::uint32_t>(engine.tokenize_text("<|im_start|>assistant\n<think>\n").size());
     const auto closing_tokens =
@@ -1240,7 +1240,7 @@ int exercise_agent_continuation(const char* artifact) {
     const auto archived_token    = engine.tokenize_text("Archived").front();
     std::uint64_t total_reused   = 0;
     std::uint64_t total_computed = 0;
-    const auto generate          = [&](ninfer::PromptInput prompt, std::uint32_t expected_frontier,
+    const auto generate = [&](ninfer::PromptInput prompt, std::uint32_t expected_frontier,
                               std::uint32_t round,
                               std::string_view lineage) -> std::optional<ninfer::GenerationResult> {
         const auto before = engine.snapshot().runtime;
@@ -1249,8 +1249,8 @@ int exercise_agent_continuation(const char* artifact) {
         if (result.generated_token_ids.size() != 4 ||
             result.finish_reason != ninfer::FinishReason::OutputLimit ||
             result.stats.prefix_reuse_path != (expected_frontier
-                                                            ? ninfer::PrefixReusePath::Checkpoint
-                                                            : ninfer::PrefixReusePath::Root) ||
+                                                   ? ninfer::PrefixReusePath::Checkpoint
+                                                   : ninfer::PrefixReusePath::Root) ||
             result.stats.reused_prompt_tokens != expected_frontier ||
             result.stats.reused_prompt_tokens >= result.prompt.prompt_tokens ||
             result.stats.computed_prefill_tokens !=
@@ -1276,10 +1276,10 @@ int exercise_agent_continuation(const char* artifact) {
     if (!previous) { return 1; }
     constexpr std::uint32_t rounds = 16;
     for (std::uint32_t round = 1; round < rounds; ++round) {
-        const auto prior_role       = input.messages.back().role;
-        const bool content_recovery = prior_role == ninfer::ChatRole::User ||
-                                      prior_role == ninfer::ChatRole::System ||
-                                      prior_role == ninfer::ChatRole::Developer;
+        const auto prior_role        = input.messages.back().role;
+        const bool content_recovery  = prior_role == ninfer::ChatRole::User ||
+                                       prior_role == ninfer::ChatRole::System ||
+                                       prior_role == ninfer::ChatRole::Developer;
         const auto expected_frontier = previous->prompt.prompt_tokens - opener_tokens -
                                        (content_recovery ? closing_tokens : 0U);
         if (expected_frontier <= previous->stats.reused_prompt_tokens) {
@@ -1390,8 +1390,8 @@ int exercise_rewrite_branch(const char* artifact) {
         value.execution.sampling.temperature    = 0.0F;
         value.execution.allow_prefix_reuse      = reuse;
         // Manual checkpoint branching; tools are declaration-only.
-        value.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
-        value.stop.include_model_defaults       = false;
+        value.tool_choice.constraints     = ninfer::ToolConstraintMode::Automatic;
+        value.stop.include_model_defaults = false;
         return value;
     };
 
@@ -1464,9 +1464,8 @@ int exercise_late_instructions(const char* artifact) {
         engine.tokenize_text("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n").size());
     // The artifact's chat template only admits system and developer messages at the
     // beginning; the late-injection recovery exercise uses user turns for both rounds.
-    for (const auto* instruction :
-         {"For the next answer, emphasize concrete examples.",
-          "Keep the next explanation technical and practical."}) {
+    for (const auto* instruction : {"For the next answer, emphasize concrete examples.",
+                                    "Keep the next explanation technical and practical."}) {
         auto assistant              = text_message(ninfer::ChatRole::Assistant, previous.content);
         assistant.reasoning_content = previous.reasoning;
         input.messages.push_back(std::move(assistant));
@@ -1997,7 +1996,8 @@ int exercise_attention_integration(const char* artifact) {
 int main() {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set "
+                     "it to a .ninfer file\n";
         return 77;
     }
     if (ninfer::test::skip_without_host_tier("test_engine_prefix_real")) { return 77; }

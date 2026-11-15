@@ -39,7 +39,7 @@ int main() {
         .main_page_tokens                     = 64,
         .minimum_main_page_groups             = 2,
         .maximum_main_page_groups             = 6,
-        .minimum_device_reservation_bytes        = 1000,
+        .minimum_device_reservation_bytes     = 1000,
         .bytes_per_additional_main_page_group = 128,
     };
 
@@ -79,7 +79,7 @@ int main() {
         .main_page_tokens                     = 64,
         .minimum_main_page_groups             = 2,
         .maximum_main_page_groups             = 100,
-        .minimum_device_reservation_bytes        = 1000,
+        .minimum_device_reservation_bytes     = 1000,
         .bytes_per_additional_main_page_group = 100,
     };
     const std::array<std::size_t, 1> single_budget{1380};
@@ -129,8 +129,7 @@ int main() {
     bool uncredited_rejected = false;
     try {
         (void)ninfer::runtime::resolve_symmetric_kv_capacity(
-            ninfer::KvCapacityPolicy::automatic(50), wide,
-            std::array<std::size_t, 1>{380});
+            ninfer::KvCapacityPolicy::automatic(50), wide, std::array<std::size_t, 1>{380});
     } catch (const std::invalid_argument&) { uncredited_rejected = true; }
     failures += check(uncredited_rejected,
                       "an uncredited 380-byte rank was accepted as the group bottleneck");
@@ -162,10 +161,10 @@ int main() {
 
     const auto explicit_capacity = ninfer::runtime::resolve_kv_capacity(
         ninfer::KvCapacityPolicy::explicit_capacity(129), curve, 1200);
-    failures += check(explicit_capacity.main_page_groups == 3 &&
-                          explicit_capacity.resolved_tokens == 192 &&
-                          explicit_capacity.runtime_reservation_bytes == 1128,
-                      "explicit KV capacity did not use page-aligned token semantics");
+    failures +=
+        check(explicit_capacity.main_page_groups == 3 && explicit_capacity.resolved_tokens == 192 &&
+                  explicit_capacity.runtime_reservation_bytes == 1128,
+              "explicit KV capacity did not use page-aligned token semantics");
 
     bool insufficient_rejected = false;
     try {
@@ -201,12 +200,12 @@ int main() {
     // Width 1 is the one-element case of the group path, so a fixed option set must resolve to the
     // same resolution field for field. This is the demonstration behind "byte-identical at width 1"
     // rather than an assertion of it.
-    const auto single_2000 = ninfer::runtime::resolve_kv_capacity(
-        ninfer::KvCapacityPolicy::automatic(50), curve, 2000);
+    const auto single_2000 =
+        ninfer::runtime::resolve_kv_capacity(ninfer::KvCapacityPolicy::automatic(50), curve, 2000);
     const std::array<ninfer::runtime::RankCapacityOffer, 1> one_rank{
         ninfer::runtime::RankCapacityOffer{curve, 2000}};
-    const auto group_one =
-        ninfer::runtime::resolve_group_kv_capacity(ninfer::KvCapacityPolicy::automatic(50), one_rank);
+    const auto group_one = ninfer::runtime::resolve_group_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), one_rank);
     failures += check(same_resolution(group_one.front(), single_2000),
                       "a group of one rank resolved differently from the single-device path");
 
@@ -215,8 +214,8 @@ int main() {
     const std::array<ninfer::runtime::RankCapacityOffer, 2> uneven{
         ninfer::runtime::RankCapacityOffer{wide, 1380},
         ninfer::runtime::RankCapacityOffer{wide, 1780}};
-    const auto group_uneven = ninfer::runtime::resolve_group_kv_capacity(
-        ninfer::KvCapacityPolicy::automatic(50), uneven);
+    const auto group_uneven =
+        ninfer::runtime::resolve_group_kv_capacity(ninfer::KvCapacityPolicy::automatic(50), uneven);
     failures += check(group_uneven[0].resolved_tokens == group_uneven[1].resolved_tokens &&
                           group_uneven[0].main_page_groups == 5 &&
                           group_uneven[0].main_page_groups == group_uneven[1].main_page_groups,
@@ -233,9 +232,9 @@ int main() {
             ninfer::KvCapacityPolicy::explicit_capacity(320), short_rank);
     } catch (const std::invalid_argument& error) {
         const std::string message = error.what();
-        named_both = message.find("rank 1") != std::string::npos &&
-                     message.find("320") != std::string::npos &&
-                     message.find("1200") != std::string::npos;
+        named_both                = message.find("rank 1") != std::string::npos &&
+                                    message.find("320") != std::string::npos &&
+                                    message.find("1200") != std::string::npos;
     }
     failures += check(named_both,
                       "a rank that cannot hold the group capacity was not named with both numbers");

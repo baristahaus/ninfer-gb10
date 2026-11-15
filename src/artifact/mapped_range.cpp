@@ -18,10 +18,9 @@ namespace ninfer::artifact {
 MappedRange Reader::map_range(std::uint64_t offset, std::uint64_t bytes) const {
     MappedRange result;
     for (const auto& segment : segments(offset, bytes)) {
-        result.segments.push_back(
-            {open_file(segment.file_index, io::ReadMode::Buffered).map(segment.file_offset,
-                                                                      segment.bytes),
-             segment.destination_offset, segment.bytes});
+        result.segments.push_back({open_file(segment.file_index, io::ReadMode::Buffered)
+                                       .map(segment.file_offset, segment.bytes),
+                                   segment.destination_offset, segment.bytes});
     }
     return result;
 }

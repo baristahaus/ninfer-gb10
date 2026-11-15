@@ -21,8 +21,8 @@
 extern "C" void ninfer_launch_round_boundary(void) __attribute__((weak));
 // The phase marker: called once at a point the lane is known to reach (the executor's creation), so
 // the launch counter can label everything before it as startup and everything after as round. A
-// marker placed in a function the lane does not use never fires, which is how the first bucket stayed
-// labelled startup+round0.
+// marker placed in a function the lane does not use never fires, which is how the first bucket
+// stayed labelled startup+round0.
 extern "C" void ninfer_launch_phase_marker(const char*) __attribute__((weak));
 
 namespace ninfer::runtime {
@@ -41,8 +41,8 @@ public:
     // invariant at its dispatch.
     LocalExecutor(std::vector<std::unique_ptr<RankWorker<Types>>> workers, SessionEpoch epoch)
         : workers_(std::move(workers)), epoch_(epoch),
-          pool_(workers_.front()->program().capacity()),
-          compute_(pool_.capacity().compute_frames), context_(pool_.capacity().context_frames) {
+          pool_(workers_.front()->program().capacity()), compute_(pool_.capacity().compute_frames),
+          context_(pool_.capacity().context_frames) {
         if (workers_.empty()) { throw std::invalid_argument("executor needs at least one rank"); }
         held_.resize(workers_.size());
         this->observations_.resize(workers_.size());
@@ -123,7 +123,8 @@ public:
                     "the matching exchange.",
                     workers_.size());
                 round_trace(
-                    "gate=executor.poll rank=0-only: LocalExecutor::poll returns rank 0's event and "
+                    "gate=executor.poll rank=0-only: LocalExecutor::poll returns rank 0's event "
+                    "and "
                     "polls-then-discards every rank>=1 event; EngineCore::poll_execution consumes "
                     "that one event, clears compute_/retiring_ and releases the next round "
                     "(engine_execution.inl poll_execution; engine_schedule.inl worker_loop).");
@@ -175,8 +176,7 @@ public:
                         trace_start_throw(rank, ticket, flight.command, began, error.what());
                         throw;
                     } catch (...) {
-                        trace_start_throw(rank, ticket, flight.command, began,
-                                          "non-std exception");
+                        trace_start_throw(rank, ticket, flight.command, began, "non-std exception");
                         throw;
                     }
                     trace_start_return(rank, ticket, flight.command, began);
@@ -251,8 +251,7 @@ public:
                     bind_rank(rank);
                     if (round_trace_enabled()) {
                         round_trace("commit.enter rank=%zu dev=%d ticket=%llu kind=%s command=%llu",
-                                    rank,
-                                    static_cast<int>(workers_[rank]->device().index()),
+                                    rank, static_cast<int>(workers_[rank]->device().index()),
                                     static_cast<unsigned long long>(ticket.id),
                                     round_trace_frame_kind_name(ticket.frame.kind),
                                     static_cast<unsigned long long>(flight.command.value));
@@ -270,8 +269,7 @@ public:
                         if (round_trace_enabled()) {
                             round_trace("commit.throw rank=%zu dev=%d ticket=%llu kind=%s "
                                         "elapsed-us=%llu what=\"%s\"",
-                                        rank,
-                                        static_cast<int>(workers_[rank]->device().index()),
+                                        rank, static_cast<int>(workers_[rank]->device().index()),
                                         static_cast<unsigned long long>(ticket.id),
                                         round_trace_frame_kind_name(ticket.frame.kind),
                                         static_cast<unsigned long long>(
@@ -283,12 +281,11 @@ public:
                     if (round_trace_enabled()) {
                         round_trace("commit.return rank=%zu dev=%d ticket=%llu kind=%s "
                                     "elapsed-us=%llu",
-                                    rank,
-                                    static_cast<int>(workers_[rank]->device().index()),
+                                    rank, static_cast<int>(workers_[rank]->device().index()),
                                     static_cast<unsigned long long>(ticket.id),
                                     round_trace_frame_kind_name(ticket.frame.kind),
-                                    static_cast<unsigned long long>(
-                                        (round_trace_now_ns() - began) / 1000ULL));
+                                    static_cast<unsigned long long>((round_trace_now_ns() - began) /
+                                                                    1000ULL));
                     }
                 }
             });
@@ -307,13 +304,9 @@ public:
         flight.command = next_command();
         flight.phase   = Phase::Discarding;
         try {
-            observe_host_call(host_.discard_ns,
-                              [&] {
-                                  for_each_program(
-                                      [&](auto& program) {
-                                          program.discard(ticket, flight.command);
-                                      });
-                              });
+            observe_host_call(host_.discard_ns, [&] {
+                for_each_program([&](auto& program) { program.discard(ticket, flight.command); });
+            });
             flight.clock.resolve(observation_time_ns());
         } catch (...) { record_failure(ticket); }
     }
@@ -359,16 +352,17 @@ public:
                         // never releases, and the give-up counter no longer fires because the two
                         // ranks are not at the same exchange. The decision in poll_decision.h is
                         // pure; its INPUTS are not, so the caller has to preserve the precondition
-                        // that makes them meaningful: a peer is polled only because rank 0 was ready.
-                        // AN EVENT THAT IS POLLED AND NOT DELIVERED IS LOST. program().poll()
-                        // POPS the event, so a decision that holds the round (Wait) has to keep
-                        // what it polled: the rank that produced it will not produce it again, and
-                        // its stage machine has already moved on. Measured: one rank published
-                        // ResultReady a few milliseconds before its peer, the decision returned
-                        // Wait, the event was discarded, and the round then spun at AwaitCommit
-                        // for the rest of the run with both ranks idle and no error anywhere.
-                        // `held_` is that kept event per rank; `take` advances the stage machine
-                        // either way, so holding an event never freezes the rank it came from.
+                        // that makes them meaningful: a peer is polled only because rank 0 was
+                        // ready. AN EVENT THAT IS POLLED AND NOT DELIVERED IS LOST.
+                        // program().poll() POPS the event, so a decision that holds the round
+                        // (Wait) has to keep what it polled: the rank that produced it will not
+                        // produce it again, and its stage machine has already moved on. Measured:
+                        // one rank published ResultReady a few milliseconds before its peer, the
+                        // decision returned Wait, the event was discarded, and the round then spun
+                        // at AwaitCommit for the rest of the run with both ranks idle and no error
+                        // anywhere. `held_` is that kept event per rank; `take` advances the stage
+                        // machine either way, so holding an event never freezes the rank it came
+                        // from.
                         const auto take = [&](std::size_t rank) -> std::optional<Event> {
                             bind_rank(rank);
                             if (held_[rank]) {
@@ -381,28 +375,30 @@ public:
                         auto rank0_event = take(0);
                         trace_poll_result(0, rank0_event);
                         if (!rank0_event) {
-                            // RANK 0 HAS NO EVENT, BUT IT MAY BE WAITING ON A PEER'S COLLECTIVE, AND
-                            // THE RULE ABOVE WOULD THEN STARVE THE VERY PEER IT IS WAITING FOR. The
-                            // rule is stated for a rank that is waiting on its own device work: a
-                            // peer polled at that moment would run ahead of the lockstep order. But
-                            // one Program::progress() call runs the stage machine in a loop, so a
-                            // single call can carry rank 0 from a stage that merely waits on its own
-                            // stream into one that enqueues a collective (measured: History ->
-                            // AwaitDecision -> launch_decision, whose gather is a collective). Rank 0
-                            // then has no event precisely BECAUSE it is in a rendezvous, and refusing
-                            // to advance any peer leaves that rendezvous unanswered forever -- the
-                            // peer is parked one stage behind, its collective is never issued, rank
-                            // 0's device never completes, and the round never releases. Measured as a
-                            // 585 s spin on rank 0 with not one line from rank 1.
+                            // RANK 0 HAS NO EVENT, BUT IT MAY BE WAITING ON A PEER'S COLLECTIVE,
+                            // AND THE RULE ABOVE WOULD THEN STARVE THE VERY PEER IT IS WAITING FOR.
+                            // The rule is stated for a rank that is waiting on its own device work:
+                            // a peer polled at that moment would run ahead of the lockstep order.
+                            // But one Program::progress() call runs the stage machine in a loop, so
+                            // a single call can carry rank 0 from a stage that merely waits on its
+                            // own stream into one that enqueues a collective (measured: History ->
+                            // AwaitDecision -> launch_decision, whose gather is a collective). Rank
+                            // 0 then has no event precisely BECAUSE it is in a rendezvous, and
+                            // refusing to advance any peer leaves that rendezvous unanswered
+                            // forever -- the peer is parked one stage behind, its collective is
+                            // never issued, rank 0's device never completes, and the round never
+                            // releases. Measured as a 585 s spin on rank 0 with not one line from
+                            // rank 1.
                             //
                             // The distinction the rule needs is "waiting on the device" vs
-                            // "waiting on a peer", and the collective count is the rank's position in
-                            // the rendezvous order: a peer is advanced when it is NOT AHEAD of rank
-                            // 0. Behind means it has not yet issued the collective rank 0 waits for;
-                            // level means it may already hold the event the round needs (measured:
-                            // rank 1 published ResultReady and was never polled again, so the round
-                            // hung with every rank idle). A peer ahead of rank 0 is not touched, which
-                            // is the original rule's guarantee. See peers_to_advance.
+                            // "waiting on a peer", and the collective count is the rank's position
+                            // in the rendezvous order: a peer is advanced when it is NOT AHEAD of
+                            // rank 0. Behind means it has not yet issued the collective rank 0
+                            // waits for; level means it may already hold the event the round needs
+                            // (measured: rank 1 published ResultReady and was never polled again,
+                            // so the round hung with every rank idle). A peer ahead of rank 0 is
+                            // not touched, which is the original rule's guarantee. See
+                            // peers_to_advance.
                             advance_peers_not_ahead_of_rank0();
                             return std::nullopt;
                         }
@@ -410,16 +406,16 @@ public:
                             return rank0_event;
                         }
                         // Rank 0 is ready, so every peer below is polled at a point where the
-                        // lockstep order has been reached. Reduce each result to the three facts the
-                        // decision needs, then let the pure decision say what to do. The decision
-                        // itself lives in poll_decision.h so it can be unit-tested without a Device;
-                        // see decide_poll for the six rules and why rank 0's event alone is enough
-                        // only when it is the leading rank's.
+                        // lockstep order has been reached. Reduce each result to the three facts
+                        // the decision needs, then let the pure decision say what to do. The
+                        // decision itself lives in poll_decision.h so it can be unit-tested without
+                        // a Device; see decide_poll for the six rules and why rank 0's event alone
+                        // is enough only when it is the leading rank's.
                         std::vector<std::optional<Event>> polled(workers_.size());
                         std::vector<PolledRank> summary(workers_.size());
-                        polled[0]               = std::move(rank0_event);
-                        summary[0].has_event    = true;
-                        summary[0].ticket_id    = std::visit(
+                        polled[0]            = std::move(rank0_event);
+                        summary[0].has_event = true;
+                        summary[0].ticket_id = std::visit(
                             [](const auto& value) { return value.ticket.id; }, *polled[0]);
                         for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
                             polled[rank] = take(rank);
@@ -471,9 +467,9 @@ public:
             // The launch counter's per-round boundary: a weak symbol, null in production.
             if (&ninfer_launch_round_boundary != nullptr) { ninfer_launch_round_boundary(); }
             // THE BOUNDARY COUNT, LABELLED. A number called 'round' that actually counts gathers is
-            // the ambiguous-label error this phase has paid for repeatedly: the gather count says how
-            // often one rank reached all_gather_logits, not how many rounds the run has advanced.
-            // Printing them under different labels keeps the two claims apart.
+            // the ambiguous-label error this phase has paid for repeatedly: the gather count says
+            // how often one rank reached all_gather_logits, not how many rounds the run has
+            // advanced. Printing them under different labels keeps the two claims apart.
             {
                 // The boundary is ONE event for the whole executor: release() advances every rank
                 // together, so both ranks share this count by construction. Printing it with the
@@ -585,11 +581,11 @@ private:
     // Events polled but not yet delivered, one per rank; see the comment at `take` in poll().
     std::vector<std::optional<Event>> held_;
 
-    // Advance every rank that is not ahead of rank 0 in the collective sequence. See the call site in
-    // poll() for why the count, and only the count, is the right gate.
+    // Advance every rank that is not ahead of rank 0 in the collective sequence. See the call site
+    // in poll() for why the count, and only the count, is the right gate.
     void advance_peers_not_ahead_of_rank0() {
         const std::size_t ranks = workers_.size();
-        if (ranks < 2 || ranks > 64) return;  // a group the mask cannot express advances nobody
+        if (ranks < 2 || ranks > 64) return; // a group the mask cannot express advances nobody
         std::array<std::size_t, 64> counts{};
         for (std::size_t rank = 0; rank < ranks; ++rank) {
             counts[rank] = workers_[rank]->program().collective_count();
@@ -624,27 +620,28 @@ private:
             for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
                 threads.emplace_back([&, rank] {
                     try {
-                        // THE SMALLEST INSTRUMENT OF THE INVESTIGATION: this thread is created fresh
-                        // every round (threads.emplace_back per rank per round) and its first act is
-                        // a device bind. A per-round create+join whose startup includes a context
-                        // attach is the shape of a fixed per-round cost that no instrument measuring
-                        // work INSIDE the thread could have seen. RAW thread id, not the hash: a
-                        // 64-bit hash cannot distinguish 'same thread' from 'collision'.
+                        // THE SMALLEST INSTRUMENT OF THE INVESTIGATION: this thread is created
+                        // fresh every round (threads.emplace_back per rank per round) and its first
+                        // act is a device bind. A per-round create+join whose startup includes a
+                        // context attach is the shape of a fixed per-round cost that no instrument
+                        // measuring work INSIDE the thread could have seen. RAW thread id, not the
+                        // hash: a 64-bit hash cannot distinguish 'same thread' from 'collision'.
                         const auto bind_stamp = [&](const char* where) {
                             if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
                             std::timespec ts{};
                             (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
-                            std::fprintf(stderr, "[lane-bind] rank=%zu at=%s ns=%lld thread=%s\n",
-                                         rank, where,
-                                         (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec,
-                                         ([&] {
-                                             std::ostringstream out;
-                                             out << std::this_thread::get_id();
-                                             // HOLD THE STRING IN A LOCAL: c_str() of a temporary
-                                             // std::string dangles on return, which printed garbage.
-                                             const auto id = out.str();
-                                             return id;
-                                         })().c_str());
+                            std::fprintf(
+                                stderr, "[lane-bind] rank=%zu at=%s ns=%lld thread=%s\n", rank,
+                                where, (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec,
+                                ([&] {
+                                    std::ostringstream out;
+                                    out << std::this_thread::get_id();
+                                    // HOLD THE STRING IN A LOCAL: c_str() of a temporary
+                                    // std::string dangles on return, which printed garbage.
+                                    const auto id = out.str();
+                                    return id;
+                                })()
+                                    .c_str());
                             std::fflush(stderr);
                         };
                         bind_stamp("thread_created");
@@ -664,8 +661,8 @@ private:
         }
         for (auto& thread : threads) thread.join();
         // THE join() COMPARISON: a timestamp immediately after join() returns. Compared with each
-        // thread's own last timestamp, it distinguishes 'rank 1 is slow' from 'rank 0 is WAITING for
-        // a rank 1 that finished later' -- two things the phase has never separated, and the
+        // thread's own last timestamp, it distinguishes 'rank 1 is slow' from 'rank 0 is WAITING
+        // for a rank 1 that finished later' -- two things the phase has never separated, and the
         // distinction changes the fix. It used to sit inside the catch block above, so a SUCCESSFUL
         // round -- the only kind this comparison is about -- never printed it.
         if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
@@ -778,8 +775,8 @@ private:
                     static_cast<unsigned long long>((round_trace_now_ns() - began) / 1000ULL));
     }
 
-    void trace_start_throw(std::size_t rank, const ExecutionTicket& ticket,
-                           CommandSequence command, std::uint64_t began, const char* what) {
+    void trace_start_throw(std::size_t rank, const ExecutionTicket& ticket, CommandSequence command,
+                           std::uint64_t began, const char* what) {
         if (!round_trace_enabled()) return;
         round_trace("submit.start.throw rank=%zu dev=%d ticket=%llu kind=%s command=%llu "
                     "elapsed-us=%llu what=\"%s\"",
@@ -793,10 +790,10 @@ private:
 
     void trace_poll_result(std::size_t rank, const std::optional<Event>& event) {
         if (!round_trace_enabled()) return;
-        const int dev  = static_cast<int>(workers_[rank]->device().index());
-        const auto now = round_trace_now_ns();
-        const bool has_event     = event.has_value();
-        const bool event_failure = has_event && std::holds_alternative<ExecutionFailed>(*event);
+        const int dev             = static_cast<int>(workers_[rank]->device().index());
+        const auto now            = round_trace_now_ns();
+        const bool has_event      = event.has_value();
+        const bool event_failure  = has_event && std::holds_alternative<ExecutionFailed>(*event);
         const char* failure_state = failure_.has_value() ? "pending" : "no";
         if (rank < trace_poll_calls_.size()) {
             const std::uint64_t call = ++trace_poll_calls_[rank];
@@ -828,8 +825,8 @@ private:
             round_trace("poll rank=%zu dev=%d event=%s ticket=%llu failure=%s failed=%s "
                         "(width>2: no throttle)",
                         rank, dev, trace_event_name(*event),
-                        static_cast<unsigned long long>(trace_event_ticket(*event)),
-                        failure_state, failed_ ? "yes" : "no");
+                        static_cast<unsigned long long>(trace_event_ticket(*event)), failure_state,
+                        failed_ ? "yes" : "no");
         } else {
             round_trace("poll rank=%zu dev=%d event=none failure=%s failed=%s "
                         "(width>2: no throttle)",

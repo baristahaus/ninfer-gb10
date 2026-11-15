@@ -56,8 +56,8 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_a16_m
             const int kk  = k8 * 8;
             auto* dst     = &a_stage[row * BK + bf16_mma_shared_col<Schedule>(row, kk)];
             if constexpr (bf16_predicated_rows<Schedule> || bf16_predicated_k<Schedule>) {
-                const bool valid = (!bf16_predicated_rows<Schedule> || m0 + row < M) &&
-                                   (!bf16_predicated_k<Schedule> || k0 + kk < split_end);
+                const bool valid  = (!bf16_predicated_rows<Schedule> || m0 + row < M) &&
+                                    (!bf16_predicated_k<Schedule> || k0 + kk < split_end);
                 const auto source = valid ? static_cast<std::int64_t>(m0 + row) * K + k0 + kk : 0;
                 common::cp_async_zfill<16, Schedule::kWeightCache>(dst, weight + source,
                                                                    valid ? 16 : 0);
@@ -78,8 +78,8 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_a16_m
                 common::cp_async<16, Schedule::kActivationCache>(
                     dst, &x[static_cast<std::int64_t>(token) * K + k0 + kk]);
             } else {
-                const bool valid = (FullTokens || token < tokens) &&
-                                   (!bf16_predicated_k<Schedule> || k0 + kk < split_end);
+                const bool valid  = (FullTokens || token < tokens) &&
+                                    (!bf16_predicated_k<Schedule> || k0 + kk < split_end);
                 const auto source = valid ? static_cast<std::int64_t>(token) * K + k0 + kk : 0;
                 common::cp_async_zfill<16, Schedule::kActivationCache>(dst, x + source,
                                                                        valid ? 16 : 0);

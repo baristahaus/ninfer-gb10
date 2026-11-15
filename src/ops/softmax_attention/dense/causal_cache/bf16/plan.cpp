@@ -20,7 +20,7 @@ Bf16KvCausalPlan select_bf16_kv_causal_plan(int heads, int width, int batch,
         envelope.min_visible_keys > envelope.max_visible_keys ||
         envelope.max_visible_keys > kCausalAttentionMaximumVisibleKeys)
         throw std::invalid_argument("BF16 attention: invalid plan inputs");
-    const int group = heads / kv_heads;
+    const int group     = heads / kv_heads;
     const auto ceil_div = [](int a, int b) { return (a + b - 1) / b; };
     const int visible   = envelope.max_visible_keys;
     if (width > kGroupedPrefillMaxWidth) {

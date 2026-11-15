@@ -16,7 +16,7 @@
 namespace ninfer::ops {
 namespace {
 
-inline constexpr int kGeluPairsPerThread = 4;
+inline constexpr int kGeluPairsPerThread         = 4;
 inline constexpr std::int64_t kVectorMaxElements = 32LL * 1024LL * 1024LL;
 
 template <bool TanhApprox>

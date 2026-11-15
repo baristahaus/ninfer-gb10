@@ -251,8 +251,8 @@ std::optional<Plan> resolve_plan(Plan out, std::span<const ExpertBankCacheSpec> 
                                  const CpuTopology& topology, std::uint32_t requested_workers) {
     const auto order = cpu_worker_order(topology.info());
     if (order.empty()) throw std::runtime_error("no CPU available for MoE execution");
-    const auto workers       = requested_workers ? requested_workers
-                                                 : static_cast<std::uint32_t>(std::min<std::size_t>(
+    const auto workers = requested_workers ? requested_workers
+                                           : static_cast<std::uint32_t>(std::min<std::size_t>(
                                                  16, std::max<std::size_t>(1, order.size() - 1)));
     std::size_t largest_bank = 0;
     for (auto& layer : out.layers) {
@@ -269,7 +269,7 @@ std::optional<Plan> resolve_plan(Plan out, std::span<const ExpertBankCacheSpec> 
     config.capacity_bytes = (available - out.device_bytes) / 256 * 256;
     config.upload_slots   = std::max<std::uint32_t>(
         3, static_cast<std::uint32_t>((2 * largest_bank + config.max_batch_bytes - 1) /
-                                        config.max_batch_bytes) +
+                                      config.max_batch_bytes) +
                2);
     config.max_in_flight_uses = static_cast<std::uint32_t>(out.layers.size() + 8);
     out.cache                 = describe_expert_cache(specs, config);

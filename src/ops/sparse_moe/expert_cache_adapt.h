@@ -16,8 +16,8 @@ namespace ninfer::ops {
 // Per-bank plane geometry: the codes/high/scales plane offsets and per-row bytes for the
 // device mini-bank (hot experts plus the cache tail) and the pinned-host warm mini-bank.
 struct ExpertCacheBankParams {
-    const std::byte* device   = nullptr;
-    const std::byte* warm    = nullptr;
+    const std::byte* device           = nullptr;
+    const std::byte* warm             = nullptr;
     std::uint64_t device_code_offset  = 0;
     std::uint64_t device_high_offset  = 0;
     std::uint64_t device_scale_offset = 0;
@@ -52,10 +52,10 @@ struct ExpertCacheAdaptState {
     std::uint32_t* residency = nullptr;
     // Per routed expert per layer: the expert's compacted rank in the warm mini-bank, or
     // kNoWarmRank for hot-tier experts.
-    const std::uint32_t* warm_rank = nullptr;
+    const std::uint32_t* warm_rank       = nullptr;
     const ExpertCacheLayerParams* layers = nullptr;
-    std::uint32_t layer_count = 0;
-    std::uint32_t experts     = 0;
+    std::uint32_t layer_count            = 0;
+    std::uint32_t experts                = 0;
     // Device reporting accumulators, read back once at teardown.
     unsigned long long* hits       = nullptr;
     unsigned long long* totals     = nullptr;

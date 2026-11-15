@@ -6,10 +6,10 @@ StateLayout plan_state_image(LayoutBuilder& backing, const Config& config, const
     const auto& c = config.text;
     StateImageBuilder b;
     StateLayout out;
-    out.gdn        = plan_linear_attention_state(b, {c.gdn_layers, dimension(gdn.conv_channels()),
-                                                     dimension(gdn.conv_width - 1),
-                                                     dimension(gdn.value_heads), dimension(gdn.value_dim),
-                                                     dimension(gdn.key_dim), DType::BF16});
+    out.gdn = plan_linear_attention_state(b, {c.gdn_layers, dimension(gdn.conv_channels()),
+                                              dimension(gdn.conv_width - 1),
+                                              dimension(gdn.value_heads), dimension(gdn.value_dim),
+                                              dimension(gdn.key_dim), DType::BF16});
     const auto qsa = [&](std::uint32_t layers) {
         return QsaTailLayout{
             b.add(DType::BF16,

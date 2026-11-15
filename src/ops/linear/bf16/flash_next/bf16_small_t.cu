@@ -36,14 +36,15 @@ constexpr auto make_launchers(std::index_sequence<Offsets...>) {
 }
 
 constexpr int kFlashNextSmallTMax = 16;
+
 template <class Geometry>
 constexpr auto make_flash_launchers() {
     return make_launchers<Geometry>(
         std::make_index_sequence<kFlashNextSmallTMax - kBf16SmallTMinTokens + 1>{});
 }
 
-#define NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(NAME, N, K) \
-    using NAME##Geometry = Bf16GemvGeometry<(N), (K)>;  \
+#define NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(NAME, N, K)                                            \
+    using NAME##Geometry              = Bf16GemvGeometry<(N), (K)>;                                \
     constexpr auto k##NAME##Launchers = make_flash_launchers<NAME##Geometry>();
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(HcDown, 320, 10240)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(HcUp, 10240, 320)
@@ -67,8 +68,7 @@ NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(ProposalTail, 117248, 2560)
 struct HcDownSiluOutput {
     __nv_bfloat16* data;
 
-    __device__ __forceinline__ void store(std::int32_t row, std::int32_t token,
-                                          float value) const {
+    __device__ __forceinline__ void store(std::int32_t row, std::int32_t token, float value) const {
         // Preserve the explicit BF16 projection boundary owned by HyperConnection before
         // applying its scaled SiLU activation.
         const float represented = __bfloat162float(__float2bfloat16_rn(value)) * 0.25F;
@@ -113,12 +113,12 @@ void launch_narrow_triple_exact(const Tensor& x, const Weight* const (&weights)[
     const dim3 grid(Geometry::kOutputRows / Schedule::kRowsPerCta, 3);
     bf16_small_t_group_kernel<Geometry, ActiveTokens, Schedule, 3>
         <<<grid, Schedule::kThreads, 0, stream>>>(static_cast<const __nv_bfloat16*>(x.data),
-                                                   projections);
+                                                  projections);
     CUDA_CHECK(cudaGetLastError());
 }
 
-using NarrowTripleLaunch = void (*)(const Tensor&, const Weight* const (&)[3],
-                                    Tensor* const (&)[3], cudaStream_t);
+using NarrowTripleLaunch = void (*)(const Tensor&, const Weight* const (&)[3], Tensor* const (&)[3],
+                                    cudaStream_t);
 
 template <std::size_t... Offsets>
 constexpr auto make_narrow_triple_launchers(std::index_sequence<Offsets...>) {
@@ -155,10 +155,10 @@ void launch_bf16_small_t(const Tensor& x, const Weight& weight, Tensor& out, cud
     const std::size_t index = static_cast<std::size_t>(x.ne[1] - kBf16SmallTMinTokens);
 
 
-#define NINFER_FLASH_NEXT_SMALL_T_DISPATCH(NAME)                                      \
-    if (weight.n == NAME##Geometry::kOutputRows && weight.k == NAME##Geometry::kInputRows) { \
-        k##NAME##Launchers[index](x, weight, out, stream);                            \
-        return;                                                                        \
+#define NINFER_FLASH_NEXT_SMALL_T_DISPATCH(NAME)                                                   \
+    if (weight.n == NAME##Geometry::kOutputRows && weight.k == NAME##Geometry::kInputRows) {       \
+        k##NAME##Launchers[index](x, weight, out, stream);                                         \
+        return;                                                                                    \
     }
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(HcDown)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(HcUp)
@@ -177,9 +177,9 @@ void launch_bf16_small_t(const Tensor& x, const Weight& weight, Tensor& out, cud
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(LmHead)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(ProposalTail)
 #undef NINFER_FLASH_NEXT_SMALL_T_DISPATCH
-    throw std::invalid_argument("bf16 linear small-T: unsupported exact problem (n=" +
-                                std::to_string(weight.n) + ", k=" + std::to_string(weight.k) +
-                                ", t=" + std::to_string(x.ne[1]) + ")");
+    throw std::invalid_argument(
+        "bf16 linear small-T: unsupported exact problem (n=" + std::to_string(weight.n) +
+        ", k=" + std::to_string(weight.k) + ", t=" + std::to_string(x.ne[1]) + ")");
 }
 
 void launch_bf16_hc_down_silu_small_t(const Tensor& x, const Weight& weight, Tensor& out,

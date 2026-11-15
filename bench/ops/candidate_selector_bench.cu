@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
         cudaStream_t stream = nullptr;
         CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
         const auto cuda = ninfer::bench::device_context().execution_view(stream);
-        int device = 0;
+        int device      = 0;
         CUDA_CHECK(cudaGetDevice(&device));
         cudaDeviceProp properties{};
         CUDA_CHECK(cudaGetDeviceProperties(&properties, device));

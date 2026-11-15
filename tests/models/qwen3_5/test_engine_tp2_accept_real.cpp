@@ -59,15 +59,16 @@ constexpr std::uint32_t kOutputTokens = 32;
 
 // The tie tolerance, in nats of log-probability.
 //
-// A sharded round is not required to reproduce the reference's argmax where the reference itself has
-// two near-equal continuations: the shard sums in a different order, so the logits differ in the last
-// few ulps and a near-tie can fall either way. That is not a defect and must not be reported as one.
-// A disagreement where the reference clearly prefers one token IS the defect this test exists to
-// catch. The two are separated by a measured margin, not a guess. At the three disagreements this
-// lane has produced -- T=20 position 6, T=31 position 18, T=32 position 1 -- the reference gives the
-// two candidates log-probabilities 0.250, 0.125 and 0.250 nats apart, while replacing one candidate
-// with a token the reference would not choose at that position moves the margin to 14.0 nats. The
-// tolerance sits four times above the largest measured tie and fourteen times below the control.
+// A sharded round is not required to reproduce the reference's argmax where the reference itself
+// has two near-equal continuations: the shard sums in a different order, so the logits differ in
+// the last few ulps and a near-tie can fall either way. That is not a defect and must not be
+// reported as one. A disagreement where the reference clearly prefers one token IS the defect this
+// test exists to catch. The two are separated by a measured margin, not a guess. At the three
+// disagreements this lane has produced -- T=20 position 6, T=31 position 18, T=32 position 1 -- the
+// reference gives the two candidates log-probabilities 0.250, 0.125 and 0.250 nats apart, while
+// replacing one candidate with a token the reference would not choose at that position moves the
+// margin to 14.0 nats. The tolerance sits four times above the largest measured tie and fourteen
+// times below the control.
 constexpr double kTieToleranceNats = 1.0;
 
 // The first position at which two chains differ, or npos when they agree everywhere.
@@ -81,11 +82,11 @@ std::size_t first_disagreement(const std::vector<ninfer::TokenId>& a,
 }
 
 struct Verdict {
-    bool adjudicated = false;
-    std::size_t position = 0;
+    bool adjudicated           = false;
+    std::size_t position       = 0;
     double candidate_a_logprob = 0.0;
     double candidate_b_logprob = 0.0;
-    double margin = 0.0; // absolute difference, nats
+    double margin              = 0.0; // absolute difference, nats
 };
 
 // Scores both candidates at the first disagreement, on the reference arm. The scoring purpose is
@@ -98,8 +99,7 @@ Verdict adjudicate(const char* artifact, const std::vector<ninfer::TokenId>& pro
                    const std::vector<ninfer::TokenId>& chain_b) {
     Verdict verdict;
     const std::size_t position = first_disagreement(chain_a, chain_b);
-    if (position == std::string::npos || position >= chain_a.size() ||
-        position >= chain_b.size()) {
+    if (position == std::string::npos || position >= chain_a.size() || position >= chain_b.size()) {
         return verdict;
     }
     verdict.position = position;
@@ -115,14 +115,13 @@ Verdict adjudicate(const char* artifact, const std::vector<ninfer::TokenId>& pro
         sequence.insert(sequence.end(), chain_a.begin(),
                         chain_a.begin() + static_cast<std::ptrdiff_t>(position));
         sequence.push_back(candidate);
-        const auto scores = engine.score_tokens(
-            sequence, static_cast<std::uint32_t>(prompt.size() + position));
+        const auto scores =
+            engine.score_tokens(sequence, static_cast<std::uint32_t>(prompt.size() + position));
         return scores.empty() ? 0.0 : static_cast<double>(scores.front());
     };
     verdict.candidate_a_logprob = score_candidate(chain_a[position]);
     verdict.candidate_b_logprob = score_candidate(chain_b[position]);
-    verdict.margin =
-        std::abs(verdict.candidate_a_logprob - verdict.candidate_b_logprob);
+    verdict.margin      = std::abs(verdict.candidate_a_logprob - verdict.candidate_b_logprob);
     verdict.adjudicated = true;
     return verdict;
 }
@@ -182,10 +181,10 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     } else {
         options.speculative.backend = ninfer::SpeculativeBackend::None;
     }
-    options.max_context           = 2048;
-    // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without this
-    // the engine refuses at option validation before either round runs.
-    options.kv_capacity    = ninfer::KvCapacityPolicy::explicit_capacity(2048);
+    options.max_context = 2048;
+    // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without
+    // this the engine refuses at option validation before either round runs.
+    options.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(2048);
     if (width > 1) {
         options.devices = {0, 1};
     } else {
@@ -194,9 +193,9 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     ninfer::Engine engine(options);
     ninfer::RequestOptions request;
     request.execution.requested_output_tokens = kOutputTokens;
-    request.execution.sampling.temperature     = 0.0F;
-    request.execution.sampling.top_k           = 1;
-    auto prompt = engine.prepare_tokens(prompt_tokens);
+    request.execution.sampling.temperature    = 0.0F;
+    request.execution.sampling.top_k          = 1;
+    auto prompt                               = engine.prepare_tokens(prompt_tokens);
     return engine.generate(std::move(prompt), request).generated_token_ids;
 }
 
@@ -208,25 +207,25 @@ int main() {
                   << '\n';
         return 77;
     }
-    const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
-    const bool have_artifact = artifact != nullptr && *artifact != '\0';
+    const char* artifact        = std::getenv("NINFER_TEST_ARTIFACT");
+    const bool have_artifact    = artifact != nullptr && *artifact != '\0';
     int devices                 = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&devices);
     const bool have_devices     = count_err == cudaSuccess && devices >= 1;
 
     // Single-arm mode, for the lab this test cannot run in: nowhere has one host where the 27B fits
     // at BOTH widths (hephaestus has 2x16 GB and width 1 needs 20.4 GB; trueno has one 32 GB 5090
-    // where width 2 cannot run; twofour has 121 GiB unified but one device). `NINFER_TP2_ARM=1` runs
-    // only the reference and prints its tokens; `=2` runs only the sharded arm. Each arm is checked
-    // against the recorded golden here, which is what makes the cross-machine comparison meaningful:
-    // both hosts compare against the same chain instead of against each other's output.
+    // where width 2 cannot run; twofour has 121 GiB unified but one device). `NINFER_TP2_ARM=1`
+    // runs only the reference and prints its tokens; `=2` runs only the sharded arm. Each arm is
+    // checked against the recorded golden here, which is what makes the cross-machine comparison
+    // meaningful: both hosts compare against the same chain instead of against each other's output.
     //
-    // THE DEVICE REQUIREMENT FOLLOWS THE ARM. The reference arm runs on ONE device by definition, so
-    // requiring two would skip it on exactly the host the arm mode exists for; the sharded arm and
-    // the two-arm comparison both need two.
-    // THE DEVICE CONTROL, PRINTED UNCONDITIONALLY. A device number with no control is a number that
-    // can be attributed to the wrong thing, so the same line is read on BOTH hosts: the lane works on
-    // hephaestus, so hephaestus is the control that makes trueno's number meaningful.
+    // THE DEVICE REQUIREMENT FOLLOWS THE ARM. The reference arm runs on ONE device by definition,
+    // so requiring two would skip it on exactly the host the arm mode exists for; the sharded arm
+    // and the two-arm comparison both need two. THE DEVICE CONTROL, PRINTED UNCONDITIONALLY. A
+    // device number with no control is a number that can be attributed to the wrong thing, so the
+    // same line is read on BOTH hosts: the lane works on hephaestus, so hephaestus is the control
+    // that makes trueno's number meaningful.
     {
         int initial_device = -1, visible = 0;
         (void)cudaGetDevice(&initial_device);
@@ -239,8 +238,8 @@ int main() {
     const int arm_width = arm_env != nullptr ? std::atoi(arm_env) : 0;
     const int needed    = arm_env != nullptr && arm_width <= 1 ? 1 : 2;
     if (!have_artifact || !have_devices || devices < needed) {
-        std::cerr << "SKIP: this arm needs " << needed << " CUDA device"
-                  << (needed == 1 ? "" : "s") << " and a 27B artifact (devices: "
+        std::cerr << "SKIP: this arm needs " << needed << " CUDA device" << (needed == 1 ? "" : "s")
+                  << " and a 27B artifact (devices: "
                   << (count_err == cudaSuccess ? std::to_string(devices)
                                                : std::string("unavailable"))
                   << ", NINFER_TEST_ARTIFACT: " << (have_artifact ? "set" : "not set") << ")\n";
@@ -249,8 +248,8 @@ int main() {
 
     // NINFER_TP2_SPEC selects a speculative backend so one binary can run each option-gate
     // comparison. Unset means the plain lane, which is the configuration this test validated first.
-    const char* spec = std::getenv("NINFER_TP2_SPEC");
-    const bool mtp   = spec != nullptr && std::string_view(spec) == "mtp";
+    const char* spec   = std::getenv("NINFER_TP2_SPEC");
+    const bool mtp     = spec != nullptr && std::string_view(spec) == "mtp";
     const bool capture = std::getenv("NINFER_TP2_CAPTURE") != nullptr;
 
     // The prompt is read up front; a golden is read only AFTER the round has produced tokens, so a
@@ -275,8 +274,8 @@ int main() {
         } catch (const std::exception& error) {
             return fail(std::string("width ") + arm + " round threw: " + error.what());
         }
-        std::cout << "arm " << width << " tokens (" << tokens.size() << "): "
-                  << chain_text(tokens) << '\n';
+        std::cout << "arm " << width << " tokens (" << tokens.size() << "): " << chain_text(tokens)
+                  << '\n';
         if (capture) {
             std::cout << "capture: write the chain above into " << golden_name(mtp) << '\n';
             return 0;
@@ -317,13 +316,12 @@ int main() {
                       << verdict.candidate_b_logprob << " (this arm), margin " << verdict.margin
                       << " nats, tolerance " << kTieToleranceNats << " nats\n";
             if (verdict.margin > kTieToleranceNats) {
-                return fail("a CONFIDENT disagreement at position " +
-                            std::to_string(verdict.position) + ": the reference prefers " +
-                            std::to_string(expected[verdict.position]) + " over " +
-                            std::to_string(tokens[verdict.position]) + " by " +
-                            std::to_string(verdict.margin) + " nats, above the " +
-                            std::to_string(kTieToleranceNats) +
-                            "-nat tie tolerance, so this is not a tie");
+                return fail(
+                    "a CONFIDENT disagreement at position " + std::to_string(verdict.position) +
+                    ": the reference prefers " + std::to_string(expected[verdict.position]) +
+                    " over " + std::to_string(tokens[verdict.position]) + " by " +
+                    std::to_string(verdict.margin) + " nats, above the " +
+                    std::to_string(kTieToleranceNats) + "-nat tie tolerance, so this is not a tie");
             }
             std::cout << "ok: the disagreement at position " << verdict.position
                       << " is a near-tie on the reference, not a defect\n";
@@ -391,6 +389,7 @@ int main() {
         }
     }
     std::cout << "ok: " << single.size() << " tokens identical at width 1 and width 2"
-              << (capture ? " (captured, golden not compared)" : ", and equal to the golden") << '\n';
+              << (capture ? " (captured, golden not compared)" : ", and equal to the golden")
+              << '\n';
     return 0;
 }

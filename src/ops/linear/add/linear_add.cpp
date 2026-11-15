@@ -135,7 +135,7 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual, LinearPolicy
         if (w.layout != QuantLayout::Exl3Dense) {
             throw std::invalid_argument("linear_add: EXL3 requires the dense layout");
         }
-        auto scope = workspace.scope();
+        auto scope            = workspace.scope();
         const auto delta_span = workspace.alloc_bytes(
             static_cast<std::size_t>(w.n) * static_cast<std::size_t>(x.ne[1]) * 2, 256);
         Tensor delta(delta_span.data, execution.device(), DType::BF16, {w.n, x.ne[1]});

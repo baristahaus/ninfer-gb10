@@ -22,8 +22,8 @@ using SnapshotLaunch = void (*)(const Tensor&, const Weight&, const Tensor&, Ten
                                 const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
                                 cudaStream_t);
 using RecordLaunch   = void (*)(const Tensor&, const Weight&, const Tensor&, const Tensor&,
-                              const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
-                              Tensor&, cudaStream_t);
+                                const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
+                                Tensor&, cudaStream_t);
 
 template <int ActiveTokens, class Publish>
 void launch_small_t(const Tensor& x, const Weight& weight, const Tensor& conv_weight,

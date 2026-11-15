@@ -461,7 +461,7 @@ struct HostBank::Impl {
             parent.device = Device::cpu();
             view          = bind_weight_bank(
                 parent, describe_weight_bank(parent.geometry, {0, kExperts, std::uint64_t(rows),
-                                                                        std::uint64_t(rows)}));
+                                                               std::uint64_t(rows)}));
             for (const auto& expert : fixture.experts()) {
                 const auto& packed = gate_up ? expert.gate_up : expert.down;
                 for (const auto [plane, offset] :

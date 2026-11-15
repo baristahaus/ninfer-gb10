@@ -12,10 +12,10 @@ Plan select_plan(int tokens, int, ExpertSubsetKind) {
                            .vector                = tokens <= 2,
                            .atomic_output         = tokens >= 128,
                            .single_block_grouping = tokens <= 64,
-                           .shared_algorithm      = tokens < 8
-                                                        ? kernel::block_scaled::SharedAlgorithm::Vector
-                                                        : kernel::block_scaled::SharedAlgorithm::Mma,
-                           .queued_ctas_per_sm    = 6};
+                           .shared_algorithm   = tokens < 8
+                                                     ? kernel::block_scaled::SharedAlgorithm::Vector
+                                                     : kernel::block_scaled::SharedAlgorithm::Mma,
+                           .queued_ctas_per_sm = 6};
     return plan;
 }
 } // namespace

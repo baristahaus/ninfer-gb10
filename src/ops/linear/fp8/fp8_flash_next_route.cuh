@@ -41,10 +41,10 @@ void launch_fp8_dense_a16(const Tensor& x, const Weight& weight, Output output, 
     constexpr int kNarrowWarps = sliced_k_warps<K, 4>();
     constexpr int kGemmK       = K % 128 == 0 ? 128 : 64;
     const auto operands        = fp8_a16_operands(x, weight);
-    const int tokens      = x.ne[1];
+    const int tokens           = x.ne[1];
     if (tokens == 1) {
-        return launch_fp8_a16_gemv<Fp8ScheduleInstance<GemvSchedule, K>>(operands, output,
-                                                                         epilogue, stream);
+        return launch_fp8_a16_gemv<Fp8ScheduleInstance<GemvSchedule, K>>(operands, output, epilogue,
+                                                                         stream);
     }
     if (tokens <= 8) {
         return launch_fp8_a16_sliced_k_mma<

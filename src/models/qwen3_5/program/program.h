@@ -32,9 +32,10 @@ public:
     void start_frame(runtime::ExecutionRequest<ExecutionTypes>&&);
     void start(runtime::ExecutionRequest<ExecutionTypes>&&);
     void progress();
-    // The rank's count of issued collectives: its position in the deterministic collective sequence.
-    // A group executor uses it to tell a rank that is waiting on a peer's collective from one that is
-    // waiting on its own device work. Zero when the rank has no collective (the single-device lane).
+    // The rank's count of issued collectives: its position in the deterministic collective
+    // sequence. A group executor uses it to tell a rank that is waiting on a peer's collective from
+    // one that is waiting on its own device work. Zero when the rank has no collective (the
+    // single-device lane).
     [[nodiscard]] std::size_t collective_count() const;
     void supply(runtime::ExecutionTicket, runtime::CommandSequence, runtime::DecisionInput&&);
     void commit(runtime::ExecutionTicket, runtime::CommandSequence, Commit&&);
@@ -55,8 +56,7 @@ private:
                                                             SequencePlan&&, DeviceContext&,
                                                             const StartupObserver&,
                                                             const models::ShardedGroup*);
-    friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&,
-                                    PreparedSession*);
+    friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&, PreparedSession*);
 };
 
 } // namespace ninfer::models::qwen3_5

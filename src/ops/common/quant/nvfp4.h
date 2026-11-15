@@ -10,8 +10,7 @@ namespace ninfer::ops::common {
 #if defined(__CUDACC__)
 __host__ __device__
 #endif
-    constexpr std::int64_t
-    nvfp4_scale_byte_offset(int row, int group, int k) noexcept {
+    constexpr std::int64_t nvfp4_scale_byte_offset(int row, int group, int k) noexcept {
     return static_cast<std::int64_t>((row / 128) * (k / 64) + group / 4) * 512 + (row & 31) * 16 +
            ((row & 127) >> 5) * 4 + (group & 3);
 }

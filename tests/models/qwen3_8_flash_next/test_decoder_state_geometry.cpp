@@ -42,8 +42,7 @@ q38::DecoderStateSpec text_spec(std::int32_t kv_heads) {
         .kv_table_rows             = 8,
         .text_physical_page_groups = 4097,
         .mtp_physical_page_groups  = 4100,
-        .auxiliary_planes          = {{ninfer::DType::BF16, 128, 1, 256},
-                                      {ninfer::DType::I32, 3, 1, 256}},
+        .auxiliary_planes = {{ninfer::DType::BF16, 128, 1, 256}, {ninfer::DType::I32, 3, 1, 256}},
     };
 }
 
@@ -63,7 +62,7 @@ q38::DecoderStateLayout plan(const q38::DecoderStateSpec& spec) {
 // Width 1 must be the identity, field for field: the single-device lane plans exactly what it
 // planned before the group existed.
 int test_width_one_is_identity() {
-    int failures = 0;
+    int failures                       = 0;
     const q38::DecoderStateSpec spec   = text_spec(2);
     const q38::DecoderStateSpec single = q38::shard_decoder_state_spec(spec, 1, 0);
 
@@ -86,24 +85,24 @@ int test_width_one_is_identity() {
                       "width 1 keeps the auxiliary planes");
 
     // And the lane it plans is the same lane: same plane inventory, same bytes.
-    const q38::DecoderStateLayout base   = plan(spec);
+    const q38::DecoderStateLayout base          = plan(spec);
     const q38::DecoderStateLayout single_layout = plan(single);
     failures += check(base.text_kv.payload_bytes() == single_layout.text_kv.payload_bytes(),
                       "width 1 plans the same text KV payload bytes");
     failures += check(base.text_kv.pages.planes.size() == single_layout.text_kv.pages.planes.size(),
                       "width 1 plans the same text KV plane count");
-    failures += check(base.mtp_kv.has_value() == single_layout.mtp_kv.has_value() &&
-                          (!base.mtp_kv ||
-                           base.mtp_kv->payload_bytes() == single_layout.mtp_kv->payload_bytes()),
-                      "width 1 plans the same MTP KV payload bytes");
+    failures += check(
+        base.mtp_kv.has_value() == single_layout.mtp_kv.has_value() &&
+            (!base.mtp_kv || base.mtp_kv->payload_bytes() == single_layout.mtp_kv->payload_bytes()),
+        "width 1 plans the same MTP KV payload bytes");
     return failures;
 }
 
 // Width 2 halves the KV heads and nothing else: the two ranks' specs must partition the head count
 // and agree on every page/state fact, because the rank-1 mirror addresses rank 0's pages by index.
 int test_width_two_halves_the_heads() {
-    int failures = 0;
-    const q38::DecoderStateSpec spec = text_spec(2);
+    int failures                      = 0;
+    const q38::DecoderStateSpec spec  = text_spec(2);
     const q38::DecoderStateSpec rank0 = q38::shard_decoder_state_spec(spec, 2, 0);
     const q38::DecoderStateSpec rank1 = q38::shard_decoder_state_spec(spec, 2, 1);
 
@@ -139,15 +138,15 @@ int test_width_two_halves_the_heads() {
                       "rank 0's auxiliary planes are unchanged");
     failures += check(same_auxiliary(rank1.auxiliary_planes, spec.auxiliary_planes),
                       "rank 1's auxiliary planes are unchanged");
-    failures += check(rank0.auxiliary_planes.size() == 2 &&
-                          rank0.auxiliary_planes[0].head_extent == 1 &&
-                          rank0.auxiliary_planes[1].head_extent == 1,
-                      "the auxiliary planes have no head axis to shard");
+    failures +=
+        check(rank0.auxiliary_planes.size() == 2 && rank0.auxiliary_planes[0].head_extent == 1 &&
+                  rank0.auxiliary_planes[1].head_extent == 1,
+              "the auxiliary planes have no head axis to shard");
 
     // The shard reaches the planned layout: the same plane inventory, fewer bytes per plane. The
     // pool's page count and geometry fields are what a mirror compares, so the plane count must not
     // change with the width.
-    const q38::DecoderStateLayout base   = plan(spec);
+    const q38::DecoderStateLayout base    = plan(spec);
     const q38::DecoderStateLayout sharded = plan(rank0);
     failures += check(base.text_kv.pages.planes.size() == sharded.text_kv.pages.planes.size(),
                       "a sharded rank plans the same text KV plane count");
@@ -162,7 +161,7 @@ int test_width_two_halves_the_heads() {
 // The 125B has 2 KV heads, so width 3 has no equal split: it must throw rather than round a rank
 // down to one head and another up to one, which would give the ranks different plane extents.
 int test_width_three_is_refused() {
-    int failures = 0;
+    int failures                     = 0;
     const q38::DecoderStateSpec spec = text_spec(2);
     failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, 3, 0); },
                               "width 3 against 2 KV heads");
@@ -177,16 +176,15 @@ int test_width_three_is_refused() {
 }
 
 int test_invalid_arguments() {
-    int failures = 0;
+    int failures                     = 0;
     const q38::DecoderStateSpec spec = text_spec(2);
-    failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, 0, 0); },
-                              "width 0");
-    failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, -1, 0); },
-                              "negative width");
+    failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, 0, 0); }, "width 0");
+    failures +=
+        expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, -1, 0); }, "negative width");
     failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, 2, 2); },
                               "rank outside the width");
-    failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, 2, -1); },
-                              "negative rank");
+    failures +=
+        expect_throws([&] { (void)q38::shard_decoder_state_spec(spec, 2, -1); }, "negative rank");
     failures += expect_throws([&] { (void)q38::shard_decoder_state_spec(text_spec(0), 2, 0); },
                               "zero KV heads");
     return failures;

@@ -23,14 +23,14 @@ void launch_q5_a16_sliced_k_mma(const Q5LinearOperands& operands, Output output,
             const int output_rows = row_policy.output_rows(operands.rows);
             const dim3 grid(common::div_up(output_rows, RowPolicy::kOutputRowsPerCta),
                             common::div_up(count, Schedule::kTokenCapacity));
-            const auto* x   = operands.x + static_cast<std::int64_t>(offset) * operands.k;
-            const bool full = operands.rows % Schedule::kBlockRows == 0 &&
-                              output_rows % RowPolicy::kOutputRowsPerCta == 0 &&
-                              operands.k == operands.padded_k &&
-                              operands.k % Schedule::kBlockK == 0 &&
-                              reinterpret_cast<std::uintptr_t>(operands.scales) %
-                                      (Schedule::kKWarps * sizeof(__half)) ==
-                                  0;
+            const auto* x          = operands.x + static_cast<std::int64_t>(offset) * operands.k;
+            const bool full        = operands.rows % Schedule::kBlockRows == 0 &&
+                                     output_rows % RowPolicy::kOutputRowsPerCta == 0 &&
+                                     operands.k == operands.padded_k &&
+                                     operands.k % Schedule::kBlockK == 0 &&
+                                     reinterpret_cast<std::uintptr_t>(operands.scales) %
+                                             (Schedule::kKWarps * sizeof(__half)) ==
+                                         0;
             const bool full_tokens = count % Schedule::kTokenCapacity == 0;
             const auto launch      = [&]<bool Full, bool FullTokens>() {
                 q5_a16_sliced_k_mma_kernel<Schedule, Full, FullTokens>

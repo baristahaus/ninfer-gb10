@@ -64,8 +64,8 @@ MaterializationPlan plan_materialization(const Reader& reader,
 
 MaterializationPlan plan_materialization(const Reader& reader,
                                          std::span<const PlacementRequest> requests,
-                                         std::span<const TierPlanInput> tiers,
-                                         TierBudget budget, PreparedResources resources) {
+                                         std::span<const TierPlanInput> tiers, TierBudget budget,
+                                         PreparedResources resources) {
     std::vector<TensorRequest> tensors;
     tensors.reserve(requests.size());
     for (const auto& r : requests)
@@ -81,8 +81,8 @@ MaterializationPlan plan_materialization(const Reader& reader,
 
 MaterializationPlan plan_materialization(const Reader& reader,
                                          std::span<const TensorRequest> requests,
-                                         std::span<const TierPlanInput> tiers,
-                                         TierBudget budget, PreparedResources resources) {
+                                         std::span<const TierPlanInput> tiers, TierBudget budget,
+                                         PreparedResources resources) {
     if (resources.source && resources.source != &reader)
         throw ArtifactError("prepared resources belong to another load session");
     MaterializationPlan out;
@@ -185,33 +185,31 @@ MaterializationPlan plan_materialization(const Reader& reader,
             const auto experts   = tier.new_order.size();
             const auto block     = tier_expert_block_bytes(geometry, experts);
             slice_cost           = checked_add(slice_cost, block, "expert cache slice cost");
-            min_warm = std::min(min_warm, experts - tier.hot_experts);
-            hot_bytes = checked_add(
-                hot_bytes,
-                checked_mul(tier.hot_experts, block, "tiered hot bytes"),
-                "tiered hot total");
+            min_warm             = std::min(min_warm, experts - tier.hot_experts);
+            hot_bytes =
+                checked_add(hot_bytes, checked_mul(tier.hot_experts, block, "tiered hot bytes"),
+                            "tiered hot total");
         }
-        const auto weights_bytes = checked_add(device_layout.finish(), hot_bytes,
-                                               "tiered weights bytes");
+        const auto weights_bytes =
+            checked_add(device_layout.finish(), hot_bytes, "tiered weights bytes");
         const auto tail_budget =
             budget.device_bytes > weights_bytes ? budget.device_bytes - weights_bytes : 0;
-        cache_slots = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(min_warm, tail_budget / slice_cost));
+        cache_slots =
+            static_cast<std::uint32_t>(std::min<std::uint64_t>(min_warm, tail_budget / slice_cost));
         if (budget.slot_cap != 0) { cache_slots = std::min(cache_slots, budget.slot_cap); }
     }
     for (const auto& tier : tiers) {
         const auto& geometry = reader.geometry(tier.object);
         const auto experts   = tier.new_order.size();
         const auto bank_bytes =
-            checked_mul(tier.hot_experts + cache_slots,
-                        tier_expert_block_bytes(geometry, experts), "tiered device bytes");
-        const auto region = device_layout.add(bank_bytes, tier.alignment,
-                                               "tiered hot mini-bank");
-        out.tier_pinned_bytes = checked_add(
-            out.tier_pinned_bytes,
-            checked_mul(experts - tier.hot_experts,
-                        tier_expert_block_bytes(geometry, experts), "tiered pinned bytes"),
-            "tiered pinned total");
+            checked_mul(tier.hot_experts + cache_slots, tier_expert_block_bytes(geometry, experts),
+                        "tiered device bytes");
+        const auto region = device_layout.add(bank_bytes, tier.alignment, "tiered hot mini-bank");
+        out.tier_pinned_bytes = checked_add(out.tier_pinned_bytes,
+                                            checked_mul(experts - tier.hot_experts,
+                                                        tier_expert_block_bytes(geometry, experts),
+                                                        "tiered pinned bytes"),
+                                            "tiered pinned total");
         out.tier_objects.push_back({tier.object, region.offset, bank_bytes, tier.alignment,
                                     tier.hot_experts, cache_slots, tier.new_order});
     }

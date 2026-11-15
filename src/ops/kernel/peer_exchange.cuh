@@ -313,17 +313,17 @@ struct PeerPipelinedTuning {
     unsigned long long* stamps = nullptr; // kTimed only: kPeerStampCount words per warp
     // Release the next kernel in the stream at entry (PeerMailbox::set_release_dependents, T45).
     bool release_dependents = false;
-    // DIAGNOSTIC (PeerMailbox with NINFER_MAILBOX_TRACE=1): print the kernel's own view of the FIRST
-    // exchange of a rank -- what the host log cannot show, because it records the arguments passed
-    // rather than the values the kernel computed from them. Off in production.
-    bool trace      = false;
+    // DIAGNOSTIC (PeerMailbox with NINFER_MAILBOX_TRACE=1): print the kernel's own view of the
+    // FIRST exchange of a rank -- what the host log cannot show, because it records the arguments
+    // passed rather than the values the kernel computed from them. Off in production.
+    bool trace = false;
     // DIAGNOSTIC: four words this launch writes -- entry counter, published target, last peer value
     // seen, exit counter -- in a mapped file, so a second process can read them while the stream is
     // hung. Null unless NINFER_STATUS_FILE is set.
     std::uint32_t* status = nullptr;
     // Which exchange this launch is, for the give-up line below and for the trace dump.
-    int rank        = -1;
-    int slot        = -1;
+    int rank = -1;
+    int slot = -1;
     // Weight ranges the blocks after the exchange's own prefetch into L2 (L2 PREFETCH above).
     PeerL2Prefetch prefetch{};
 };
@@ -383,11 +383,11 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
     std::uint32_t seen   = 0;
     if (lane == 0) {
         target = epochs[warp] + 1u;
-        // THE STATUS WORDS ARE NOT WRITTEN FROM HERE. Writing them at entry put four stores into the
-        // mapped file immediately before the publish sequence's __threadfence_system(), and a
-        // system-scope fence waits for every outstanding write from the thread that executes it. The
-        // fence therefore waited on this diagnostic, and on a slow mapping it never returned: the
-        // kernel never reached the spin, the give-up counter never fired, and the wait became
+        // THE STATUS WORDS ARE NOT WRITTEN FROM HERE. Writing them at entry put four stores into
+        // the mapped file immediately before the publish sequence's __threadfence_system(), and a
+        // system-scope fence waits for every outstanding write from the thread that executes it.
+        // The fence therefore waited on this diagnostic, and on a slow mapping it never returned:
+        // the kernel never reached the spin, the give-up counter never fired, and the wait became
         // unbounded. The instrument manufactured the hang it was built to observe. The words stay
         // readable (the host mapping is still created), they are simply not written by the kernel.
         if constexpr (kPoll == kPeerPollEarlyFence) {
@@ -423,14 +423,13 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
     std::uint32_t spins = 0;
     // THE BUDGET IS A TIME, NOT AN ITERATION COUNT. `spins > tuning.spin_limit` with a 100 ns
     // __nanosleep is a 100 ms nominal budget, but a spin also loads the peer flag from system-scope
-    // host-mapped memory and costs ~17 us in practice -- so 1e6 spins take ~17 s, a 170x overrun that
-    // turns a bounded wait into an effectively unbounded one (filed P2). The deadline below is
+    // host-mapped memory and costs ~17 us in practice -- so 1e6 spins take ~17 s, a 170x overrun
+    // that turns a bounded wait into an effectively unbounded one (filed P2). The deadline below is
     // measured with peer_globaltimer() in nanoseconds, so the give-up happens after the stated
     // duration regardless of what a spin costs.
     const unsigned long long spin_deadline_ns =
-        peer_globaltimer() +
-        static_cast<unsigned long long>(tuning.spin_limit) *
-            static_cast<unsigned long long>(kPeerPollSleepNs);
+        peer_globaltimer() + static_cast<unsigned long long>(tuning.spin_limit) *
+                                 static_cast<unsigned long long>(kPeerPollSleepNs);
     if (lane == 0) {
         SystemWord(mine_flags[warp * kPeerFlagStride]).store(target, cuda::memory_order_release);
         if (timed) { stamp[3] = clock64(); }
@@ -440,9 +439,8 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
         while (static_cast<std::int32_t>(seen - target) < 0) {
             __nanosleep(tuning.sleep_ns);
             ++spins;
-            if (spins % kPeerHangProbe == 0u &&
-                (peer_globaltimer() > spin_deadline_ns ||
-                 fault.load(cuda::memory_order_relaxed) != 0u)) {
+            if (spins % kPeerHangProbe == 0u && (peer_globaltimer() > spin_deadline_ns ||
+                                                 fault.load(cuda::memory_order_relaxed) != 0u)) {
                 // The FIRST poller to give up names itself; the sticky word explains every later
                 // one. This exchange is abandoned, the partial will hold only this rank's operand,
                 // and the caller turns the word into a failed round.
@@ -488,9 +486,9 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
             }
             seen = peer.load(kPoll == kPeerPollAcquire ? cuda::memory_order_acquire
                                                        : cuda::memory_order_relaxed);
-            // The per-probe status store is removed with the entry and exit stores: a store into the
-            // mapped file inside the poll loop is the same fence hazard, and it also perturbs the
-            // spin it was meant to observe.
+            // The per-probe status store is removed with the entry and exit stores: a store into
+            // the mapped file inside the poll loop is the same fence hazard, and it also perturbs
+            // the spin it was meant to observe.
         }
         if constexpr (kPoll == kPeerPollEarlyFence) {
             // Acquire: the peer payload reads below are ordered after the observed release.
@@ -503,15 +501,15 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
             printf("[mailbox] rank=%d slot=%d vecs=%d G=%d warps=%d blocks=%d grid=%d "
                    "partial=%llx mine_payload=%llx peer_payload=%llx mine_flag=%llx "
                    "peer_flag=%llx target=%u seen=%u spins=%u epoch=%u published=%d\n",
-                   tuning.rank, tuning.slot, vecs, G, warps,
-                   tuning.prefetch.first_block, static_cast<int>(gridDim.x),
+                   tuning.rank, tuning.slot, vecs, G, warps, tuning.prefetch.first_block,
+                   static_cast<int>(gridDim.x),
                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(partial)),
                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(mine_payload)),
                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(peer_payload)),
-                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(
-                       mine_flags + warp * kPeerFlagStride)),
-                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(
-                       peer_flags + warp * kPeerFlagStride)),
+                   static_cast<unsigned long long>(
+                       reinterpret_cast<std::uintptr_t>(mine_flags + warp * kPeerFlagStride)),
+                   static_cast<unsigned long long>(
+                       reinterpret_cast<std::uintptr_t>(peer_flags + warp * kPeerFlagStride)),
                    target, seen, spins, epochs[warp], published);
         }
     }

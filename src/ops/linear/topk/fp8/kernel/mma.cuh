@@ -164,8 +164,8 @@ __launch_bounds__(MmaSchedule<TileColumns, kBlockK>::kThreads, 2) void fp8_mma_l
                 common::cp_commit();
             }
 
-            const auto load_fragments = [&](int k_step, unsigned(&a)[4],
-                                            unsigned(&b)[kTokenMmas][2]) {
+            const auto load_fragments = [&](int k_step, unsigned (&a)[4],
+                                            unsigned (&b)[kTokenMmas][2]) {
                 const int weight_row = warp_row * 16 + a_rowoff;
                 const int weight_col = k_step * 16 + a_coloff;
                 common::ldmatrix_x4(

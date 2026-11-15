@@ -38,14 +38,15 @@ int fail(const std::string& message) {
 
 int main() {
     try {
-        constexpr std::uint64_t rows = 384;
+        constexpr std::uint64_t rows    = 384;
         constexpr std::uint64_t columns = 256;
-        constexpr std::uint64_t half = columns / 2;
+        constexpr std::uint64_t half    = columns / 2;
 
         // One BF16 object whose every byte is a function of its offset, so a wrong region cannot
         // match.
         af::Fixture f;
-        const auto geometry = weight_geometry(QType::BF16, QuantLayout::Contiguous, Shape{rows, columns});
+        const auto geometry =
+            weight_geometry(QType::BF16, QuantLayout::Contiguous, Shape{rows, columns});
         f.payload.resize(geometry.bytes);
         for (std::size_t i = 0; i < f.payload.size(); ++i) {
             f.payload[i] = std::byte((i * 131 + 7) % 251);
@@ -60,7 +61,7 @@ int main() {
                                              {"bytes", geometry.bytes}}});
         f.root["bindings"]   = {{"source", {{"object", "source"}}}};
         f.root["uses"]       = Json::array();
-        f.root["files"]      = Json::array({{{"path", nullptr}, {"payload_bytes", geometry.bytes}}});
+        f.root["files"] = Json::array({{{"path", nullptr}, {"payload_bytes", geometry.bytes}}});
         f.write();
 
         Reader reader(f.entry);
@@ -86,8 +87,7 @@ int main() {
         std::vector<models::PendingWeight> pending;
         pending.push_back({reference, {}, {}});
         const std::vector<Device> devices{Device::cpu()};
-        const std::vector<models::WeightStorage> storage{
-            {StorageId{0}, 0, rows * half}};
+        const std::vector<models::WeightStorage> storage{{StorageId{0}, 0, rows * half}};
         const auto bound = models::resolve_weights(std::move(pending), backing, devices, storage);
 
         if (bound.size() != 1) { return fail("binding produced no weight"); }
@@ -98,13 +98,13 @@ int main() {
         }
 
         // The value check: every element must be the source's element at [row, half + column].
-        const auto* got = static_cast<const std::byte*>(view.parts.front().parent->data);
-        const auto* want = f.payload.data();
+        const auto* got           = static_cast<const std::byte*>(view.parts.front().parent->data);
+        const auto* want          = f.payload.data();
         const std::size_t element = geometry.row_bytes / columns;
         for (std::uint64_t row = 0; row < rows; ++row) {
             for (std::uint64_t column = 0; column < half; ++column) {
                 const std::size_t destination = (row * half + column) * element;
-                const std::size_t source     = (row * columns + half + column) * element;
+                const std::size_t source      = (row * columns + half + column) * element;
                 if (std::memcmp(got + destination, want + source, element) != 0) {
                     return fail("value differs at row " + std::to_string(row) + " column " +
                                 std::to_string(column));

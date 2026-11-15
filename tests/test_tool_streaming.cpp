@@ -89,9 +89,9 @@ void long_arguments() {
             "title=\"鳄鱼🦎\">\\code\t<parameter=x>y</parameter><tool_call></tool_call></svg>\r\n";
     const std::string prefix = "<tool_call>\n<function=write>\n" + parameter("path", "page.html") +
                                "<parameter=content>\n";
-    const std::string tail = "\n</parameter>\n" +
-                             parameter("payload", R"({"text":"</parameter>"})") +
-                             "</function>\n</tool_call>";
+    const std::string tail   = "\n</parameter>\n" +
+                               parameter("payload", R"({"text":"</parameter>"})") +
+                               "</function>\n</tool_call>";
     for (const auto [strict, constrained] :
          {std::pair{false, false}, {false, true}, {true, true}}) {
         for (std::size_t chunk : {1U, 7U, 257U}) {
@@ -379,8 +379,8 @@ void protocol_terminal_states() {
         outcome.finish_reason = reason;
         outcome.reasoning     = "ready";
         outcome.text          = "writing files";
-        outcome.tool_calls    = {{"write", R"({"content":"first"})", ToolCallStatus::Complete},
-                                 {"write",
+        outcome.tool_calls = {{"write", R"({"content":"first"})", ToolCallStatus::Complete},
+                              {"write",
                                completed ? R"({"content":"second"})" : R"({"content":"sec)",
                                completed ? ToolCallStatus::Complete : ToolCallStatus::Incomplete}};
 

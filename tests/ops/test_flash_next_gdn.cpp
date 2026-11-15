@@ -23,12 +23,12 @@ using namespace ninfer::test;
 Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
     out.payload = out.qdata = storage.data();
-    out.payload_bytes = storage.size();
-    out.qtype = QType::BF16;
-    out.layout = QuantLayout::Contiguous;
+    out.payload_bytes       = storage.size();
+    out.qtype               = QType::BF16;
+    out.layout              = QuantLayout::Contiguous;
     out.n = out.shape[0] = out.padded_shape[0] = rows;
     out.k = out.shape[1] = out.padded_shape[1] = columns;
-    out.ndim = 2;
+    out.ndim                                   = 2;
     return out;
 }
 
@@ -38,23 +38,24 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
 }
 
 int run() {
-    constexpr int hidden = 2560;
-    constexpr int qk = 2048;
-    constexpr int value = 6144;
+    constexpr int hidden      = 2560;
+    constexpr int qk          = 2048;
+    constexpr int value       = 6144;
     constexpr int convolution = 10240;
-    const auto matrix = [](int rows, int columns) {
-        DeviceBuffer result(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(rows) * columns * sizeof(std::uint16_t));
+    const auto matrix         = [](int rows, int columns) {
+        DeviceBuffer result(ninfer::test::cuda_environment().context.device(),
+                            static_cast<std::size_t>(rows) * columns * sizeof(std::uint16_t));
         result.fill();
         return result;
     };
 
     std::vector<float> input(hidden, 0.0F);
-    input[0] = 1.0F;
-    DeviceBuffer d_input = to_device_bf16(input);
-    DeviceBuffer d_a = matrix(48, hidden);
-    DeviceBuffer d_b = matrix(48, hidden);
-    DeviceBuffer d_qkv = matrix(convolution, hidden);
-    DeviceBuffer d_z = matrix(value, hidden);
+    input[0]              = 1.0F;
+    DeviceBuffer d_input  = to_device_bf16(input);
+    DeviceBuffer d_a      = matrix(48, hidden);
+    DeviceBuffer d_b      = matrix(48, hidden);
+    DeviceBuffer d_qkv    = matrix(convolution, hidden);
+    DeviceBuffer d_z      = matrix(value, hidden);
     DeviceBuffer d_output = matrix(hidden, value);
     store_bf16(d_qkv, 0, 1.0F);
     store_bf16(d_qkv, static_cast<std::size_t>(qk) * hidden, 1.0F);
@@ -66,36 +67,49 @@ int run() {
     DeviceBuffer d_dt_bias(ninfer::test::cuda_environment().context.device(), 48 * sizeof(float));
     d_a_log.fill();
     d_dt_bias.fill();
-    DeviceBuffer d_conv(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(convolution) * 4 * sizeof(std::uint16_t));
+    DeviceBuffer d_conv(ninfer::test::cuda_environment().context.device(),
+                        static_cast<std::size_t>(convolution) * 4 * sizeof(std::uint16_t));
     d_conv.fill();
     store_bf16(d_conv, static_cast<std::size_t>(3) * convolution, 1.0F);
     store_bf16(d_conv, static_cast<std::size_t>(3) * convolution + qk, 1.0F);
     store_bf16(d_conv, static_cast<std::size_t>(3) * convolution + 2 * qk, 1.0F);
-    DeviceBuffer d_norm(ninfer::test::cuda_environment().context.device(), 128 * sizeof(std::uint16_t));
+    DeviceBuffer d_norm(ninfer::test::cuda_environment().context.device(),
+                        128 * sizeof(std::uint16_t));
     d_norm.fill();
     store_bf16(d_norm, 0, 1.0F);
 
-    DeviceBuffer d_conv_state(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(convolution) * 3 * sizeof(std::uint16_t));
-    DeviceBuffer d_recurrent_state(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(128) * 128 * 48 * sizeof(float));
+    DeviceBuffer d_conv_state(ninfer::test::cuda_environment().context.device(),
+                              static_cast<std::size_t>(convolution) * 3 * sizeof(std::uint16_t));
+    DeviceBuffer d_recurrent_state(ninfer::test::cuda_environment().context.device(),
+                                   static_cast<std::size_t>(128) * 128 * 48 * sizeof(float));
     d_conv_state.fill();
     d_recurrent_state.fill();
     GuardedDeviceBuffer d_destination(hidden * sizeof(std::uint16_t));
 
     ops::FlashNextGdnWeights weights{
-        .a_log = Tensor(d_a_log.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
-        .dt_bias = Tensor(d_dt_bias.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
-        .convolution = Tensor(d_conv.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {convolution, 4}),
+        .a_log        = Tensor(d_a_log.data(), ninfer::test::cuda_environment().context.device(),
+                               DType::FP32, {48}),
+        .dt_bias      = Tensor(d_dt_bias.data(), ninfer::test::cuda_environment().context.device(),
+                               DType::FP32, {48}),
+        .convolution  = Tensor(d_conv.data(), ninfer::test::cuda_environment().context.device(),
+                               DType::BF16, {convolution, 4}),
         .a_projection = bf16_weight(d_a, 48, hidden),
         .b_projection = bf16_weight(d_b, 48, hidden),
         .query_key_value = bf16_weight(d_qkv, convolution, hidden),
-        .output_gate = bf16_weight(d_z, value, hidden),
-        .norm = Tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128}),
-        .output = bf16_weight(d_output, hidden, value),
+        .output_gate     = bf16_weight(d_z, value, hidden),
+        .norm            = Tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(),
+                                  DType::BF16, {128}),
+        .output          = bf16_weight(d_output, hidden, value),
     };
-    Tensor input_tensor(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, 1});
-    Tensor conv_state(d_conv_state.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {convolution, 3});
-    Tensor recurrent_state(d_recurrent_state.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {128, 128, 48});
-    Tensor destination(d_destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, 1});
+    Tensor input_tensor(d_input.data(), ninfer::test::cuda_environment().context.device(),
+                        DType::BF16, {hidden, 1});
+    Tensor conv_state(d_conv_state.data(), ninfer::test::cuda_environment().context.device(),
+                      DType::BF16, {convolution, 3});
+    Tensor recurrent_state(d_recurrent_state.data(),
+                           ninfer::test::cuda_environment().context.device(), DType::FP32,
+                           {128, 128, 48});
+    Tensor destination(d_destination.data(), ninfer::test::cuda_environment().context.device(),
+                       DType::BF16, {hidden, 1});
     MemoryArena workspace(ops::flash_next_gdn_workspace_capacity_bytes(1));
     int device = 0;
     CUDA_CHECK(cudaGetDevice(&device));
@@ -109,14 +123,13 @@ int run() {
     const auto bf16 = [](double value) {
         return static_cast<double>(bf16_to_f32(f32_to_bf16(static_cast<float>(value))));
     };
-    const double silu_one = bf16(1.0 / (1.0 + std::exp(-1.0)));
+    const double silu_one      = bf16(1.0 / (1.0 + std::exp(-1.0)));
     const double normalized_qk = silu_one / std::sqrt(silu_one * silu_one + 1.0e-6);
-    const double recurrent = bf16((1.0 / std::sqrt(128.0)) * 0.5 * silu_one *
-                                  normalized_qk * normalized_qk);
-    const double normalized = recurrent /
-                              std::sqrt(recurrent * recurrent / 128.0 + 1.0e-6);
+    const double recurrent =
+        bf16((1.0 / std::sqrt(128.0)) * 0.5 * silu_one * normalized_qk * normalized_qk);
+    const double normalized = recurrent / std::sqrt(recurrent * recurrent / 128.0 + 1.0e-6);
     std::vector<double> expected(hidden, 0.0);
-    expected[0] = bf16(normalized * (1.0 / (1.0 + std::exp(-1.0))));
+    expected[0]  = bf16(normalized * (1.0 / (1.0 + std::exp(-1.0))));
     int failures = verify_pointwise("Flash-Next GDN complete block",
                                     from_device_bf16(d_destination.data(), hidden), expected,
                                     {/*absolute*/ 2.0e-2, /*relative*/ 3.0e-3});
@@ -170,7 +183,7 @@ int run_pending_fold(const PendingFoldCase& test) {
     const auto previous_rows            = static_cast<std::int32_t>(test.previous_slots.size());
     const auto batch                    = static_cast<std::int32_t>(test.sources.size());
     const std::int32_t capacity         = std::max(previous_rows, batch);
-    const std::string label             = "Flash-Next GDN pending fold W=" + std::to_string(width) +
+    const std::string label = "Flash-Next GDN pending fold W=" + std::to_string(width) +
                               " R=" + std::to_string(previous_rows) + " B=" + std::to_string(batch);
 
     DeviceBuffer d_a = bf16_pattern_buffer(static_cast<std::size_t>(48) * hidden, 11U, 0.02F);
@@ -190,14 +203,18 @@ int run_pending_fold(const PendingFoldCase& test) {
     DeviceBuffer d_a_log   = to_device(a_log);
     DeviceBuffer d_dt_bias = to_device(dt_bias);
     const ops::FlashNextGdnWeights weights{
-        .a_log           = Tensor(d_a_log.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
-        .dt_bias         = Tensor(d_dt_bias.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
-        .convolution     = Tensor(d_conv.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {convolution, 4}),
-        .a_projection    = bf16_weight(d_a, 48, hidden),
-        .b_projection    = bf16_weight(d_b, 48, hidden),
+        .a_log        = Tensor(d_a_log.data(), ninfer::test::cuda_environment().context.device(),
+                               DType::FP32, {48}),
+        .dt_bias      = Tensor(d_dt_bias.data(), ninfer::test::cuda_environment().context.device(),
+                               DType::FP32, {48}),
+        .convolution  = Tensor(d_conv.data(), ninfer::test::cuda_environment().context.device(),
+                               DType::BF16, {convolution, 4}),
+        .a_projection = bf16_weight(d_a, 48, hidden),
+        .b_projection = bf16_weight(d_b, 48, hidden),
         .query_key_value = bf16_weight(d_qkv, convolution, hidden),
         .output_gate     = bf16_weight(d_z, value, hidden),
-        .norm            = Tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128}),
+        .norm            = Tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(),
+                                  DType::BF16, {128}),
         .output          = bf16_weight(d_output, hidden, value),
     };
 
@@ -219,7 +236,8 @@ int run_pending_fold(const PendingFoldCase& test) {
     const GdnReplayRecords records(
         MemorySpan{record_storage.data(), record_bytes, record_storage.device()}, record_layout);
     const GdnReplayRecords snapshot(
-        MemorySpan{snapshot_storage.data(), record_bytes, snapshot_storage.device()}, record_layout);
+        MemorySpan{snapshot_storage.data(), record_bytes, snapshot_storage.device()},
+        record_layout);
 
     LayoutBuilder state_builder;
     const LinearAttentionStatePoolLayout state_layout = plan_linear_attention_state_pool(
@@ -231,10 +249,12 @@ int run_pending_fold(const PendingFoldCase& test) {
                         .key_head_dim   = 128,
                         .slot_count     = slot_count,
                         .conv_dtype     = DType::BF16});
-    DeviceBuffer state_storage(ninfer::test::cuda_environment().context.device(), state_builder.finish(256));
+    DeviceBuffer state_storage(ninfer::test::cuda_environment().context.device(),
+                               state_builder.finish(256));
     state_storage.fill(0);
     LinearAttentionStatePool state_pool(
-        MemorySpan{state_storage.data(), state_storage.size(), state_storage.device()}, state_layout);
+        MemorySpan{state_storage.data(), state_storage.size(), state_storage.device()},
+        state_layout);
     const auto layer_state  = state_pool.layer_view(static_cast<std::uint32_t>(tested_layer));
     Tensor conv_states      = layer_state.conv;
     Tensor recurrent_states = layer_state.recurrent;
@@ -260,10 +280,15 @@ int run_pending_fold(const PendingFoldCase& test) {
             bf16_pattern_buffer(static_cast<std::size_t>(hidden) * width * rows, seed, 1.0F);
         DeviceBuffer d_valid = to_device(valid);
         DeviceBuffer d_slots = to_device(slots);
-        const Tensor input_tensor(input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, width * rows});
-        const Tensor valid_tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {rows});
-        const Tensor slot_tensor(d_slots.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {rows});
-        Tensor destination_tensor(destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, width * rows});
+        const Tensor input_tensor(input.data(), ninfer::test::cuda_environment().context.device(),
+                                  DType::BF16, {hidden, width * rows});
+        const Tensor valid_tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(),
+                                  DType::I32, {rows});
+        const Tensor slot_tensor(d_slots.data(), ninfer::test::cuda_environment().context.device(),
+                                 DType::I32, {rows});
+        Tensor destination_tensor(destination.data(),
+                                  ninfer::test::cuda_environment().context.device(), DType::BF16,
+                                  {hidden, width * rows});
         ops::flash_next_gdn_replay_record(
             input_tensor, weights, conv_states, recurrent_states, valid_tensor, slot_tensor,
             records.layer(tested_layer, rows), destination_tensor, workspace, nullptr, pending);
@@ -271,7 +296,8 @@ int run_pending_fold(const PendingFoldCase& test) {
     };
 
     // Previous round: every record column written from the initial states.
-    DeviceBuffer previous_out(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(hidden) * width * previous_rows * 2);
+    DeviceBuffer previous_out(ninfer::test::cuda_environment().context.device(),
+                              static_cast<std::size_t>(hidden) * width * previous_rows * 2);
     record_round(previous_rows, test.previous_slots,
                  std::vector<std::int32_t>(static_cast<std::size_t>(previous_rows), width), 53U,
                  previous_out, nullptr);
@@ -290,7 +316,8 @@ int run_pending_fold(const PendingFoldCase& test) {
     }
     const ops::GdnReplayFoldPlan fold_plan(records, state_pool.all_layers_view());
     fold_plan.execute(fold_rows, nullptr);
-    DeviceBuffer reference_out(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(hidden) * width * batch * 2);
+    DeviceBuffer reference_out(ninfer::test::cuda_environment().context.device(),
+                               static_cast<std::size_t>(hidden) * width * batch * 2);
     record_round(batch, test.sources, test.valid, 59U, reference_out, nullptr);
     const GdnReplayRecordLayer reference_layer = records.layer(tested_layer, batch);
     const auto reference_states = from_device<std::uint8_t>(state_storage, state_storage.size());
@@ -321,8 +348,10 @@ int run_pending_fold(const PendingFoldCase& test) {
                           cudaMemcpyHostToDevice));
     record_storage.fill(0x7f);
     DeviceBuffer d_pending = to_device(device_rows);
-    const ops::FlashNextGdnPendingFold pending{Tensor(d_pending.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {4, previous_rows}),
-                                               snapshot.layer(tested_layer, previous_rows)};
+    const ops::FlashNextGdnPendingFold pending{
+        Tensor(d_pending.data(), ninfer::test::cuda_environment().context.device(), DType::I32,
+               {4, previous_rows}),
+        snapshot.layer(tested_layer, previous_rows)};
     DeviceBuffer fused_out(ninfer::test::cuda_environment().context.device(), reference_out.size());
     record_round(batch, test.sources, test.valid, 59U, fused_out, &pending);
 
@@ -368,7 +397,8 @@ int run_pending_fold(const PendingFoldCase& test) {
 
 int main() {
     if (ninfer::test::cuda_unavailable()) {
-        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     try {

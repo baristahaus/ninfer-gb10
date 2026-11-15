@@ -12,17 +12,17 @@ namespace {
 // tiles to 24 at BlockK 128, and 24 still leaves a 4-way tail split six full K tiles per part, so
 // the cap that gates split-K (kMaxParts <= K / BlockK) is not reached. What does NOT transfer is
 // the stale wave arithmetic in the sibling files' comments; the counts here are recomputed.
-using Geometry  = Fp8Geometry<5120, 3072>;
-using Gemv      = Fp8A16GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
+using Geometry = Fp8Geometry<5120, 3072>;
+using Gemv     = Fp8A16GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
 // 5120/64 = 80 row tiles: 80 CTAs at T<=32 and 160 at T<=64, a full wave either side.
-using Tma32x64  = Fp8A8TmaMmaSchedule<32, 64, 128, 1, 2, 3, 2>;
+using Tma32x64 = Fp8A8TmaMmaSchedule<32, 64, 128, 1, 2, 3, 2>;
 // 5120/128 = 40 row tiles: 40 * ceil(T/64) CTAs, 120 at T=192.
 using Tma64x128 = Fp8A8TmaMmaSchedule<64, 128, 128, 2, 4, 3, 1>;
 // 40 row tiles of 128 rows over 128-token columns: 80 CTAs at T=256, 240 at T=768. Below the 170
 // wave the tail is split rather than left as a thin wave.
-using MidBulk   = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 128, 128, 2, 4, 3, 1>, 170, 4, 8>;
+using MidBulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 128, 128, 2, 4, 3, 1>, 170, 4, 8>;
 // 20 row tiles of 256 rows: 160 CTAs at T=1024 and 320 at T=2048, where the wider tile wins.
-using Bulk      = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 1>, 170, 4, 8>;
+using Bulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 1>, 170, 4, 8>;
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const int tokens = x.ne[1];

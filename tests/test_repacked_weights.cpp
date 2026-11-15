@@ -29,10 +29,10 @@ struct HostMatrix {
 };
 
 float half_to_float(std::uint16_t bits) {
-    const std::uint32_t sign = static_cast<std::uint32_t>(bits & 0x8000U) << 16;
+    const std::uint32_t sign     = static_cast<std::uint32_t>(bits & 0x8000U) << 16;
     const std::uint32_t exponent = (bits >> 10) & 0x1FU;
     const std::uint32_t mantissa = bits & 0x3FFU;
-    std::uint32_t out = 0;
+    std::uint32_t out            = 0;
     if (exponent == 0) {
         if (mantissa == 0) {
             out = sign;
@@ -73,17 +73,16 @@ HostMatrix make_matrix(std::uint64_t rows, std::uint64_t columns) {
         }
     }
     const std::vector<std::uint64_t> shape{rows, columns};
-    out.parent.geometry = ninfer::weight_geometry(ninfer::QType::BF16,
-                                                  ninfer::QuantLayout::Contiguous, shape);
+    out.parent.geometry =
+        ninfer::weight_geometry(ninfer::QType::BF16, ninfer::QuantLayout::Contiguous, shape);
     out.parent.device = ninfer::Device::cpu();
     out.parent.data   = reinterpret_cast<const std::byte*>(out.words.data());
     return out;
 }
 
 // The rank's column shard as `shard_parameter` produces it: one part per row.
-ninfer::WeightView column_shard(const HostMatrix& matrix, std::uint64_t rows,
-                                std::uint64_t columns, std::uint64_t begin,
-                                std::uint64_t extent) {
+ninfer::WeightView column_shard(const HostMatrix& matrix, std::uint64_t rows, std::uint64_t columns,
+                                std::uint64_t begin, std::uint64_t extent) {
     ninfer::WeightView view;
     view.shape = {rows, extent};
     for (std::uint64_t row = 0; row < rows; ++row) {
@@ -164,8 +163,7 @@ int check_fused(std::uint64_t columns) {
 
     ninfer::models::RepackedWeights repacked;
     const std::vector<ninfer::models::FusedGroup> groups{
-        {{ninfer::models::WeightId{0}, ninfer::models::WeightId{1},
-          ninfer::models::WeightId{2}}}};
+        {{ninfer::models::WeightId{0}, ninfer::models::WeightId{1}, ninfer::models::WeightId{2}}}};
     repacked.gather(weights, groups);
     if (repacked.count() != 1) { return fail("fused gather did not make one parent"); }
 
@@ -179,9 +177,9 @@ int check_fused(std::uint64_t columns) {
         return fail("the fused parent is not the summed rows");
     }
     // The value oracle: each member's rows must be at its own destination offset, in order.
-    const auto* got = reinterpret_cast<const std::uint16_t*>(parent->data);
-    const auto check_member = [&](const HostMatrix& m, std::uint64_t rows,
-                                  std::uint64_t first_row, const char* label) {
+    const auto* got         = reinterpret_cast<const std::uint16_t*>(parent->data);
+    const auto check_member = [&](const HostMatrix& m, std::uint64_t rows, std::uint64_t first_row,
+                                  const char* label) {
         for (std::uint64_t row = 0; row < rows; ++row) {
             for (std::uint64_t column = 0; column < columns; ++column) {
                 const std::uint16_t want = m.words[row * columns + column];

@@ -92,7 +92,8 @@ void test_one_anchor() {
         expect(marker.kind == PromptCacheMarkerKind::PrivateLongAnchor, "one: a private anchor");
         expect(marker.location == PromptCacheMarkerLocation::MessageBoundary,
                "one: a message-boundary marker");
-        expect(marker.evidence == SharedCandidateEvidence::None, "one: no shared-candidate evidence");
+        expect(marker.evidence == SharedCandidateEvidence::None,
+               "one: no shared-candidate evidence");
         expect(frontend_accepts(marker, 3), "one: the frontend accepts the marker");
     }
 }

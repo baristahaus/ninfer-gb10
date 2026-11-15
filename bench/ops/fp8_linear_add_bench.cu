@@ -191,11 +191,11 @@ int main(int argc, char** argv) {
             const bench::ColdTiming timing = bench::measure_cold_launch_prepared(
                 restore, [&](CudaExecutionView cuda) { launch(tokens, cuda); }, flush, cuda,
                 options.warmup, options.repeat);
-            const double seconds = timing.median_us * 1.0e-6;
-            const double flops   = 2.0 * static_cast<double>(kRows) * options.k * tokens;
-            const double bytes   = static_cast<double>(packed.model_weight_bytes()) +
-                                 2.0 * static_cast<double>(options.k) * tokens +
-                                 4.0 * static_cast<double>(kRows) * tokens;
+            const double seconds        = timing.median_us * 1.0e-6;
+            const double flops          = 2.0 * static_cast<double>(kRows) * options.k * tokens;
+            const double bytes          = static_cast<double>(packed.model_weight_bytes()) +
+                                          2.0 * static_cast<double>(options.k) * tokens +
+                                          4.0 * static_cast<double>(kRows) * tokens;
             const double tflops         = flops / seconds / 1.0e12;
             const double tensor_percent = uses_tensor_cores(options, tokens)
                                               ? 100.0 * tflops / bench::kRoofline.mxfp8_f32_tflops

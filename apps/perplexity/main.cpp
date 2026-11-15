@@ -261,7 +261,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
         token_scores.open(output_directory / "token_scores.jsonl");
         if (!token_scores) { throw std::runtime_error("cannot open token score output"); }
     }
-    const Clock::time_point scoring_started      = Clock::now();
+    const Clock::time_point scoring_started = Clock::now();
     logger->info("scoring | {} streams | {} tokens | {} windows",
                  ninfer::product::format_pretty_count(streams.size()),
                  ninfer::product::format_pretty_count(total_scored_tokens),
@@ -336,7 +336,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
                     stream.tokens.begin() + static_cast<std::ptrdiff_t>(window.input_begin),
                     stream.tokens.begin() + static_cast<std::ptrdiff_t>(window.input_end));
             }
-            window_report["seconds"]      = seconds_since(window_started);
+            window_report["seconds"] = seconds_since(window_started);
             window_reports.push_back(std::move(window_report));
 
             if (Clock::now() >= next_progress) {

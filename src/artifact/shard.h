@@ -37,7 +37,9 @@ struct ShardRange {
     std::int64_t extent = 0;
 
     [[nodiscard]] bool empty() const noexcept { return extent == 0; }
+
     [[nodiscard]] std::int64_t end() const noexcept { return begin + extent; }
+
     constexpr bool operator==(const ShardRange&) const noexcept = default;
 };
 
@@ -68,8 +70,8 @@ struct ShardPlacement {
 // longer covers the whole parameter.
 //
 // Throws std::invalid_argument when the placement does not describe `binding`: a rank index outside
-// the placement, a range outside the binding's element count, or a placement whose ranges are not in
-// the binding's coordinates.
+// the placement, a range outside the binding's element count, or a placement whose ranges are not
+// in the binding's coordinates.
 [[nodiscard]] Binding shard_binding_ranges(const Binding& binding,
                                            std::span<const ShardRange> ranges);
 

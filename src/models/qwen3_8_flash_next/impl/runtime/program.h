@@ -686,6 +686,7 @@ public:
     std::unique_ptr<HostKVExtentStore> host_kv_extents;
     std::size_t text_host_kv_page_stride    = 0;
     std::size_t backend_host_kv_page_stride = 0;
+
     // tp 2: rank 1's persistent storage and the mirrors that replay rank 0's mutations into it.
     // Rank 1 owns only what the mirrored pools need — the sharded persistent layouts — never a
     // workspace, a graph family or a second Program. Absent on the single-device lane.
@@ -701,6 +702,7 @@ public:
         std::unique_ptr<tp2::MirroredKVPagePool> backend_kv;
         std::unique_ptr<tp2::MirroredKVExecutionTables> backend_kv_tables;
     };
+
     std::unique_ptr<PeerRank> peer;
     std::unique_ptr<qwen3_8_flash_next::StateImageDevicePool> state_images;
     std::unique_ptr<qwen3_8_flash_next::HostStatePool> host_state_images;
@@ -733,7 +735,7 @@ public:
     PinnedHostBuffer round_host;
     PinnedHostBuffer round_report_host;
     std::optional<PinnedHostBuffer> score_logprobs_host;
-    TokenId* host_tokens = nullptr;
+    TokenId* host_tokens                                = nullptr;
     qwen3_8_flash_next::PrefillRoundReport* host_report = nullptr;
     std::optional<PinnedHostBuffer> ordinary_host;
     std::optional<PinnedHostBuffer> flash_ple_host;
@@ -1443,23 +1445,27 @@ struct PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     [[nodiscard]] detail::PhysicalResources
     construction_residual(std::uint32_t candidate_index,
                           std::span<const std::uint16_t> choices) const;
-    [[nodiscard]] runtime::PressureTargetGuidance guidance(qwen3_8_flash_next::PressureTargetHandle target);
-    [[nodiscard]] qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT> assess(qwen3_8_flash_next::PressureTargetHandle target);
+    [[nodiscard]] runtime::PressureTargetGuidance
+    guidance(qwen3_8_flash_next::PressureTargetHandle target);
+    [[nodiscard]] qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>
+    assess(qwen3_8_flash_next::PressureTargetHandle target);
     [[nodiscard]] qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>
     prepare_expansion(qwen3_8_flash_next::PressureTargetHandle parent,
                       std::uint32_t maximum_owners = std::numeric_limits<std::uint32_t>::max());
-    [[nodiscard]] qwen3_8_flash_next::PressureExpansionView
-    commit_expansion(qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& prepared);
-    void discard_expansion(qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& prepared) noexcept;
-    [[nodiscard]] runtime::PrefillWork
-    shared_capture_split_prefill_work(const qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>& assessed,
-                                      const PreparedPromptData& prompt,
-                                      std::span<const std::uint32_t> frontiers) const;
-    [[nodiscard]] std::optional<AdmissionCandidate> seal(qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed,
-                                                         const PreparedPromptData& prompt,
-                                                         runtime::FinalScheduleIntent intent);
-    [[nodiscard]] std::optional<CapturePressureCandidate>
-    seal_capture(qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed);
+    [[nodiscard]] qwen3_8_flash_next::PressureExpansionView commit_expansion(
+        qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& prepared);
+    void discard_expansion(
+        qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&&
+            prepared) noexcept;
+    [[nodiscard]] runtime::PrefillWork shared_capture_split_prefill_work(
+        const qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&
+            assessed,
+        const PreparedPromptData& prompt, std::span<const std::uint32_t> frontiers) const;
+    [[nodiscard]] std::optional<AdmissionCandidate>
+    seal(qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed,
+         const PreparedPromptData& prompt, runtime::FinalScheduleIntent intent);
+    [[nodiscard]] std::optional<CapturePressureCandidate> seal_capture(
+        qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed);
 
     [[nodiscard]] bool valid(qwen3_8_flash_next::PressureTargetHandle target) const noexcept;
     [[nodiscard]] std::uint32_t candidate_index(runtime::PlanningCandidateId candidate) const;

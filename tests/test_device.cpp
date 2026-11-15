@@ -42,7 +42,8 @@ int expect_cuda_check_reports() {
         int failures           = 0;
         const auto expect      = [&](const std::string& needle, const char* label) {
             if (what.find(needle) == std::string::npos) {
-                std::cerr << "CUDA_CHECK report does not name the " << label << ": " << what << '\n';
+                std::cerr << "CUDA_CHECK report does not name the " << label << ": " << what
+                          << '\n';
                 ++failures;
             }
         };
@@ -51,9 +52,7 @@ int expect_cuda_check_reports() {
         expect("cudaSetDevice(-1)", "checked expression");
         expect(expected_name, "driver error name");
         expect(expected_text, "driver error text");
-        if (failures == 0) {
-            std::cout << "ok: CUDA_CHECK reported " << what << '\n';
-        }
+        if (failures == 0) { std::cout << "ok: CUDA_CHECK reported " << what << '\n'; }
         return failures;
     }
     return fail("CUDA_CHECK returned without throwing");
@@ -115,7 +114,8 @@ int main(int argc, char** argv) {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; supply one with CUDA_VISIBLE_DEVICES (sm_121a "
+                     "on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     if (count_err != cudaSuccess) {
@@ -123,7 +123,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (count == 0) {
-        std::cerr << "SKIP: no CUDA devices; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no CUDA devices; supply one with CUDA_VISIBLE_DEVICES (sm_121a on "
+                     "GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
 

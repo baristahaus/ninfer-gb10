@@ -37,9 +37,8 @@ void launch_gemm(const Weight& weight, Tensor& out, Nvfp4A4Workspace workspace, 
 template <int Intermediate, class Schedule>
 void launch(const Tensor& x, const Weight& weight, Tensor& out, MemoryArena& workspace,
             cudaStream_t stream) {
-    auto scope = workspace.scope();
-    const Nvfp4A4Workspace scratch =
-        allocate_nvfp4_a4_workspace(workspace, x.ne[1], kInputRows);
+    auto scope                     = workspace.scope();
+    const Nvfp4A4Workspace scratch = allocate_nvfp4_a4_workspace(workspace, x.ne[1], kInputRows);
     launch_nvfp4_a4_quantize(x, weight, scratch, Nvfp4ScaleLayout::RowMajor, stream);
     launch_gemm<Intermediate, Schedule>(weight, out, scratch, x.ne[1], stream);
 }

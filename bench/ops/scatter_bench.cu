@@ -97,9 +97,7 @@ int main(int argc, char** argv) try {
     }
     measurement::hardware();
     measurement::LogicalBenchmark benchmark(timing);
-    if (columns.empty()) {
-        columns = {1, 2, 64, 1024, 12288, 16384};
-    }
+    if (columns.empty()) { columns = {1, 2, 64, 1024, 12288, 16384}; }
     for (const std::int32_t v : columns) { run(d, v, profile_once, permuted, benchmark); }
     return 0;
 } catch (const std::exception& error) {

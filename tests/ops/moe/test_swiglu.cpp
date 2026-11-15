@@ -126,10 +126,10 @@ int run(std::span<const Call> calls) {
 }
 
 int cancellation() {
-    auto gu         = qw::make_patterned_weight(QType::NVFP4, 2 * I, H, 2241,
-                                                {.weight_scale_divisor = 1, .input_scale_divisor = 6});
-    auto dn         = qw::make_patterned_weight(QType::NVFP4, H, I, 2243,
-                                                {.weight_scale_divisor = 1, .input_scale_divisor = 3});
+    auto gu = qw::make_patterned_weight(QType::NVFP4, 2 * I, H, 2241,
+                                        {.weight_scale_divisor = 1, .input_scale_divisor = 6});
+    auto dn = qw::make_patterned_weight(QType::NVFP4, H, I, 2243,
+                                        {.weight_scale_divisor = 1, .input_scale_divisor = 3});
     const auto zero = [](auto& w) {
         std::fill(w.payload.begin(), w.payload.end(), 0);
         const float one = 1;
@@ -260,10 +260,10 @@ int broadcast_check(const std::vector<double>& actual, const std::vector<double>
 }
 
 int tail_clamp(int recipe) {
-    auto gu         = qw::make_patterned_weight(QType::NVFP4, 2 * I, H, 2301 + recipe,
-                                                {.weight_scale_divisor = 1, .input_scale_divisor = 6});
-    auto dn         = qw::make_patterned_weight(QType::NVFP4, H, I, 2307 + recipe,
-                                                {.weight_scale_divisor = 1, .input_scale_divisor = 24});
+    auto gu = qw::make_patterned_weight(QType::NVFP4, 2 * I, H, 2301 + recipe,
+                                        {.weight_scale_divisor = 1, .input_scale_divisor = 6});
+    auto dn = qw::make_patterned_weight(QType::NVFP4, H, I, 2307 + recipe,
+                                        {.weight_scale_divisor = 1, .input_scale_divisor = 24});
     const auto zero = [](auto& w) {
         std::fill(w.payload.begin(), w.payload.end(), 0);
         const float one = 1;
@@ -276,9 +276,9 @@ int tail_clamp(int recipe) {
             std::uint8_t(code << ((col % 2) * 4));
         const int group = col / 16;
         const auto off  = w.scale_plane_offset +
-                         std::size_t((row / 128) * (w.weight.k / 64) + group / 4) * 512 +
-                         (row % 32) * 16 + ((row % 128) / 32) * 4 + group % 4;
-        w.payload[off] = scale;
+                          std::size_t((row / 128) * (w.weight.k / 64) + group / 4) * 512 +
+                          (row % 32) * 16 + ((row % 128) / 32) * 4 + group % 4;
+        w.payload[off]  = scale;
     };
     cell(gu, I - 1, H - 1, recipe == 0 ? 0x0f : 0x06, recipe == 0 ? 0x3e : 0x4a);
     cell(gu, 2 * I - 1, H - 1, recipe == 2 ? 0x0e : 0x06, recipe == 0 ? 0x42 : 0x4a);

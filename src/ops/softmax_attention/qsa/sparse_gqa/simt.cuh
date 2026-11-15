@@ -25,10 +25,10 @@ __launch_bounds__(Warps * 32) __global__
     if constexpr (kSparseQuantized<Storage>) kv::normalized_hadamard_d256_inplace(query, lane);
     const auto table = a.tables + std::int64_t(a.table_rows[q / a.tokens]) * a.table_stride;
     for (int j = start + warp; j < end; j += Warps) {
-        const int ordinal  = j / 4;
-        const int g        = ordinal < work.count
-                                 ? (work.count == work.complete ? ordinal : a.ids[q * 512 + ordinal])
-                                 : work.complete;
+        const int ordinal = j / 4;
+        const int g       = ordinal < work.count
+                                ? (work.count == work.complete ? ordinal : a.ids[q * 512 + ordinal])
+                                : work.complete;
         const int physical = table[g / 16], row = 4 * (g % 16) + j % 4;
         const auto* kp = a.key.data + physical * a.key.page + kvh * a.key.head + row * a.key.row;
         const auto* vp =

@@ -201,7 +201,7 @@ std::optional<ContextDemotion> quote_demotion(const SessionImpl& program,
             }
             const auto host = program.state_store->host_resident(state);
             plan->state     = StateDemotion{state, program.state_store->content_epoch(state), host,
-                                        owners.sources};
+                                            owners.sources};
             candidate.released.state_slots = 1;
             candidate.host_bytes           = host ? 0 : program.state_store->image_bytes();
             break;
@@ -329,10 +329,10 @@ struct DemotionBatch {
                                   ? runtime::ContextTransferResource{kTextKvPool}
                                   : runtime::ContextTransferResource{kBackendKvPool};
         valid               = !original.state_slots && !original.host_bytes &&
-                (resource == runtime::ContextTransferResource{kTextKvPool}
-                     ? original.kv_page_groups[kTextKvPool.index] != 0
-                     : !original.kv_page_groups[kTextKvPool.index] &&
-                           original.kv_page_groups[kBackendKvPool.index] != 0);
+                              (resource == runtime::ContextTransferResource{kTextKvPool}
+                                   ? original.kv_page_groups[kTextKvPool.index] != 0
+                                   : !original.kv_page_groups[kTextKvPool.index] &&
+                                         original.kv_page_groups[kBackendKvPool.index] != 0);
     }
 
     std::shared_ptr<const ReclaimPlan> evaluation;
@@ -496,13 +496,16 @@ bool SessionImpl::try_spill_checkpoint(CheckpointHandle handle) {
         std::vector<context::PageId> pages;
         bool is_image = false;
     };
+
     std::vector<Source> sources;
     std::optional<context::StateDirectory::Transfer> state_copy;
+
     struct PendingBackup {
         std::uint32_t pool;
         context::PageId page;
         context::HostPageReservation reservation;
     };
+
     std::vector<PendingBackup> backups;
 
     const auto unwind = [&]() noexcept {
@@ -516,24 +519,24 @@ bool SessionImpl::try_spill_checkpoint(CheckpointHandle handle) {
             // The image already lives in the tier.
         } else if (state_store->host_resident(image)) {
             if (state_store->device_resident(image)) { return false; }
-            sources.push_back(
-                {state_store->host_extent(image), state_spill->reserve(state_store->image_bytes()),
-                 {}, true});
+            sources.push_back({state_store->host_extent(image),
+                               state_spill->reserve(state_store->image_bytes()),
+                               {},
+                               true});
         } else if (state_store->device_resident(image)) {
             auto transfer = state_store->reserve_device_to_host(image);
             if (!transfer) { return false; }
             const auto host = transfer->description().host;
-            sources.push_back(
-                {host, state_spill->reserve(state_store->image_bytes()), {}, true});
+            sources.push_back({host, state_spill->reserve(state_store->image_bytes()), {}, true});
             state_copy.emplace(std::move(*transfer));
         } else {
             return false;
         }
 
         const auto collect = [&](const context::HistoryPrefix& prefix, std::uint32_t pool_index) {
-            auto& histories = pool_index == kTextKvPool.index ? *text_kv_histories
-                                                              : *backend_kv_histories;
-            auto& pages     = pool_index == kTextKvPool.index ? *text_kv_pages : *backend_kv_pages;
+            auto& histories =
+                pool_index == kTextKvPool.index ? *text_kv_histories : *backend_kv_histories;
+            auto& pages = pool_index == kTextKvPool.index ? *text_kv_pages : *backend_kv_pages;
             const auto count =
                 std::min<std::uint32_t>(histories.mapped_pages(prefix.history()),
                                         context::kv_pages_for_frontier(prefix.frontier()));
@@ -542,11 +545,10 @@ bool SessionImpl::try_spill_checkpoint(CheckpointHandle handle) {
                 if (pages.spill_resident(page)) { continue; }
                 if (pages.host_resident(page)) {
                     const auto host = host_kv_extents->view(pages.host_replica(page).extent).extent;
-                    auto found      = std::find_if(sources.begin(), sources.end(),
-                                                   [&](const Source& source) {
-                                                      return !source.is_image &&
-                                                             source.host == host;
-                                                   });
+                    auto found =
+                        std::find_if(sources.begin(), sources.end(), [&](const Source& source) {
+                            return !source.is_image && source.host == host;
+                        });
                     if (found != sources.end()) {
                         found->pages.push_back(page);
                     } else {
@@ -564,9 +566,11 @@ bool SessionImpl::try_spill_checkpoint(CheckpointHandle handle) {
             }
             return true;
         };
-        if (!collect(record.text_prefix(), kTextKvPool.index)) { unwind(); return false; }
-        if (record.backend_prefix() &&
-            !collect(*record.backend_prefix(), kBackendKvPool.index)) {
+        if (!collect(record.text_prefix(), kTextKvPool.index)) {
+            unwind();
+            return false;
+        }
+        if (record.backend_prefix() && !collect(*record.backend_prefix(), kBackendKvPool.index)) {
             unwind();
             return false;
         }
@@ -597,15 +601,11 @@ bool SessionImpl::try_spill_checkpoint(CheckpointHandle handle) {
     transaction->reservation.emplace(std::move(*execution_reservation));
     auto& migration = transaction->transaction;
     migration.use_spill_store(*state_spill);
-    if (state_copy) {
-        migration.add_state_copy(std::move(*state_copy), false);
-    }
+    if (state_copy) { migration.add_state_copy(std::move(*state_copy), false); }
     for (auto& entry : backups) {
         migration.add_backup(entry.pool, {entry.page}, std::move(entry.reservation), true);
     }
-    for (const auto& source : sources) {
-        migration.add_spill_out(source.host, source.spill);
-    }
+    for (const auto& source : sources) { migration.add_spill_out(source.host, source.spill); }
     context_operation_ = std::move(transaction);
     try {
         (void)submit_context(*context_operation_, ContextWork{});

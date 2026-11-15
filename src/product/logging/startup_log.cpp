@@ -201,9 +201,9 @@ struct StartupLogRenderer::Impl {
         case StartupStatus::Begin: {
             const Clock::time_point now = Clock::now();
             phases[index]               = PhaseProgress{
-                              .last_persistent  = now,
-                              .last_interactive = now - kInteractiveRefresh,
-                              .sample_time      = now,
+                .last_persistent  = now,
+                .last_interactive = now - kInteractiveRefresh,
+                .sample_time      = now,
             };
             if (event.phase == StartupPhase::EngineStartup) {
                 logger->info("starting engine");

@@ -109,12 +109,13 @@ struct ModelFixture {
         put_word(file.payload, calibration + 4, 0x40400000, 4);
         const std::array roles = {"query", "key", "gate", "value"};
         // NVFP4's scale block spans 128 rows, so each part is 128 rows: 128 rows x 128 elements.
-        const std::array rows  = {0, 1, 2, 3, 4};
+        const std::array rows = {0, 1, 2, 3, 4};
         for (std::size_t i = 0; i < roles.size(); ++i) {
             const auto name             = p + "attention/" + roles[i];
             file.root["bindings"][name] = {
-                {"parts", Json::array({{{"object", "mixer-storage"},
-                                        {"range", {rows[i] * 128 * 128, rows[i + 1] * 128 * 128}}}})}};
+                {"parts",
+                 Json::array({{{"object", "mixer-storage"},
+                               {"range", {rows[i] * 128 * 128, rows[i + 1] * 128 * 128}}}})}};
             use(name, p + "mixer_input", i < 2 ? 0 : 1);
         }
         parameter(p + "attention/query_norm", {8});
@@ -187,8 +188,7 @@ void logical_data_and_instances() {
     const auto& query     = plan->parameter(attention.query);
     const auto& gate      = plan->parameter(attention.gate);
     require(query.binding.parts[0].object == gate.binding.parts[0].object &&
-                query.binding.parts[0].begin == 0 &&
-                gate.binding.parts[0].begin == 2 * 128 * 128,
+                query.binding.parts[0].begin == 0 && gate.binding.parts[0].begin == 2 * 128 * 128,
             "Q/gate logical row correspondence changed");
     require(plan->uses(attention.query)[0].activation_input_divisor == 2.0F &&
                 plan->uses(attention.gate)[0].activation_input_divisor == 3.0F,

@@ -1,7 +1,8 @@
 // Implements: include/ninfer/ops/target_logprobs.h
 // Match: wrapper-validated contiguous tensors and valid vocabulary rows.
-// Algorithm assumptions: one independent CTA per column; no global workspace. The ranking lists live
-// in shared memory, so reporting them is a compile-time choice and an unranked call allocates none.
+// Algorithm assumptions: one independent CTA per column; no global workspace. The ranking lists
+// live in shared memory, so reporting them is a compile-time choice and an unranked call allocates
+// none.
 #include "ops/launcher/target_logprobs.h"
 
 #include "core/device.h"
@@ -30,8 +31,8 @@ void target_logprobs_launch(const Tensor& logits, const Tensor& target_ids, std:
                             cudaStream_t stream) {
     const unsigned int columns = static_cast<unsigned int>(logits.ne[1]);
     float* output_values       = static_cast<float*>(output.data);
-    const std::int32_t top_k =
-        top_ids != nullptr ? static_cast<std::int32_t>(top_ids->ne[0]) : static_cast<std::int32_t>(0);
+    const std::int32_t top_k   = top_ids != nullptr ? static_cast<std::int32_t>(top_ids->ne[0])
+                                                    : static_cast<std::int32_t>(0);
     if (top_k > 0) {
         launch_columns<true>(columns, logits, target_ids, output_values, valid_rows, top_k,
                              static_cast<std::int32_t*>(top_ids->data),

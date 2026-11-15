@@ -74,7 +74,7 @@ int run(std::span<const Call> calls, int recipe = 0, bool repeated = false) {
     for (auto call : calls) {
         const auto label = "sigmoid-route/recipe" + std::to_string(recipe) + "/T" +
                            std::to_string(call.t) + (call.graph ? "/graph" : "/eager");
-        const auto cap = ops::topk_sigmoid_route_workspace_capacity_bytes(p, call.t, call.t);
+        const auto cap   = ops::topk_sigmoid_route_workspace_capacity_bytes(p, call.t, call.t);
         GuardedDeviceBuffer ids(std::size_t(K) * call.t * 4),
             coefficients(std::size_t(K) * call.t * 4), scratch(cap + 256);
         MemoryArena ws(scratch.span());

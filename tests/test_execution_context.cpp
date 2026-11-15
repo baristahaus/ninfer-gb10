@@ -23,9 +23,7 @@ template <typename Exception>
 bool throws(const std::vector<int>& ids) {
     try {
         validate_execution_device_ids(ids);
-    } catch (const Exception&) {
-        return true;
-    } catch (...) {
+    } catch (const Exception&) { return true; } catch (...) {
         return false;
     }
     return false;
@@ -33,15 +31,13 @@ bool throws(const std::vector<int>& ids) {
 
 int test_accepted_lists() {
     int failures = 0;
-    for (const std::vector<int> ids : {std::vector<int>{0}, std::vector<int>{0, 1},
-                                       std::vector<int>{0, 1, 2}, std::vector<int>{3},
-                                       std::vector<int>{2, 0, 1}}) {
+    for (const std::vector<int> ids :
+         {std::vector<int>{0}, std::vector<int>{0, 1}, std::vector<int>{0, 1, 2},
+          std::vector<int>{3}, std::vector<int>{2, 0, 1}}) {
         bool accepted = true;
         try {
             validate_execution_device_ids(ids);
-        } catch (...) {
-            accepted = false;
-        }
+        } catch (...) { accepted = false; }
         failures += check(accepted, "an accepted device list was rejected (size " +
                                         std::to_string(ids.size()) + ")");
     }

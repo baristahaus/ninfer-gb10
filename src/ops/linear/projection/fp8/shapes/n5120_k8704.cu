@@ -48,12 +48,9 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t
 void launch_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Workspace scratch,
                cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens <= 64)
-        return launch_fp8_a8_tma<Geometry, Tma32x64>(x, weight, out, scratch, stream);
-    if (tokens <= 128)
-        return launch_fp8_a8_tma<Geometry, Small>(x, weight, out, scratch, stream);
-    if (tokens <= 256)
-        return launch_fp8_a8_tma<Geometry, Mid>(x, weight, out, scratch, stream);
+    if (tokens <= 64) return launch_fp8_a8_tma<Geometry, Tma32x64>(x, weight, out, scratch, stream);
+    if (tokens <= 128) return launch_fp8_a8_tma<Geometry, Small>(x, weight, out, scratch, stream);
+    if (tokens <= 256) return launch_fp8_a8_tma<Geometry, Mid>(x, weight, out, scratch, stream);
     // Wider token tiles avoid an extra wave in the gaps between the bulk anchors.
     if (tokens <= 384 || (tokens > 512 && tokens <= 768))
         return launch_fp8_a8_tma<Geometry, Wide>(x, weight, out, scratch, stream);

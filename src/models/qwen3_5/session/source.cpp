@@ -169,7 +169,7 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
         std::optional<context::HostPageReplica> previous;
         std::uint32_t spilled_pages = 0, spilled_runs = 0;
         TransferWork spill_work;
-        const auto spill_stride = pages.host_page_layout().page_stride;
+        const auto spill_stride     = pages.host_page_layout().page_stride;
         const auto finish_spill_run = [&] {
             if (!spilled_pages) { return; }
             spill_work.payload_bytes += static_cast<std::uint64_t>(spilled_pages) * spill_stride;
@@ -223,9 +223,8 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
         return std::nullopt;
     }
     if (record.history().backend &&
-        !scan(*backend_kv_histories, *backend_kv_pages, *record.history().backend,
-              backend_frontier, runtime::ContextTransferResource{kBackendKvPool},
-              backend_binding.tail_copies)) {
+        !scan(*backend_kv_histories, *backend_kv_pages, *record.history().backend, backend_frontier,
+              runtime::ContextTransferResource{kBackendKvPool}, backend_binding.tail_copies)) {
         return std::nullopt;
     }
     return candidate;

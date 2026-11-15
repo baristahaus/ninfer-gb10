@@ -19,7 +19,7 @@ void validate_replay_record(const Tensor& q, const Tensor& k, const Tensor& v, c
     const std::int32_t width       = q.ne[2];
     const std::int32_t rows        = q.ne[3];
     const bool registered_heads    = (qk_heads == 16 && (value_heads == 48 || value_heads == 32)) ||
-                                  (qk_heads == 8 && value_heads == 24);
+                                     (qk_heads == 8 && value_heads == 24);
     if (!registered_heads || width < 2 || width > 16 || rows <= 0 || rows > kMaximumRows) {
         throw std::invalid_argument(std::string(kOp) + ": unsupported geometry");
     }
@@ -110,7 +110,7 @@ void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const 
                                         GdnRecurrenceRecords records, Tensor& out,
                                         const GdnPendingFold& pending, cudaStream_t stream) {
     constexpr const char* kOp = "gated_delta_net_fold_replay_record";
-    const auto device = q.device;
+    const auto device         = q.device;
     validate_replay_record(q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots,
                            records.key, records.value, records.gate, out, device);
     const std::int32_t qk_heads     = q.ne[1];
@@ -122,16 +122,16 @@ void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const 
     }
     namespace operand = common::operand;
     operand::tensor(pending.rows, DType::I32, {4, pending_rows}, 16, kOp, "pending rows", device);
-    operand::tensor(pending.key_record, DType::BF16, {detail::gated_delta_net::kStateDim, qk_heads,
-                                                      width, pending_rows},
-                    8, kOp, "pending key record", device);
+    operand::tensor(pending.key_record, DType::BF16,
+                    {detail::gated_delta_net::kStateDim, qk_heads, width, pending_rows}, 8, kOp,
+                    "pending key record", device);
     operand::tensor(pending.value_record, DType::BF16,
                     {detail::gated_delta_net::kStateDim, value_heads, width, pending_rows}, 2, kOp,
                     "pending value record", device);
     operand::tensor(pending.gate_record, DType::FP32, {2, value_heads, width, pending_rows}, 8, kOp,
                     "pending gate record", device);
-    const std::array<const Tensor*, 7> written{&ssm_states,  &records.key,   &records.value,
-                                               &records.gate, &out,           &pending.key_record,
+    const std::array<const Tensor*, 7> written{&ssm_states,   &records.key, &records.value,
+                                               &records.gate, &out,         &pending.key_record,
                                                &pending.rows};
     std::array<operand::Blocks, 9> ranges{};
     std::size_t count = 0;
@@ -141,10 +141,11 @@ void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const 
     for (std::size_t i = 0; i < count; ++i)
         for (std::size_t j = 0; j < i; ++j)
             if (operand::overlaps(ranges[i], ranges[j]))
-                throw std::invalid_argument(
-                    std::string(kOp) + ": pending records must be a separate copy of the "
-                                        "previous round and must not overlap the operands");
-    static_assert(sizeof(detail::gated_delta_net::GdnReplayFoldKernelRow) == 4 * sizeof(std::int32_t));
+                throw std::invalid_argument(std::string(kOp) +
+                                            ": pending records must be a separate copy of the "
+                                            "previous round and must not overlap the operands");
+    static_assert(sizeof(detail::gated_delta_net::GdnReplayFoldKernelRow) ==
+                  4 * sizeof(std::int32_t));
     detail::gated_delta_net::launch_recurrent_fold_record(
         q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots, records.key,
         records.value, records.gate, out,

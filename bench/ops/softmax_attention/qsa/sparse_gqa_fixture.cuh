@@ -151,9 +151,9 @@ struct SparseGqaFixture {
             const Tensor planes[]{key, value, ks, vs};
             for (int i = 0; i < 4; ++i) {
                 if (!planes[i].data) continue;
-                buffers[i]    = DeviceBuffer(ninfer::bench::device_context().device(),
-                                             std::size_t(planes[i].ne[0]) *
-                                                 dtype_size(planes[i].dtype) * 64 * 2 * encoded_pages);
+                buffers[i] = DeviceBuffer(ninfer::bench::device_context().device(),
+                                          std::size_t(planes[i].ne[0]) *
+                                              dtype_size(planes[i].dtype) * 64 * 2 * encoded_pages);
                 contiguous[i] = Tensor(buffers[i].span(), planes[i].dtype,
                                        {planes[i].ne[0], 64, 2, encoded_pages});
             }
@@ -253,12 +253,12 @@ struct SparseGqaFixture {
         query      = Tensor(query_data.span(), DType::BF16, {256, o.query_heads, tokens, B});
         gate       = Tensor(gate_data.span(), DType::BF16, {256, o.query_heads, tokens, B});
         out        = Tensor(output_data.span(), DType::BF16, {256, o.query_heads, tokens, B});
-        cache    = {key, value,      ks,       vs, Tensor(tables.span(), DType::I32, {logical, B}),
-                    256, o.kv_heads, o.storage};
-        batch    = {Tensor(positions.span(), DType::I32, {tokens, B}),
-                    Tensor(valid.span(), DType::I32, {B}), Tensor(table_rows.span(), DType::I32, {B})};
-        selected = {Tensor(ids.span(), DType::I32, {512, tokens, B}),
-                    Tensor(counts.span(), DType::I32, {tokens, B})};
+        cache = {key, value,      ks,       vs, Tensor(tables.span(), DType::I32, {logical, B}),
+                 256, o.kv_heads, o.storage};
+        batch = {Tensor(positions.span(), DType::I32, {tokens, B}),
+                 Tensor(valid.span(), DType::I32, {B}), Tensor(table_rows.span(), DType::I32, {B})};
+        selected        = {Tensor(ids.span(), DType::I32, {512, tokens, B}),
+                           Tensor(counts.span(), DType::I32, {tokens, B})};
         workspace_bytes = ops::qsa_sparse_gqa_workspace_capacity_bytes(
             cache.storage, o.query_heads, o.kv_heads, tokens, tokens, B, envelope,
             execution.multiprocessor_count());

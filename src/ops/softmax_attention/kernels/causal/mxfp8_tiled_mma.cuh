@@ -148,7 +148,7 @@ __global__ __maxnreg__(Schedule::kMaxRegisters) void mxfp8_kv_tiled_mma_kernel(
                         kv::page_major_offset<Values::kScaleItems, Geometry::KVHeads>(
                             physical_page, kv_head, page_offset0 + key_l, 0);
                     common::cp_async<16>(v_scale_s + key_l * Values::kScaleItems,
-                                               cache_v_scale + v_off);
+                                         cache_v_scale + v_off);
                 }
             } else {
                 k_scale_s[key_l] = __float2half_rn(0.0F);
@@ -156,7 +156,7 @@ __global__ __maxnreg__(Schedule::kMaxRegisters) void mxfp8_kv_tiled_mma_kernel(
                     v_scale_s[key_l] = __float2half_rn(0.0F);
                 else
                     common::store_vec(v_scale_s + key_l * Values::kScaleItems,
-                                            make_int4(0, 0, 0, 0));
+                                      make_int4(0, 0, 0, 0));
             }
         }
     };

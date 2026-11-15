@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
             const double seconds = timing.median_us * 1.0e-6;
             const double flops   = 2.0 * static_cast<double>(kGateUpRows) * kHidden * tokens;
             const double bytes   = static_cast<double>(packed.model_weight_bytes()) +
-                                 2.0 * static_cast<double>(kHidden + kOutputRows) * tokens;
+                                   2.0 * static_cast<double>(kHidden + kOutputRows) * tokens;
             const std::size_t workspace_exact = ops::linear_swiglu_workspace_capacity_bytes(
                 QType::Q4_G64_FP16, kGateUpRows, kHidden, tokens, tokens);
             std::printf("T=%-4d median=%9.3f us min=%9.3f p95=%9.3f %7.1f GB/s %7.2f TFLOP/s "

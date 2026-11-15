@@ -51,12 +51,12 @@ namespace ninfer::ops {
 // is exactly the width of kTextRopeInvFrequency). A call site must supply these from
 // ModelConfig rather than rely on the defaults.
 struct YarnParams {
-    float factor              = 1.0F;    // 1.0 = disabled
-    int original_max_position = 262144;  // the model's TRUE native window, never scaled
+    float factor              = 1.0F;   // 1.0 = disabled
+    int original_max_position = 262144; // the model's TRUE native window, never scaled
     float beta_fast           = 32.0F;
     float beta_slow           = 1.0F;
     float theta               = 1.0e7F;
-    int rotary_dim            = 64;      // full rotary width; the table holds rotary_dim/2 pairs
+    int rotary_dim            = 64; // full rotary width; the table holds rotary_dim/2 pairs
 };
 
 // The ramp boundaries as PAIR indices: pairs below `low` extrapolate, pairs above `high`
@@ -87,9 +87,9 @@ NINFER_YARN_HD inline YarnRamp yarn_ramp(const YarnParams& p) {
     const double slow = yarn_correction_dim(static_cast<double>(p.beta_slow), p.rotary_dim,
                                             static_cast<double>(p.theta), p.original_max_position);
     YarnRamp ramp;
-    ramp.low  = ::floor(fast) < 0.0 ? 0.0 : ::floor(fast);
+    ramp.low           = ::floor(fast) < 0.0 ? 0.0 : ::floor(fast);
     const double limit = static_cast<double>(p.rotary_dim) - 1.0;
-    ramp.high = ::ceil(slow) > limit ? limit : ::ceil(slow);
+    ramp.high          = ::ceil(slow) > limit ? limit : ::ceil(slow);
     if (ramp.high - ramp.low < 1.0e-3) { ramp.high = ramp.low + 1.0e-3; }
     return ramp;
 }
@@ -129,6 +129,6 @@ NINFER_YARN_HD inline float yarn_attention_scale(const YarnParams& p) {
     return static_cast<float>(0.1 * ::log(static_cast<double>(p.factor)) + 1.0);
 }
 
-}  // namespace ninfer::ops
+} // namespace ninfer::ops
 
 #undef NINFER_YARN_HD

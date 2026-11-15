@@ -229,7 +229,7 @@ int read_footprint(DeviceContext& device, KvCacheStorage storage, bool padded, i
                         if (!bytes[i]) continue;
                         const auto& plane = *targets[i];
                         const auto off    = leading[i] + physical * plane.nb[3] + h * plane.nb[2] +
-                                         token % 64 * plane.nb[1];
+                                            token % 64 * plane.nb[1];
                         copy(static_cast<std::uint8_t*>(payloads[i].data()) + off, host[i] + off,
                              plane.ne[0] * dtype_size(plane.dtype));
                     }
@@ -404,7 +404,7 @@ void add_cases(OpSuite& suite, KvCacheStorage storage) {
     const std::string prefix = std::string("sparse_gqa/") + kv_cache_storage_name(storage);
     const auto special       = [&](std::string id, auto run, const char* execution = "eager") {
         suite.add(prefix + "/" + id, [=] { return run(cuda_environment().context); },
-                        {{"format", kv_cache_storage_name(storage)}, {"execution", execution}});
+                  {{"format", kv_cache_storage_name(storage)}, {"execution", execution}});
     };
     special("contract", [=](auto& device) {
         return storage == KvCacheStorage::BFloat16 ? validation(device)

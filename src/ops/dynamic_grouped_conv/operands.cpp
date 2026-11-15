@@ -20,7 +20,7 @@ void require_tensor(const Tensor& tensor, DType dtype, std::int32_t d0, std::int
 }
 
 void validate_prepare_weight(const Weight& weight) {
-    const Shape shape             = Shape::of(static_cast<int>(weight.k));
+    const Shape shape = Shape::of(static_cast<int>(weight.k));
     const std::uint64_t kPayloadBytes =
         static_cast<std::uint64_t>(shape.coefficient_rows) * shape.hidden * sizeof(std::uint16_t);
     if (weight.qtype != QType::BF16 || weight.layout != QuantLayout::Contiguous ||
@@ -28,9 +28,9 @@ void validate_prepare_weight(const Weight& weight) {
         weight.n != shape.coefficient_rows || weight.k != shape.hidden ||
         weight.shape[0] != shape.coefficient_rows || weight.shape[1] != shape.hidden ||
         weight.padded_shape[0] != shape.coefficient_rows ||
-        weight.padded_shape[1] != shape.hidden ||
-        weight.qhigh != nullptr || weight.scales != nullptr || weight.group_size != 0 ||
-        weight.group != 0 || !common::operand::aligned(weight.qdata, 16)) {
+        weight.padded_shape[1] != shape.hidden || weight.qhigh != nullptr ||
+        weight.scales != nullptr || weight.group_size != 0 || weight.group != 0 ||
+        !common::operand::aligned(weight.qdata, 16)) {
         throw std::invalid_argument(
             "dynamic grouped conv prepare: invalid kernel_projection_weight");
     }
@@ -50,8 +50,7 @@ void validate_add_weight(const Weight& weight, std::int32_t input_rows) {
     if (weight.qtype != QType::Q8_G32_FP16 || weight.layout != QuantLayout::RowSplit ||
         weight.scale_dtype != DType::FP16 || weight.group_size != 32 || weight.group != 32 ||
         weight.ndim != 2 || weight.n != shape.hidden || weight.k != input_rows ||
-        weight.shape[0] != shape.hidden || weight.shape[1] != input_rows ||
-        weight.shape[2] != 1 ||
+        weight.shape[0] != shape.hidden || weight.shape[1] != input_rows || weight.shape[2] != 1 ||
         weight.shape[3] != 1 || weight.padded_shape[0] != shape.hidden ||
         weight.padded_shape[1] != input_rows || weight.padded_shape[2] != 1 ||
         weight.padded_shape[3] != 1 || weight.qhigh != nullptr || weight.high_plane_bytes != 0 ||
@@ -64,9 +63,9 @@ void validate_add_weight(const Weight& weight, std::int32_t input_rows) {
 void require_add_nonoverlap(const Tensor& x, const Weight& projection_weight,
                             const Tensor& base_kernel, const Tensor& finish_delta,
                             const Tensor& residual, const MemoryArena& workspace) {
-    const std::size_t rows       = static_cast<std::size_t>(projection_weight.n);
-    const std::size_t columns    = static_cast<std::size_t>(projection_weight.k);
-    const std::size_t code_bytes = rows * columns;
+    const std::size_t rows        = static_cast<std::size_t>(projection_weight.n);
+    const std::size_t columns     = static_cast<std::size_t>(projection_weight.k);
+    const std::size_t code_bytes  = rows * columns;
     const std::size_t scale_bytes = rows * (columns / 32) * sizeof(std::uint16_t);
     const std::array<common::operand::Range, 7> ranges{{
         common::operand::range(x.data, x.bytes(), "dynamic grouped conv"),
@@ -128,14 +127,14 @@ void validate_prepare(const Tensor& residual, const Tensor& norm_weight, float e
     }
     validate_interval(width, width, batch_size, batch_size, kPrepareOp);
     const Shape shape = Shape::of(residual.ne[0]);
-    require_tensor(residual, DType::BF16, shape.hidden, width, batch_size, 1, kPrepareOp, "residual",
-                   execution.device());
+    require_tensor(residual, DType::BF16, shape.hidden, width, batch_size, 1, kPrepareOp,
+                   "residual", execution.device());
     require_tensor(norm_weight, DType::BF16, shape.hidden, 1, 1, 1, kPrepareOp, "norm_weight",
                    execution.device());
-    require_tensor(base_kernel, DType::BF16, shape.hidden, kTaps, kSides, 1, kPrepareOp, "base_kernel",
-                   execution.device());
-    require_tensor(prepared, DType::BF16, shape.hidden, width, batch_size, 1, kPrepareOp, "prepared",
-                   execution.device());
+    require_tensor(base_kernel, DType::BF16, shape.hidden, kTaps, kSides, 1, kPrepareOp,
+                   "base_kernel", execution.device());
+    require_tensor(prepared, DType::BF16, shape.hidden, width, batch_size, 1, kPrepareOp,
+                   "prepared", execution.device());
     require_tensor(finish_delta, DType::BF16, shape.groups, kTaps, width, batch_size, kPrepareOp,
                    "finish_delta", execution.device());
     common::operand::device(kernel_projection_weight.device, execution.device(), kPrepareOp,

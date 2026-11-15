@@ -98,9 +98,9 @@ __device__ __forceinline__ void bf16_small_t_compute_rows(
     static_assert((Geometry::kInputRows % kValuesPerPhase) == 0);
     constexpr int kPhases = Geometry::kInputRows / kValuesPerPhase;
     using Pack            = Bf16GemvPack<Schedule::kValuesPerLane>;
-    const int phase0      = Schedule::kPhaseOrder == Bf16PhaseOrder::Sequential
-                                ? 0
-                                : ((row0 / Schedule::kRowsPerWarp) * Schedule::kPhaseStride) % kPhases;
+    const int phase0 = Schedule::kPhaseOrder == Bf16PhaseOrder::Sequential
+                           ? 0
+                           : ((row0 / Schedule::kRowsPerWarp) * Schedule::kPhaseStride) % kPhases;
 
     if constexpr (Schedule::kActivationAccess == Bf16SmallTActivationAccess::WarpPacked) {
 #pragma unroll Schedule::kPhaseUnroll
@@ -251,8 +251,8 @@ struct Bf16SmallTProjections {
 
 template <class Geometry, int ActiveTokens, class Schedule, int Count>
 __global__
-__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small_t_group_kernel(
-    const __nv_bfloat16* __restrict__ x, const Bf16SmallTProjections<Count> projections);
+    __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small_t_group_kernel(
+        const __nv_bfloat16* __restrict__ x, const Bf16SmallTProjections<Count> projections);
 
 struct Bf16SmallTContiguousOutput {
     __nv_bfloat16* data;

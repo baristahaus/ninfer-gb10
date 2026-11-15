@@ -185,10 +185,10 @@ int main(int argc, char** argv) {
             const auto launch = make_launch(tokens);
             const bench::ColdTiming timing =
                 bench::measure_cold_launch(launch, flush, cuda, options.warmup, options.repeat);
-            const double seconds      = timing.median_us * 1.0e-6;
-            const double useful_flops = 2.0 * static_cast<double>(kGateUpRows) * kHidden * tokens;
-            const double model_bytes  = static_cast<double>(packed.model_weight_bytes()) +
-                                       2.0 * static_cast<double>(kHidden + kOutputRows) * tokens;
+            const double seconds       = timing.median_us * 1.0e-6;
+            const double useful_flops  = 2.0 * static_cast<double>(kGateUpRows) * kHidden * tokens;
+            const double model_bytes   = static_cast<double>(packed.model_weight_bytes()) +
+                                         2.0 * static_cast<double>(kHidden + kOutputRows) * tokens;
             const double useful_tflops = useful_flops / seconds / 1.0e12;
             const double effective_gbs = model_bytes / seconds / 1.0e9;
             const bool a4 = options.policy == ops::LinearPolicy::AllowA4 && tokens >= 5;

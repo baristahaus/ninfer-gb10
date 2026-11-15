@@ -6,6 +6,7 @@
 namespace ninfer::flashnext_runtime {
 
 using namespace ninfer::runtime;
+
 namespace {
 
 [[nodiscard]] bool contains(std::span<const std::uint64_t> ids, std::uint64_t id) noexcept {

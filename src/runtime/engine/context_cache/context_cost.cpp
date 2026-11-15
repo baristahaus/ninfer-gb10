@@ -96,7 +96,7 @@ std::string require_nonempty_string(const Json& value, std::string_view context)
 
 void validate_transfer(
     const std::array<ContextTransferCost, kContextTransferDirectionCount>& transfer,
-                       std::string_view context) {
+    std::string_view context) {
     for (std::size_t index = 0; index < transfer.size(); ++index) {
         const ContextTransferCost& value = transfer[index];
         if (value.batch_ns == 0 && value.operation_ns == 0 && value.ns_per_byte_q32 == 0) {
@@ -391,10 +391,8 @@ PricedMaterializationMachineWork
 price_materialization_machine_work(const ContextMachineCostModel& model,
                                    const MaterializationMachineWork& work) noexcept {
     constexpr std::array directions{
-        ContextTransferDirection::DeviceToHost,
-        ContextTransferDirection::HostToDevice,
-        ContextTransferDirection::DeviceToDevice,
-        ContextTransferDirection::HostToSpill,
+        ContextTransferDirection::DeviceToHost,   ContextTransferDirection::HostToDevice,
+        ContextTransferDirection::DeviceToDevice, ContextTransferDirection::HostToSpill,
         ContextTransferDirection::SpillToHost,
     };
     const auto phase_ns = [&](const CoalescedTransferWork& phase) {
@@ -431,10 +429,8 @@ std::uint64_t price_checkpoint_recovery_work(
     const ContextMachineCostModel& model,
     std::span<const CheckpointRecoveryAlternativeWork> alternatives) noexcept {
     constexpr std::array directions{
-        ContextTransferDirection::DeviceToHost,
-        ContextTransferDirection::HostToDevice,
-        ContextTransferDirection::DeviceToDevice,
-        ContextTransferDirection::HostToSpill,
+        ContextTransferDirection::DeviceToHost,   ContextTransferDirection::HostToDevice,
+        ContextTransferDirection::DeviceToDevice, ContextTransferDirection::HostToSpill,
         ContextTransferDirection::SpillToHost,
     };
     std::uint64_t best = std::numeric_limits<std::uint64_t>::max();
@@ -466,10 +462,8 @@ std::uint64_t price_context_transfer_requirements(
                                                : static_cast<std::uint32_t>(operations);
     }
     constexpr std::array directions{
-        ContextTransferDirection::DeviceToHost,
-        ContextTransferDirection::HostToDevice,
-        ContextTransferDirection::DeviceToDevice,
-        ContextTransferDirection::HostToSpill,
+        ContextTransferDirection::DeviceToHost,   ContextTransferDirection::HostToDevice,
+        ContextTransferDirection::DeviceToDevice, ContextTransferDirection::HostToSpill,
         ContextTransferDirection::SpillToHost,
     };
     std::uint64_t total = 0;
@@ -622,11 +616,10 @@ resolve_context_machine_cost(const ContextCostIdentity& identity,
     };
 }
 
-void upsert_context_transfer_cost_atomic(const std::filesystem::path& path,
-                                         std::string_view hardware_class,
-                                         const std::array<ContextTransferCost,
-                                         kContextTransferDirectionCount>& transfer,
-                                         std::string_view provenance_json) {
+void upsert_context_transfer_cost_atomic(
+    const std::filesystem::path& path, std::string_view hardware_class,
+    const std::array<ContextTransferCost, kContextTransferDirectionCount>& transfer,
+    std::string_view provenance_json) {
     if (path.empty()) { throw std::invalid_argument("context-cost preset output is empty"); }
     if (hardware_class.empty()) {
         throw std::invalid_argument("context-cost hardware_class is empty");

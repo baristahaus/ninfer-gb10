@@ -39,8 +39,8 @@ bool enable_peer_access(const ExecutionContext& ec);
 // TWO CALLING FORMS, and they are NOT interchangeable:
 //
 //   * `allreduce_sum` — the SINGLE-OWNER form. ONE caller takes one capture slot and enqueues BOTH
-//     ranks' exchange kernels, on both ranks' streams. This is the form for a Program that owns both
-//     devices (the Flash-Next lane, whose ExecutionContext is shared inside one Program).
+//     ranks' exchange kernels, on both ranks' streams. This is the form for a Program that owns
+//     both devices (the Flash-Next lane, whose ExecutionContext is shared inside one Program).
 //     Calling it from each rank's own Program takes two slots and enqueues four exchanges per
 //     reduce, which desynchronises the slot round robin.
 //   * `allreduce_sum_rank` — the PER-RANK form. Each rank's Program calls it once, for its own
@@ -54,8 +54,8 @@ bool enable_peer_access(const ExecutionContext& ec);
 // part in the arithmetic.
 //
 // Both forms produce the same bits: the addition is commutative, so the two ranks compute the same
-// result from the same two partials; the local combine is float(mine) + float(peer) in FP32 with one
-// round-to-nearest-even on store. Consecutive calls need no host synchronization between them.
+// result from the same two partials; the local combine is float(mine) + float(peer) in FP32 with
+// one round-to-nearest-even on store. Consecutive calls need no host synchronization between them.
 // `mailbox` is mutable: taking a slot advances its round robin.
 void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox, std::span<void* const> data,
                    std::size_t bytes);
@@ -75,7 +75,6 @@ void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox, std::span<v
 // mailbox, a payload set that is not one per rank, a null payload, or bytes that are not a nonzero
 // multiple of 16 within `mailbox.max_bytes()`.
 void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
-                        std::span<void* const> data, std::size_t bytes,
-                        const char* site = "?");
+                        std::span<void* const> data, std::size_t bytes, const char* site = "?");
 
 } // namespace ninfer::ops

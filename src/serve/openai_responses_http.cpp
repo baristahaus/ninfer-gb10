@@ -84,12 +84,12 @@ void commit_stored_response(OpenAIResponsesStore& store, PendingResponseStorage 
         throw std::logic_error("stored Response has no Engine session key");
     }
     StoredOpenAIResponse stored;
-    stored.id                = std::move(id);
-    stored.session_key       = std::move(pending.session_key);
-    stored.response          = response;
-    stored.input_items       = std::move(pending.input_items);
-    stored.context           = terminal_context(std::move(pending.previous_context),
-                                                std::move(pending.input_turns), std::move(output_history));
+    stored.id          = std::move(id);
+    stored.session_key = std::move(pending.session_key);
+    stored.response    = response;
+    stored.input_items = std::move(pending.input_items);
+    stored.context = terminal_context(std::move(pending.previous_context),
+                                      std::move(pending.input_turns), std::move(output_history));
     stored.preserve_thinking = preserve_thinking;
     store.put(std::move(stored));
 }
@@ -274,10 +274,10 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
         prepared = service_->prepare(
             resolved.generation,
             request.stream ? GenerationConsumerMode::Streaming : GenerationConsumerMode::Aggregate,
-            {.constraint_timings = true,
+            {.constraint_timings    = true,
              .accepted_length_steps = service_->speculation_detail_steps(),
-             .scheduling         = scheduling_observer(req_id, metadata.http_request_id),
-             .first_token        = first_token_observer()},
+             .scheduling            = scheduling_observer(req_id, metadata.http_request_id),
+             .first_token           = first_token_observer()},
             [&req] { return client_disconnected(req); }, std::move(resolved.cache_hints));
     } catch (const ApiException& exception) {
         const ApiError error = responses_error(exception.error());

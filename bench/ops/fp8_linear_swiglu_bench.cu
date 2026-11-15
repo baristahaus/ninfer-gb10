@@ -145,10 +145,10 @@ int main(int argc, char** argv) {
             const auto timing =
                 bench::measure_cold_launch([&](CudaExecutionView cuda) { launch(tokens, cuda); },
                                            flush, cuda, options.warmup, options.repeat);
-            const double seconds = timing.median_us * 1.0e-6;
-            const double flops   = 2.0 * static_cast<double>(kGateUpRows) * kHidden * tokens;
-            const double bytes   = static_cast<double>(packed.model_weight_bytes()) +
-                                 2.0 * static_cast<double>(kHidden + kOutputRows) * tokens;
+            const double seconds    = timing.median_us * 1.0e-6;
+            const double flops      = 2.0 * static_cast<double>(kGateUpRows) * kHidden * tokens;
+            const double bytes      = static_cast<double>(packed.model_weight_bytes()) +
+                                      2.0 * static_cast<double>(kHidden + kOutputRows) * tokens;
             const double tflops     = flops / seconds / 1.0e12;
             const bool tensor_route = options.policy == ops::LinearPolicy::AllowA8 && tokens >= 5;
             const double tensor_percent = tensor_route

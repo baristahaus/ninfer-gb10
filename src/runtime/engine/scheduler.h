@@ -80,9 +80,9 @@ public:
             membership.lanes[membership.size]     = lane;
             membership.sequences[membership.size] = *request->sequence;
             membership.budgets[membership.size]   = RoundBudget{
-                  .generated_tokens_remaining = request->recovery_pending
-                                                    ? 1U
-                                                    : request->output.model_token_budget_remaining(
+                .generated_tokens_remaining = request->recovery_pending
+                                                  ? 1U
+                                                  : request->output.model_token_budget_remaining(
                                                         request->budget->remaining()),
             };
             if (membership.budgets[membership.size].generated_tokens_remaining == 0) {

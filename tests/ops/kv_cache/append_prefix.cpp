@@ -158,9 +158,9 @@ int run_case(int tokens, int commit_count, int first_position, bool cyclic,
     DeviceBuffer d_positions = to_device(positions);
     DeviceBuffer d_count     = to_device<std::int32_t>({commit_count});
     DeviceBuffer d_selector  = to_device<std::int32_t>({0});
-    DeviceBuffer d_table     = cyclic
-                                   ? DeviceBuffer(ninfer::test::cuda_environment().context.device(), 1)
-                                   : to_device(mapping);
+    DeviceBuffer d_table = cyclic
+                               ? DeviceBuffer(ninfer::test::cuda_environment().context.device(), 1)
+                               : to_device(mapping);
     GuardedDeviceBuffer cache_k(cache_count * sizeof(std::uint16_t));
     GuardedDeviceBuffer cache_v(cache_count * sizeof(std::uint16_t));
     cache_k.copy_from_host(initial_k.data(), cache_k.bytes());
@@ -385,7 +385,7 @@ int batch_selector_case(bool cyclic, int cyclic_capacity = kDFlashWindow) {
     const std::size_t row_input_count  = static_cast<std::size_t>(kHeadDim) * kKVHeads * tokens;
     const std::size_t lane_cache_count = static_cast<std::size_t>(kHeadDim) * kKVHeads *
                                          (cyclic ? cyclic_capacity : kPage * kPhysicalPages);
-    const auto host_k    = patterned_bits(row_input_count * batch, 0x31415926u);
+    const auto host_k                  = patterned_bits(row_input_count * batch, 0x31415926u);
     const auto host_v    = finite_patterned_bf16_bits(row_input_count * batch, 0x27182818u);
     const auto initial_k = patterned_bits(lane_cache_count * (cyclic ? batch : 1), 0x16180339u);
     const auto initial_v = patterned_bits(lane_cache_count * (cyclic ? batch : 1), 0x57721566u);
@@ -423,9 +423,9 @@ int batch_selector_case(bool cyclic, int cyclic_capacity = kDFlashWindow) {
     DeviceBuffer d_positions = to_device(positions);
     DeviceBuffer d_counts    = to_device(counts);
     DeviceBuffer d_selectors = to_device(selectors);
-    DeviceBuffer d_tables    = cyclic
-                                   ? DeviceBuffer(ninfer::test::cuda_environment().context.device(), 1)
-                                   : to_device(tables);
+    DeviceBuffer d_tables = cyclic
+                                ? DeviceBuffer(ninfer::test::cuda_environment().context.device(), 1)
+                                : to_device(tables);
     GuardedDeviceBuffer cache_k(initial_k.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer cache_v(initial_v.size() * sizeof(std::uint16_t));
     cache_k.copy_from_host(initial_k.data(), cache_k.bytes());

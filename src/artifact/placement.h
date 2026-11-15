@@ -115,10 +115,11 @@ struct MaterializationPlan {
 
 // The tier-aware form: the plain placements plan first, then every tiered bank gains a
 // compact hot mini-bank plus its budget-derived cache tail.
-[[nodiscard]] MaterializationPlan
-plan_materialization(const Reader& reader, std::span<const PlacementRequest> requests,
-                     std::span<const TierPlanInput> tiers, TierBudget budget,
-                     PreparedResources resources = {});
+[[nodiscard]] MaterializationPlan plan_materialization(const Reader& reader,
+                                                       std::span<const PlacementRequest> requests,
+                                                       std::span<const TierPlanInput> tiers,
+                                                       TierBudget budget,
+                                                       PreparedResources resources = {});
 
 [[nodiscard]] MaterializationPlan plan_materialization(const Reader&,
                                                        std::span<const TensorRequest>,

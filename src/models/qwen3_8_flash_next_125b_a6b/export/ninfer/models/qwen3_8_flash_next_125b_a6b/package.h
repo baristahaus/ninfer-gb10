@@ -133,7 +133,8 @@ struct Package {
                                                                WeightsProfile);
     [[nodiscard]] static std::unique_ptr<Program>
     // `peer_device` is rank 1's device on the two-GPU lane: the Program then builds rank 1's
-    // persistent storage and attaches the KV and StateImage mirrors. Null is the single-device lane.
+    // persistent storage and attaches the KV and StateImage mirrors. Null is the single-device
+    // lane.
     create_program(const LoadedModel&, SequencePlan&&, DeviceContext&, const StartupObserver&,
                    DeviceContext* peer_device = nullptr);
 };

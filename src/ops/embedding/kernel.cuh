@@ -127,7 +127,7 @@ __launch_bounds__(kEmbedGatherQ6Group* kEmbedGatherQ6GroupsPerBlock) __global__
                                                high + group_index * kEmbedGatherQ6HighBpr, lane);
     const std::int64_t out_idx = static_cast<std::int64_t>(t) * d +
                                  static_cast<std::int64_t>(g) * kEmbedGatherQ6Group + lane;
-    out[out_idx] = __float2bfloat16(static_cast<float>(code) * scale);
+    out[out_idx]               = __float2bfloat16(static_cast<float>(code) * scale);
 }
 
 __global__ void embed_gather_q8_kernel(const std::int32_t* ids, const std::uint8_t* codes,
@@ -200,7 +200,7 @@ __launch_bounds__(32) __global__
         codes[group_index * kEmbedGatherQ8Group + static_cast<std::int32_t>(threadIdx.x)]);
     const std::int64_t out_idx = static_cast<std::int64_t>(t) * kEmbedGatherQ8D +
                                  static_cast<std::int64_t>(g) * kEmbedGatherQ8Group + threadIdx.x;
-    out[out_idx] = __float2bfloat16(static_cast<float>(code) * scale);
+    out[out_idx]               = __float2bfloat16(static_cast<float>(code) * scale);
 }
 
 __launch_bounds__(256) __global__

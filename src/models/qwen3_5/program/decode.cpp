@@ -133,9 +133,9 @@ void RankProgramImpl::begin_target(ComputeOperation& operation) {
     auto& frame        = resources.frame;
     const bool forward = std::holds_alternative<ForwardWork>(operation.request.work.operation) ||
                          std::holds_alternative<ScoreWork>(operation.request.work.operation);
-    const int batch = forward ? 1 : static_cast<int>(operation.batch);
-    const int width = static_cast<int>(operation.width);
-    auto input      = frame.input_view(width, batch);
+    const int batch    = forward ? 1 : static_cast<int>(operation.batch);
+    const int width    = static_cast<int>(operation.width);
+    auto input         = frame.input_view(width, batch);
     if (!forward && graphs) {
         operation.fused_decision =
             !operation.speculative &&

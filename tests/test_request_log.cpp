@@ -103,11 +103,11 @@ int main() {
     load.device_object_count    = 42;
     load.host_object_count      = 6;
     load.context_cost           = {
-                  .transfer_source   = ninfer::ContextCostPresetSource::External,
-                  .prefill_source    = ninfer::ContextCostPresetSource::CompiledDefault,
-                  .hardware_class    = "nvidia-geforce-rtx-5090-sm120",
-                  .prefill_signature = "example-prefill-signature",
-                  .preset_path       = "local-costs.json",
+        .transfer_source   = ninfer::ContextCostPresetSource::External,
+        .prefill_source    = ninfer::ContextCostPresetSource::CompiledDefault,
+        .hardware_class    = "nvidia-geforce-rtx-5090-sm120",
+        .prefill_signature = "example-prefill-signature",
+        .preset_path       = "local-costs.json",
     };
 
     ninfer::EngineDescription description;
@@ -128,14 +128,14 @@ int main() {
     memory.allocations.persistent_device_bytes = 200;
     memory.allocations.workspace_device_bytes  = 500;
     memory.vision                              = ninfer::VisionWorkspaceMemorySummary{
-                                     .aggregate_prompt_tokens = 32768,
-                                     .max_item_tokens         = 16384,
-                                     .general_capacity_bytes  = 300,
-                                     .encode_required_bytes   = 400,
-                                     .handoff_offset_bytes    = 300,
-                                     .handoff_capacity_bytes  = 200,
-                                     .handoff_active_bytes    = 0,
-                                     .handoff_peak_bytes      = 150,
+        .aggregate_prompt_tokens = 32768,
+        .max_item_tokens         = 16384,
+        .general_capacity_bytes  = 300,
+        .encode_required_bytes   = 400,
+        .handoff_offset_bytes    = 300,
+        .handoff_capacity_bytes  = 200,
+        .handoff_active_bytes    = 0,
+        .handoff_peak_bytes      = 150,
     };
     budget.minimum_runtime_reservation_bytes     = 1300;
     budget.bytes_per_page_group                  = 100;
@@ -454,18 +454,18 @@ int main() {
     outcome.stats.computed_prefill_tokens         = 300;
     outcome.stats.prefix_reuse_path               = ninfer::PrefixReusePath::Checkpoint;
     outcome.stats.engine_timing                   = {
-                          .queue_wait_seconds                     = 0.001,
-                          .engine_boundary_exposed_seconds        = 0.001,
-                          .session_call_exposed_seconds           = 0.002,
-                          .executor_poll_exposed_seconds          = 0.003,
-                          .engine_commit_output_exposed_seconds   = 0.004,
-                          .engine_maintenance_exposed_seconds     = 0.005,
-                          .scheduler_yield_exposed_seconds        = 0.3,
-                          .decode_host_exposed_seconds            = 0.01,
-                          .decode_scheduler_yield_exposed_seconds = 0.2,
-                          .prefill_units                          = 4,
-                          .decode_rounds                          = 2,
-                          .control_units                          = 1,
+        .queue_wait_seconds                     = 0.001,
+        .engine_boundary_exposed_seconds        = 0.001,
+        .session_call_exposed_seconds           = 0.002,
+        .executor_poll_exposed_seconds          = 0.003,
+        .engine_commit_output_exposed_seconds   = 0.004,
+        .engine_maintenance_exposed_seconds     = 0.005,
+        .scheduler_yield_exposed_seconds        = 0.3,
+        .decode_host_exposed_seconds            = 0.01,
+        .decode_scheduler_yield_exposed_seconds = 0.2,
+        .prefill_units                          = 4,
+        .decode_rounds                          = 2,
+        .control_units                          = 1,
     };
     outcome.stats.speculative.backend               = ninfer::SpeculativeBackend::Mtp;
     outcome.stats.speculative.draft_window          = 3;
@@ -476,13 +476,13 @@ int main() {
     outcome.stats.speculative.accepted_per_position = {290, 240, 190};
     outcome.stats.engine_request_id                 = 991;
     outcome.stats.scheduling                        = {
-                               .preemptions          = 3,
-                               .snapshot_restores    = 1,
-                               .replay_restores      = 2,
-                               .replayed_tokens      = 640,
-                               .paused_ns            = 123456789012345ULL,
-                               .device_to_host_bytes = 3145728,
-                               .host_to_device_bytes = 2097152,
+        .preemptions          = 3,
+        .snapshot_restores    = 1,
+        .replay_restores      = 2,
+        .replayed_tokens      = 640,
+        .paused_ns            = 123456789012345ULL,
+        .device_to_host_bytes = 3145728,
+        .host_to_device_bytes = 2097152,
     };
     outcome.stats.thinking = ninfer::ThinkingBudgetStats{.configured_budget     = 256,
                                                          .model_thinking_tokens = 256,
@@ -739,10 +739,10 @@ int main() {
 
     GenerationOutcome fallback_outcome = outcome;
     fallback_outcome.tool_call_parse   = {
-          .marker_seen               = true,
-          .structured_call_count     = 0,
-          .schema_mismatch_arguments = 0,
-          .fallback_reason           = ninfer::ToolCallParseFallbackReason::UndeclaredTool,
+        .marker_seen               = true,
+        .structured_call_count     = 0,
+        .schema_mismatch_arguments = 0,
+        .fallback_reason           = ninfer::ToolCallParseFallbackReason::UndeclaredTool,
     };
     const Json fallback_done =
         Json::parse(format_request_done_json("serve-test", 3003, context, fallback_outcome));
@@ -816,22 +816,22 @@ int main() {
     throughput.current.last_selected_frontier_tokens      = 64;
     throughput.current.pressure_spill_pages               = 4;
     throughput.current.host_work                          = {
-                                 .engine_boundary_ns            = 1000000,
-                                 .session_call_ns               = 2000000,
-                                 .executor_poll_ns              = 3000000,
-                                 .engine_commit_output_ns       = 4000000,
-                                 .engine_maintenance_ns         = 5000000,
-                                 .scheduler_yield_ns            = 300000000,
-                                 .decode_host_ns                = 10000000,
-                                 .decode_scheduler_yield_ns     = 200000000,
-                                 .prefill_host_ns               = 3000000,
-                                 .prefill_scheduler_yield_ns    = 50000000,
-                                 .control_host_ns               = 2000000,
-                                 .control_scheduler_yield_ns    = 50000000,
-                                 .prefill_units                 = 4,
-                                 .control_units                 = 1,
-                                 .stats_publication_ns          = 250000,
-                                 .stats_publication_invocations = 5,
+        .engine_boundary_ns            = 1000000,
+        .session_call_ns               = 2000000,
+        .executor_poll_ns              = 3000000,
+        .engine_commit_output_ns       = 4000000,
+        .engine_maintenance_ns         = 5000000,
+        .scheduler_yield_ns            = 300000000,
+        .decode_host_ns                = 10000000,
+        .decode_scheduler_yield_ns     = 200000000,
+        .prefill_host_ns               = 3000000,
+        .prefill_scheduler_yield_ns    = 50000000,
+        .control_host_ns               = 2000000,
+        .control_scheduler_yield_ns    = 50000000,
+        .prefill_units                 = 4,
+        .control_units                 = 1,
+        .stats_publication_ns          = 250000,
+        .stats_publication_invocations = 5,
     };
     const std::string pretty_throughput = render_throughput(throughput).message;
     failures +=

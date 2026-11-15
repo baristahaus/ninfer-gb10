@@ -55,10 +55,10 @@ public:
         }
         const auto holder = owner_tid_.load(std::memory_order_relaxed);
         if (std::getenv("NINFER_TIER_POLICY_LOCK_TRACE") != nullptr) {
-            std::fprintf(stderr,
-                         "tier lock: blocked self=%llu holder=%llu (waited 2000 ms; blocking now)\n",
-                         static_cast<unsigned long long>(self_tid()),
-                         static_cast<unsigned long long>(holder));
+            std::fprintf(
+                stderr, "tier lock: blocked self=%llu holder=%llu (waited 2000 ms; blocking now)\n",
+                static_cast<unsigned long long>(self_tid()),
+                static_cast<unsigned long long>(holder));
         }
         lock.lock();
         owner_tid_.store(self_tid(), std::memory_order_relaxed);
@@ -91,11 +91,11 @@ private:
         const auto seen = static_cast<double>(entry.observations);
         entry.observations += 1;
         if (layer == 0) { entry.requests += 1; }
-        const auto base = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
+        const auto base  = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
         const auto count = static_cast<std::size_t>(experts_) < counts.size()
                                ? static_cast<std::size_t>(experts_)
                                : counts.size();
-        auto& mask = entry.mask[static_cast<std::size_t>(layer)];
+        auto& mask       = entry.mask[static_cast<std::size_t>(layer)];
         mask.resize(static_cast<std::size_t>(experts_), 0);
         auto& usage = entry.usage[static_cast<std::size_t>(layer)];
         usage.resize(static_cast<std::size_t>(experts_), 0);
@@ -113,7 +113,7 @@ private:
             }
             if (norm_c > 0.0 && norm_r > 0.0) {
                 const double cosine = dot / (std::sqrt(norm_c) * std::sqrt(norm_r));
-                divergent = (1.0 - cosine) > split_threshold;
+                divergent           = (1.0 - cosine) > split_threshold;
             }
         }
         for (std::size_t e = 0; e < count; ++e) {
@@ -126,11 +126,9 @@ private:
     }
 
 public:
-
     // The `count` experts of one layer most-exercised by this class, most first. Feeds
     // the burst prefetch: the limited budget goes to the load-bearing experts first.
-    [[nodiscard]] std::vector<int> class_top(std::string_view session, int layer,
-                                             int count) const {
+    [[nodiscard]] std::vector<int> class_top(std::string_view session, int layer, int count) const {
         const std::lock_guard lock{mutex_};
         const auto found = cache_.find(std::string(session));
         std::vector<int> out;
@@ -138,13 +136,12 @@ public:
         const auto& usage = found->second.usage[static_cast<std::size_t>(layer)];
         std::vector<int> order(usage.size());
         for (std::size_t e = 0; e < usage.size(); ++e) { order[e] = static_cast<int>(e); }
-        std::partial_sort(order.begin(),
-                          order.begin() + std::min<std::size_t>(static_cast<std::size_t>(count),
-                                                                order.size()),
-                          order.end(), [&usage](int a, int b) {
-                              return usage[static_cast<std::size_t>(a)] >
-                                     usage[static_cast<std::size_t>(b)];
-                          });
+        std::partial_sort(
+            order.begin(),
+            order.begin() + std::min<std::size_t>(static_cast<std::size_t>(count), order.size()),
+            order.end(), [&usage](int a, int b) {
+                return usage[static_cast<std::size_t>(a)] > usage[static_cast<std::size_t>(b)];
+            });
         for (const int e : order) {
             if (static_cast<int>(out.size()) >= count) { break; }
             if (usage[static_cast<std::size_t>(e)] > 0) { out.push_back(e); }
@@ -161,8 +158,7 @@ public:
     // The session's cached expert bitmask for one layer; empty when uncached.
     // Returns a copy taken under the lock: a pointer into the map would dangle across
     // any concurrent observe insertion (rehash) or LRU eviction while the caller reads.
-    [[nodiscard]] std::vector<std::uint8_t> cached_mask(std::string_view session,
-                                                        int layer) const {
+    [[nodiscard]] std::vector<std::uint8_t> cached_mask(std::string_view session, int layer) const {
         const std::lock_guard lock{mutex_};
         const auto found = cache_.find(std::string(session));
         if (found == cache_.end() || layer >= layers_) { return {}; }
@@ -194,9 +190,7 @@ public:
         if (interval <= 0 || current_requests == 0) { return; }
         if (current_requests / static_cast<std::size_t>(interval) <= aged_periods_) { return; }
         aged_periods_ = current_requests / static_cast<std::size_t>(interval);
-        for (auto& value : usage_) {
-            value /= 2;
-        }
+        for (auto& value : usage_) { value /= 2; }
     }
 
     // The number of requests attributed to this class so far (0 when unknown). The
@@ -235,16 +229,15 @@ public:
         std::vector<int> order(static_cast<std::size_t>(experts_));
         for (int e = 0; e < experts_; ++e) { order[static_cast<std::size_t>(e)] = e; }
         const auto& usage = usage_;
-        std::sort(order.begin(), order.end(),
-                  [base, usage](int a, int b) {
-                      return usage[base + static_cast<std::size_t>(a)] <
-                             usage[base + static_cast<std::size_t>(b)];
-                  });
+        std::sort(order.begin(), order.end(), [base, usage](int a, int b) {
+            return usage[base + static_cast<std::size_t>(a)] <
+                   usage[base + static_cast<std::size_t>(b)];
+        });
         std::vector<int> out;
         out.reserve(static_cast<std::size_t>(count));
         for (const int e : order) {
-            const auto idx = static_cast<std::size_t>(e);
-            const bool eligible_e = eligible.empty() || eligible[idx] != 0;
+            const auto idx         = static_cast<std::size_t>(e);
+            const bool eligible_e  = eligible.empty() || eligible[idx] != 0;
             const bool protected_e = !protect.empty() && protect[idx] != 0;
             if (eligible_e && !protected_e) {
                 out.push_back(e);
@@ -255,12 +248,12 @@ public:
     }
 
     struct Stats {
-        std::size_t requests = 0;
+        std::size_t requests   = 0;
         std::size_t cache_hits = 0;
-        std::size_t evictions = 0;
+        std::size_t evictions  = 0;
     };
 
-        [[nodiscard]] Stats stats() const {
+    [[nodiscard]] Stats stats() const {
         const std::lock_guard lock{mutex_};
         return stats_;
     }
@@ -319,8 +312,8 @@ private:
     mutable std::timed_mutex mutex_;
     mutable std::atomic<std::uint64_t> owner_tid_{0};
 
-    int layers_ = 0;
-    int experts_ = 0;
+    int layers_                 = 0;
+    int experts_                = 0;
     std::size_t cache_capacity_ = 0;
     std::vector<std::uint64_t> usage_;
     std::unordered_map<std::string, SessionEntry> cache_;

@@ -70,7 +70,7 @@ qwen::VisionChunk RankProgramImpl::prepare_parallel_vision(ResidentBinding& bind
     const auto& input = *binding.vision_input;
     const auto& plan  = input.plan;
     auto features     = device_tensor(*resources.plan.persistent.buffers.vision_features)
-                        .slice(2, binding.member.residency.lane.value, 1);
+                            .slice(2, binding.member.residency.lane.value, 1);
     if (!binding.distributed_vision_ready) {
         const auto owners = vision_owners(input, parameters.profile->local.size);
         binding.feature_offsets.assign(input.vision_items.size(), UINT32_MAX);

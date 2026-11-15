@@ -205,14 +205,13 @@ void mtp_forward(MtpExecutionView state, const MtpInputs& inputs,
                    state.execution.device(), "output hidden");
     nvtx::ScopedRange range(nvtx::Name::MtpForward, nvtx::Category::Mtp,
                             static_cast<std::uint64_t>(columns));
-    auto scope            = state.workspace.scope();
-    auto stem             = mtp_stem(state, inputs, columns);
+    auto scope = state.workspace.scope();
+    auto stem  = mtp_stem(state, inputs, columns);
     // The rank's own extents: at width 2 the widths and head counts are the rank's shards, and the
     // roots are allocated at them because a row-slice of a config-sized root is strided.
     const auto extents = mtp_attention_extents(parameters.projection, config);
-    const ops::AttentionHeadGeometry geometry{dimension(extents.head_dim),
-                                              dimension(extents.query_heads),
-                                              dimension(extents.kv_heads)};
+    const ops::AttentionHeadGeometry geometry{
+        dimension(extents.head_dim), dimension(extents.query_heads), dimension(extents.kv_heads)};
     auto projection = workspace::mtp_attention_projection(state.workspace, extents, columns);
     mtp_projection(stem.attention_hidden, parameters.projection, extents, projection.query,
                    projection.gate, projection.key, projection.value, state.workspace,
@@ -310,10 +309,10 @@ void mtp_propose(MtpExecutionView state, const Tensor& hidden, Tensor& full_logi
         // The MTP head is the target's output head. At width 1 it is whole, so this rank's
         // projection is the full vocabulary and the frame's proposal buffer is the destination. At
         // width 2 it is row-sharded: the rank's projection is its own rows, and sampling must rank
-        // the WHOLE vocabulary, so those rows are gathered into the group's full-vocabulary pair and
-        // the pair's tight view is sampled exactly as width 1 samples. `valid_rows` is the extent
-        // scanned, not a normalisation, so passing the rank's row count would rank only this rank's
-        // block -- the gather is the fix, not a smaller number.
+        // the WHOLE vocabulary, so those rows are gathered into the group's full-vocabulary pair
+        // and the pair's tight view is sampled exactly as width 1 samples. `valid_rows` is the
+        // extent scanned, not a normalisation, so passing the rank's row count would rank only this
+        // rank's block -- the gather is the fix, not a smaller number.
         const auto vocabulary = dimension(state.parameters.profile->public_tokens);
         if (state.group != nullptr) {
             if (state.collective == nullptr) {
@@ -333,8 +332,8 @@ void mtp_propose(MtpExecutionView state, const Tensor& hidden, Tensor& full_logi
             return;
         }
         const auto local_rows = dimension(parameters.output_head.weight.n);
-        require_tensor(full_logits, DType::BF16, {local_rows, columns},
-                       state.execution.device(), "proposal logits");
+        require_tensor(full_logits, DType::BF16, {local_rows, columns}, state.execution.device(),
+                       "proposal logits");
         ops::linear(hidden, parameters.output_head.weight, full_logits,
                     parameters.output_head.policy, state.workspace, state.execution);
         ops::argmax(full_logits, ids, vocabulary, state.execution);

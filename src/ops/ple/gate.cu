@@ -72,8 +72,8 @@ __global__ void gate_kernel(const __grid_constant__ GateArguments a) {
                 const float score = dot * rsqrtf(kk / kFeatures + a.epsilon) *
                                     rsqrtf(qq / kFeatures + a.epsilon) *
                                     (1.f / sqrtf(float(kFeatures)));
-                const float sign = float(score > 0.f) - float(score < 0.f);
-                scalar           = common::sigmoid(sign * sqrtf(fmaxf(fabsf(score), 1e-6f)));
+                const float sign  = float(score > 0.f) - float(score < 0.f);
+                scalar            = common::sigmoid(sign * sqrtf(fmaxf(fabsf(score), 1e-6f)));
             }
         }
         __syncthreads();
@@ -108,7 +108,7 @@ __global__ void gate_kernel(const __grid_constant__ GateArguments a) {
         __syncthreads();
         const float inverse = scalar;
         auto* records       = a.records + b * a.record_batch +
-                        (std::int64_t(a.offsets[b]) + t) * a.record_token + s * kFeatures;
+                              (std::int64_t(a.offsets[b]) + t) * a.record_token + s * kFeatures;
 #pragma unroll
         for (int i = 0; i < items; ++i) {
             const int d = (threadIdx.x + i * Block) * Width;

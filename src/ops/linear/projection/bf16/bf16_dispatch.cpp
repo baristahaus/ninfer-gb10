@@ -12,9 +12,11 @@ namespace {
 Bf16Launch select_flash_next_n10240_k2560(std::int32_t t) {
     return flash_next::select_bf16_a16_launch(10240, 2560, t);
 }
+
 Bf16Launch select_flash_next_n6144_k2560(std::int32_t t) {
     return flash_next::select_bf16_a16_launch(6144, 2560, t);
 }
+
 Bf16Launch select_flash_next_n2560_k6144(std::int32_t t) {
     return flash_next::select_bf16_a16_launch(2560, 6144, t);
 }

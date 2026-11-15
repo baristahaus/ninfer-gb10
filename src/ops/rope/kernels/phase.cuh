@@ -55,8 +55,8 @@ __device__ __forceinline__ void rope_d128_sincos(float theta, const std::int32_t
     constexpr double kTwoPi    = 6.28318530717958648e+00;
     const double frequency =
         pow(static_cast<double>(theta), -2.0 * static_cast<double>(pair) / 128.0);
-    const double angle = static_cast<double>(positions[token]) * frequency;
-    const double turns = angle * kInvTwoPi;
+    const double angle  = static_cast<double>(positions[token]) * frequency;
+    const double turns  = angle * kInvTwoPi;
     const float reduced = static_cast<float>(angle - nearbyint(turns) * kTwoPi);
     sincosf(reduced, sine, cosine);
 }

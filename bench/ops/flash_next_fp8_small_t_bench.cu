@@ -157,8 +157,8 @@ struct Bank {
     DeviceBuffer sink{4096 * sizeof(unsigned)};
 
     explicit Bank(double budget_mb) {
-        const int count = std::max(
-            2, static_cast<int>(budget_mb * 1e6 / (static_cast<double>(Rows) * K) + 0.5));
+        const int count =
+            std::max(2, static_cast<int>(budget_mb * 1e6 / (static_cast<double>(Rows) * K) + 0.5));
         for (int copy = 0; copy < count; ++copy) {
             copies.push_back(bench::make_fp8_weight(Rows, K));
             fill_codes_kernel<<<1024, 256>>>(static_cast<std::uint8_t*>(copies.back().storage.p),
@@ -191,7 +191,7 @@ void probe_shape(const Context& context, const char* name) {
 
     DeviceBuffer x(static_cast<std::size_t>(K) * T * 2);
     fill_activations_kernel<<<256, 256, 0, context.stream>>>(static_cast<__nv_bfloat16*>(x.p),
-                                                            static_cast<std::uint64_t>(K) * T);
+                                                             static_cast<std::uint64_t>(K) * T);
     CUDA_CHECK(cudaGetLastError());
     DeviceBuffer reference(static_cast<std::size_t>(Rows) * T * 2);
     DeviceBuffer out(static_cast<std::size_t>(Rows) * T * 2);
@@ -204,11 +204,10 @@ void probe_shape(const Context& context, const char* name) {
     const auto report = [&](double bytes, const auto& body) {
         bench::TimedGraph graph;
         graph.capture(context.stream, [&](cudaStream_t s) { body(s); });
-        const auto timing =
-            bench::measure_graph(graph, context.stream, context.options.warmup,
-                                 context.options.repeat);
-        const double us  = timing.median_us / calls;
-        const double gbs = bytes / (us * 1e3);
+        const auto timing = bench::measure_graph(graph, context.stream, context.options.warmup,
+                                                 context.options.repeat);
+        const double us   = timing.median_us / calls;
+        const double gbs  = bytes / (us * 1e3);
         return std::pair{us, gbs};
     };
     const auto print = [&](const std::string& label, double us, double gbs, const char* bits) {
@@ -218,20 +217,19 @@ void probe_shape(const Context& context, const char* name) {
 
     double best_read = 0.0;
     for (const int requested : {2, 3, 4}) {
-        const int grid    = requested * context.sms;
+        const int grid       = requested * context.sms;
         const auto [us, gbs] = report(bank.bytes_per_call, [&](cudaStream_t s) {
             contiguous_read_kernel<<<grid, 256, 0, s>>>(
-                static_cast<const Chunk*>(bank.chunk_list.p),
-                static_cast<int>(bank.chunks.size()),
+                static_cast<const Chunk*>(bank.chunk_list.p), static_cast<int>(bank.chunks.size()),
                 static_cast<unsigned*>(bank.sink.p));
         });
-        best_read = std::max(best_read, gbs);
+        best_read            = std::max(best_read, gbs);
         print("contiguous read, grid " + std::to_string(grid), us, gbs, "");
     }
 
     bool have_reference = false;
-    const auto run = [&]<class Schedule>(const char* label) {
-        using S = Fp8ScheduleInstance<Schedule, K, T>;
+    const auto run      = [&]<class Schedule>(const char* label) {
+        using S           = Fp8ScheduleInstance<Schedule, K, T>;
         const auto launch = [&](int copy, void* destination, cudaStream_t s) {
             launch_fp8_a16_sliced_k_mma<S>(
                 operands(copy), LinearBf16Output{static_cast<__nv_bfloat16*>(destination), Rows},
@@ -248,26 +246,25 @@ void probe_shape(const Context& context, const char* name) {
             out.copy_to_host(b.data(), b.size());
             bits = std::memcmp(a.data(), b.data(), a.size()) == 0 ? "bitwise" : "DIFFERS";
         }
-        have_reference    = true;
+        have_reference       = true;
         const auto [us, gbs] = report(bank.bytes_per_call, [&](cudaStream_t s) {
             for (int copy = 0; copy < calls; ++copy) launch(copy, out.p, s);
         });
-        std::string full = std::string(label) + " (" + std::to_string(S::kThreads) + " thr, " +
-                           std::to_string(S::kSharedBytes / 1024) + " KB)";
+        std::string full     = std::string(label) + " (" + std::to_string(S::kThreads) + " thr, " +
+                               std::to_string(S::kSharedBytes / 1024) + " KB)";
         print(full, us, gbs, bits);
     };
 
-    using Production = Fp8SlicedInstance<T, W, 2>;
+    using Production        = Fp8SlicedInstance<T, W, 2>;
     constexpr int kOtherMin = Production::kMinBlocksPerSm == 1 ? 2 : 1;
     run.template operator()<Production>("production S2");
     run.template operator()<Fp8SlicedInstance<T, W, 1>>("stages 1");
-    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, kOtherMin, ops::Cache::ca,
-                                                     ops::Cache::cg,
-                                                     Fp8ActivationStage::PaddedZero, 2>>(
+    run.template operator()<Fp8A16SlicedKMmaSchedule<
+        W, T, kOtherMin, ops::Cache::ca, ops::Cache::cg, Fp8ActivationStage::PaddedZero, 2>>(
         kOtherMin == 1 ? "S2 min blocks 1" : "S2 min blocks 2");
-    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, Production::kMinBlocksPerSm,
-                                                     ops::Cache::cg, ops::Cache::cg,
-                                                     Fp8ActivationStage::PaddedZero, 2>>(
+    run.template
+    operator()<Fp8A16SlicedKMmaSchedule<W, T, Production::kMinBlocksPerSm, ops::Cache::cg,
+                                        ops::Cache::cg, Fp8ActivationStage::PaddedZero, 2>>(
         "S2 activations cg");
     const auto deeper = [&]<int Stages>(const char* label) {
         using Schedule = Fp8A16SlicedKMmaSchedule<W, T, 1, ops::Cache::ca, ops::Cache::cg,

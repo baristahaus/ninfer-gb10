@@ -358,7 +358,7 @@ void run_q4q5(const Options& options, bench::L2FlushBuffer& flush, CudaExecution
         const std::uint64_t logical = qk.model_weight_bytes() + gv.model_weight_bytes() +
                                       tensor_bytes(hidden, tokens) +
                                       tensor_bytes(2 * q_rows + 2 * kv_rows, tokens);
-        const double flops = 4.0 * parent_rows * hidden * static_cast<double>(tokens);
+        const double flops          = 4.0 * parent_rows * hidden * static_cast<double>(tokens);
         for (const CacheState cache : {CacheState::Cold, CacheState::Warm}) {
             if ((options.cache == CacheMode::Cold && cache != CacheState::Cold) ||
                 (options.cache == CacheMode::Warm && cache != CacheState::Warm))
@@ -419,7 +419,7 @@ void run_four_output(const Options& options, const char* format, ops::LinearPoli
         }
         const std::uint64_t logical = fixture.model_weight_bytes() + tensor_bytes(hidden, tokens) +
                                       tensor_bytes(2 * q_rows + 2 * kv_rows, tokens);
-        const double flops = 2.0 * parent_rows * hidden * static_cast<double>(tokens);
+        const double flops          = 2.0 * parent_rows * hidden * static_cast<double>(tokens);
         for (const CacheState cache : {CacheState::Cold, CacheState::Warm}) {
             if ((options.cache == CacheMode::Cold && cache != CacheState::Cold) ||
                 (options.cache == CacheMode::Warm && cache != CacheState::Warm))
@@ -467,7 +467,7 @@ void run_q8_qkv(const Options& options, const char* label, std::int32_t hidden,
         }
         const std::uint64_t logical = weight.model_weight_bytes() + tensor_bytes(hidden, tokens) +
                                       tensor_bytes(q_rows + 2 * kv_rows, tokens);
-        const double flops = 2.0 * parent_rows * hidden * static_cast<double>(tokens);
+        const double flops          = 2.0 * parent_rows * hidden * static_cast<double>(tokens);
         for (const CacheState cache : {CacheState::Cold, CacheState::Warm}) {
             if ((options.cache == CacheMode::Cold && cache != CacheState::Cold) ||
                 (options.cache == CacheMode::Warm && cache != CacheState::Warm))

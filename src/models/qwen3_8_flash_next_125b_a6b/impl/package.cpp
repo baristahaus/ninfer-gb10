@@ -60,7 +60,8 @@ int LoadedModel::tier_bank_count() const noexcept {
     for (const auto& layer : impl_->data.runtime.gdn_layers) {
         if (tier_moe(layer.post_mixer) != nullptr) { ++count; }
     }
-    if (impl_->data.runtime.mtp.has_value() && tier_moe(impl_->data.runtime.mtp->post_mixer) != nullptr) {
+    if (impl_->data.runtime.mtp.has_value() &&
+        tier_moe(impl_->data.runtime.mtp->post_mixer) != nullptr) {
         ++count;
     }
     return count;
@@ -68,8 +69,8 @@ int LoadedModel::tier_bank_count() const noexcept {
 
 const ops::FlashNextExpertBank* LoadedModel::tier_gate_up_bank(const int index) const noexcept {
     int ordinal = 0;
-    auto pick = [&ordinal, index](const MoeWeights& moe) noexcept
-        -> const ops::FlashNextExpertBank* {
+    auto pick   = [&ordinal,
+                   index](const MoeWeights& moe) noexcept -> const ops::FlashNextExpertBank* {
         const auto* weights = tier_moe(moe);
         if (weights == nullptr) { return nullptr; }
         if (ordinal == index) { return &weights->routed_gate_up; }
@@ -82,16 +83,14 @@ const ops::FlashNextExpertBank* LoadedModel::tier_gate_up_bank(const int index) 
     for (const auto& layer : impl_->data.runtime.gdn_layers) {
         if (auto* bank = pick(layer.post_mixer); bank != nullptr) { return bank; }
     }
-    if (impl_->data.runtime.mtp.has_value()) {
-        return pick(impl_->data.runtime.mtp->post_mixer);
-    }
+    if (impl_->data.runtime.mtp.has_value()) { return pick(impl_->data.runtime.mtp->post_mixer); }
     return nullptr;
 }
 
 const ops::FlashNextExpertBank* LoadedModel::tier_down_bank(const int index) const noexcept {
     int ordinal = 0;
-    auto pick = [&ordinal, index](const MoeWeights& moe) noexcept
-        -> const ops::FlashNextExpertBank* {
+    auto pick   = [&ordinal,
+                   index](const MoeWeights& moe) noexcept -> const ops::FlashNextExpertBank* {
         const auto* weights = tier_moe(moe);
         if (weights == nullptr) { return nullptr; }
         if (ordinal == index) { return &weights->routed_down; }
@@ -104,9 +103,7 @@ const ops::FlashNextExpertBank* LoadedModel::tier_down_bank(const int index) con
     for (const auto& layer : impl_->data.runtime.gdn_layers) {
         if (auto* bank = pick(layer.post_mixer); bank != nullptr) { return bank; }
     }
-    if (impl_->data.runtime.mtp.has_value()) {
-        return pick(impl_->data.runtime.mtp->post_mixer);
-    }
+    if (impl_->data.runtime.mtp.has_value()) { return pick(impl_->data.runtime.mtp->post_mixer); }
     return nullptr;
 }
 
@@ -163,16 +160,13 @@ Package::SequencePlanner Package::make_sequence_planner(DeviceContext& device,
     return qwen3_8_flash_next::make_sequence_planner<detail::Variant>(device, options, profile);
 }
 
-std::unique_ptr<Package::Program> Package::create_program(const LoadedModel& model,
-                                                          SequencePlan&& plan,
-                                                          DeviceContext& device,
-                                                          const StartupObserver& observer,
-                                                          DeviceContext* peer_device) {
+std::unique_ptr<Package::Program>
+Package::create_program(const LoadedModel& model, SequencePlan&& plan, DeviceContext& device,
+                        const StartupObserver& observer, DeviceContext* peer_device) {
     if (!model.impl_) { throw std::invalid_argument("Flash-Next loaded model is empty"); }
-    return qwen3_8_flash_next::create_program<detail::Variant>(model.impl_->data.runtime,
-                                                               model.impl_->weights_profile,
-                                                               std::move(plan), device, observer,
-                                                               peer_device);
+    return qwen3_8_flash_next::create_program<detail::Variant>(
+        model.impl_->data.runtime, model.impl_->weights_profile, std::move(plan), device, observer,
+        peer_device);
 }
 
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b

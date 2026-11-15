@@ -151,9 +151,9 @@ PagedKVLayerView PagedKVCache::layer_view(std::uint32_t layer, Tensor block_tabl
         .k_scale_pages = layer_storage_.key.has_scale() ? pages_.plane(k_scale_index) : Tensor(),
         .v_scale_pages = layer_storage_.value.has_scale() ? pages_.plane(v_scale_index) : Tensor(),
         .block_table   = block_table,
-        .head_dim        = layer_storage_.head_dim,
-        .num_kv_heads    = kv_heads_,
-        .storage         = layer_storage_.storage,
+        .head_dim      = layer_storage_.head_dim,
+        .num_kv_heads  = kv_heads_,
+        .storage       = layer_storage_.storage,
         .auxiliary_pages = std::move(auxiliary),
     };
 }

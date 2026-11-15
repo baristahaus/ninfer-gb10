@@ -27,7 +27,7 @@ void launch_a8(const Tensor& x, const Weight& weight, std::span<const Tensor> ou
         using S = Fp8ScheduleInstance<Schedule, 5120>;
         if constexpr (S::kTmaSwizzle)
             launch_fp8_a8_tma_mma<S>(operands, output, LinearIdentityEpilogue{}, stream,
-                                       workspace.partials);
+                                     workspace.partials);
         else
             launch_fp8_a8_mma<S>(operands, output, LinearIdentityEpilogue{}, stream);
     };

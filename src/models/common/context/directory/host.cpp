@@ -208,11 +208,13 @@ HostDirectory::prepare_page_in(PageDirectory& pages, std::span<const PageId> mem
         if (!pages.valid(page) || !pages.spill_resident(page) || pages.host_resident(page) ||
             pages.require(page).host_readers || pages.require(page).host_transfer_pending ||
             pages.require(page).destination_pinned) {
-            fprintf(stderr, "DBG page_in reject: valid=%d spill=%d host=%d readers=%u pending=%d pinned=%d\n",
-                    (int)pages.valid(page), (int)pages.spill_resident(page),
-                    (int)pages.host_resident(page), pages.require(page).host_readers,
-                    (int)pages.require(page).host_transfer_pending,
-                    (int)pages.require(page).destination_pinned);
+            fprintf(
+                stderr,
+                "DBG page_in reject: valid=%d spill=%d host=%d readers=%u pending=%d pinned=%d\n",
+                (int)pages.valid(page), (int)pages.spill_resident(page),
+                (int)pages.host_resident(page), pages.require(page).host_readers,
+                (int)pages.require(page).host_transfer_pending,
+                (int)pages.require(page).destination_pinned);
             return std::nullopt;
         }
         page_scratch_.push_back(page);
@@ -275,8 +277,7 @@ HostReplicaId HostDirectory::publish_page_in(HostPageReservation&& reservation) 
         auto& pages             = *extent.page_store;
         if (pages.content_epoch(entry.page) != entry.epoch ||
             pages.committed_columns(entry.page) < entry.coverage ||
-            !pages.require(entry.page).host_transfer_pending ||
-            !pages.spill_resident(entry.page)) {
+            !pages.require(entry.page).host_transfer_pending || !pages.spill_resident(entry.page)) {
             std::terminate();
         }
         page_scratch_.push_back(entry.page);
@@ -302,9 +303,7 @@ HostReplicaId HostDirectory::publish_page_in(HostPageReservation&& reservation) 
     }
     auto* pages = extent.page_store;
     consume(reservation);
-    for (auto page : page_scratch_) {
-        pages->require(page).host_transfer_pending = false;
-    }
+    for (auto page : page_scratch_) { pages->require(page).host_transfer_pending = false; }
     return capability;
 }
 
@@ -320,14 +319,17 @@ void HostDirectory::abort_page_in(HostPageReservation& reservation) noexcept {
         const PageId page = memberships_[node].page;
         if (!extent.page_store->valid(page)) { std::terminate(); }
         extent.page_store->require(page).host_transfer_pending = false;
-        node = memberships_[node].next;
+        node                                                   = memberships_[node].next;
     }
     release_descriptor(reservation.descriptor_, extent);
     consume(reservation);
 }
 
 void HostDirectory::abort(HostPageReservation& reservation) noexcept {
-    if (reservation.page_in_) { abort_page_in(reservation); return; }
+    if (reservation.page_in_) {
+        abort_page_in(reservation);
+        return;
+    }
     if (!valid(reservation)) {
         consume(reservation);
         return;

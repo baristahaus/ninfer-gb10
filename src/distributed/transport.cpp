@@ -93,7 +93,7 @@ std::vector<Address> addresses(const Endpoint& endpoint, bool passive) {
     addrinfo* raw      = nullptr;
     const auto service = std::to_string(endpoint.port);
     const int status   = ::getaddrinfo(endpoint.host.empty() ? nullptr : endpoint.host.c_str(),
-                                     service.c_str(), &hints, &raw);
+                                       service.c_str(), &hints, &raw);
     if (status) throw std::runtime_error(std::string("control address: ") + gai_strerror(status));
     std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> owner(raw, freeaddrinfo);
     std::vector<Address> result;

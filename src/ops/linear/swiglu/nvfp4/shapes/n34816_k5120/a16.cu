@@ -22,8 +22,8 @@ void launch_two_tokens(const Tensor& x, const Weight& weight, Tensor& out, cudaS
                                           Nvfp4SimtBlockOrder::RowsContiguous, 1>;
     launch_nvfp4_a16_simt<Nvfp4ScheduleInstance<Schedule, 5120, 2, true>>(
         nvfp4_a16_operands(x, weight),
-        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), Intermediate},
-        SwiGluPairEpilogue{}, stream, SwiGluBranchRows<1>{});
+        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), Intermediate}, SwiGluPairEpilogue{},
+        stream, SwiGluBranchRows<1>{});
 }
 
 

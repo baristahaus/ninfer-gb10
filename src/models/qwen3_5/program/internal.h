@@ -176,11 +176,11 @@ public:
     void publish_result(ComputeOperation&);
     void retire_compute();
     void progress();
-    // THIS RANK'S POSITION IN THE DETERMINISTIC COLLECTIVE SEQUENCE: the number of collectives it has
-    // issued (mailbox exchanges and the gathers built on them). Always on, not a diagnostic: it is the
-    // count a group executor needs to tell "this rank is waiting on a peer's collective" from "this
-    // rank is waiting on its own device work", and those need different responses. Zero on the
-    // single-device lane, which issues none.
+    // THIS RANK'S POSITION IN THE DETERMINISTIC COLLECTIVE SEQUENCE: the number of collectives it
+    // has issued (mailbox exchanges and the gathers built on them). Always on, not a diagnostic: it
+    // is the count a group executor needs to tell "this rank is waiting on a peer's collective"
+    // from "this rank is waiting on its own device work", and those need different responses. Zero
+    // on the single-device lane, which issues none.
     [[nodiscard]] std::size_t collective_count() const noexcept;
     [[nodiscard]] ComputeOperation& require_compute(runtime::ExecutionTicket);
     [[nodiscard]] const ComputeOperation& require_compute(runtime::ExecutionTicket) const;
@@ -194,7 +194,8 @@ public:
     }
 
     // The full-width partial pair the collective reduces over, one buffer per rank's device, from
-    // the group bundle: BOTH Programs pass the SAME pair, because the combine reads and writes both.
+    // the group bundle: BOTH Programs pass the SAME pair, because the combine reads and writes
+    // both.
     [[nodiscard]] const std::array<Tensor, 2>& sharded_partials() const noexcept {
         static const std::array<Tensor, 2> none{};
         return sharded_ != nullptr ? sharded_->partials : none;
@@ -219,15 +220,15 @@ public:
     std::optional<execution::ShardedCollective> collective_;
     Resources resources;
     std::unique_ptr<context::ContextStorage> storage;
-    // tp 2: rank 1's mirrors, owned here so they outlive every mutation they replay. Non-null on the
-    // ORIGIN rank only (attach_rank_mirrors): the mirror is a one-way projection of this rank's pages
-    // onto the peer's device, so the peer is its target, not its owner. Null on the single-device
-    // lane and on the target rank.
+    // tp 2: rank 1's mirrors, owned here so they outlive every mutation they replay. Non-null on
+    // the ORIGIN rank only (attach_rank_mirrors): the mirror is a one-way projection of this rank's
+    // pages onto the peer's device, so the peer is its target, not its owner. Null on the
+    // single-device lane and on the target rank.
     //
-    // Their presence is the sharded-lane flag the round entry refuses on (RankProgramImpl::progress,
-    // via sharded_forward_refusal): the sharded forward is not wired, so a round would project
-    // sharded weights through the unsharded path and produce wrong numbers. The refusal fires on the
-    // owning rank, which stops the group's round.
+    // Their presence is the sharded-lane flag the round entry refuses on
+    // (RankProgramImpl::progress, via sharded_forward_refusal): the sharded forward is not wired,
+    // so a round would project sharded weights through the unsharded path and produce wrong
+    // numbers. The refusal fires on the owning rank, which stops the group's round.
     std::unique_ptr<tp2::MirroredKVPagePool> peer_text_kv;
     std::unique_ptr<tp2::MirroredKVExecutionTables> peer_text_kv_tables;
     std::unique_ptr<context::ContextMigration> compute_actions;

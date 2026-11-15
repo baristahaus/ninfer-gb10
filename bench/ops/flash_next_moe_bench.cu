@@ -322,7 +322,8 @@ __global__ void __launch_bounds__(256)
                 const int row   = task / kPieces;
                 const int piece = task - row * kPieces;
                 const uint4 x   = __ldcg(reinterpret_cast<const uint4*>(
-                    base + static_cast<std::int64_t>(row) * RowBytes + step * Segment + piece * 16));
+                    base + static_cast<std::int64_t>(row) * RowBytes + step * Segment +
+                    piece * 16));
                 acc ^= x.x ^ x.y ^ x.z ^ x.w;
             }
         }
@@ -411,8 +412,8 @@ void launch_gate(const Jobs& jobs, const BankView& bank, const float* input_divi
             Work<GateRows>{static_cast<const int*>(jobs.job_count.p),
                            static_cast<const int*>(jobs.job_experts.p),
                            static_cast<const int*>(jobs.job_columns.p),
-                           static_cast<const int*>(jobs.offsets.p), bank.divisors,
-                           input_divisors, kIntermediate});
+                           static_cast<const int*>(jobs.offsets.p), bank.divisors, input_divisors,
+                           kIntermediate});
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -431,8 +432,8 @@ void launch_down(const Jobs& jobs, const BankView& bank, const float* input_divi
             Work<DownRows>{static_cast<const int*>(jobs.job_count.p),
                            static_cast<const int*>(jobs.job_experts.p),
                            static_cast<const int*>(jobs.job_columns.p),
-                           static_cast<const int*>(jobs.offsets.p), bank.divisors,
-                           input_divisors, kHidden});
+                           static_cast<const int*>(jobs.offsets.p), bank.divisors, input_divisors,
+                           kHidden});
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -550,8 +551,8 @@ void run(const Options& options, const std::vector<Bank>& gate_up, const std::ve
                        scales ? gate_bytes + down_bytes : gate_codes + down_codes,
                        [&](int layer, cudaStream_t s) {
                            contiguous_read_kernel<<<grid, 256, 0, s>>>(
-                               static_cast<const Chunk*>(lists[layer].first.p),
-                               lists[layer].second, static_cast<unsigned*>(sink.p));
+                               static_cast<const Chunk*>(lists[layer].first.p), lists[layer].second,
+                               static_cast<unsigned*>(sink.p));
                        });
             }
         }
@@ -685,8 +686,7 @@ int main(int argc, char** argv) {
             });
         }
         if (options.probe) {
-            probe::run(options, gate_up, down, static_cast<const float*>(input_divisors.p),
-                       stream);
+            probe::run(options, gate_up, down, static_cast<const float*>(input_divisors.p), stream);
             CUDA_CHECK(cudaStreamDestroy(stream));
             return 0;
         }

@@ -58,17 +58,16 @@ void argmax_launch(const Tensor& logits, Tensor& out, std::int32_t valid_rows,
 }
 
 void shortlist_exact_argmax_launch(const Tensor& hidden, const Tensor& approximate_logits,
-                                   std::int32_t valid_rows,
-                                   const Weight& exact_head, const std::int32_t* id_map,
-                                   Tensor& candidate_ids, Tensor& candidate_scores, Tensor& out,
-                                   cudaStream_t stream) {
+                                   std::int32_t valid_rows, const Weight& exact_head,
+                                   const std::int32_t* id_map, Tensor& candidate_ids,
+                                   Tensor& candidate_scores, Tensor& out, cudaStream_t stream) {
     const int shortlist_rows = valid_rows;
-    const int physical_rows = approximate_logits.ne[0];
-    const int tokens = approximate_logits.ne[1];
-    const int tiles = div_up(shortlist_rows, kShortlistRerankTile);
+    const int physical_rows  = approximate_logits.ne[0];
+    const int tokens         = approximate_logits.ne[1];
+    const int tiles          = div_up(shortlist_rows, kShortlistRerankTile);
     const int candidate_rows = tiles * kShortlistCandidatesPerTile;
     shortlist_tile_candidates_kernel<<<dim3(static_cast<unsigned>(tiles),
-                                              static_cast<unsigned>(tokens)),
+                                            static_cast<unsigned>(tokens)),
                                        kShortlistRerankTile, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(approximate_logits.data), id_map,
         static_cast<std::int32_t*>(candidate_ids.data), shortlist_rows, physical_rows,
@@ -91,10 +90,9 @@ void shortlist_exact_argmax_launch(const Tensor& hidden, const Tensor& approxima
     }
     CUDA_CHECK(cudaGetLastError());
     shortlist_exact_select_kernel<<<static_cast<unsigned>(tokens), kShortlistRerankTile, 0,
-                                    stream>>>(
-        static_cast<const float*>(candidate_scores.data),
-        static_cast<const std::int32_t*>(candidate_ids.data),
-        static_cast<std::int32_t*>(out.data), candidate_rows);
+                                    stream>>>(static_cast<const float*>(candidate_scores.data),
+                                              static_cast<const std::int32_t*>(candidate_ids.data),
+                                              static_cast<std::int32_t*>(out.data), candidate_rows);
     CUDA_CHECK(cudaGetLastError());
 }
 

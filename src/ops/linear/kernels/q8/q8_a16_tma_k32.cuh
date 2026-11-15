@@ -259,9 +259,9 @@ void launch_q8_a16_tma_k32(const Q8LinearOperands& operands, Output output, Epil
         operands.rows % 128 != 0 || operands.tokens % 128 != 0)
         throw std::invalid_argument("Q8 K32 TMA requires full 128x128 tiles and matching static K");
     Q8A16TmaDescriptors maps;
-    maps.x     = q8_a16_tensor_map(const_cast<__nv_bfloat16*>(operands.x),
-                                   CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, operands.k, operands.tokens,
-                                   std::uint64_t(operands.k) * 2, 32, 128, CU_TENSOR_MAP_SWIZZLE_64B);
+    maps.x = q8_a16_tensor_map(const_cast<__nv_bfloat16*>(operands.x),
+                               CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, operands.k, operands.tokens,
+                               std::uint64_t(operands.k) * 2, 32, 128, CU_TENSOR_MAP_SWIZZLE_64B);
     maps.codes = q8_a16_tensor_map(const_cast<std::uint8_t*>(operands.codes),
                                    CU_TENSOR_MAP_DATA_TYPE_UINT8, operands.k, operands.rows,
                                    operands.k, 32, 128, CU_TENSOR_MAP_SWIZZLE_NONE);

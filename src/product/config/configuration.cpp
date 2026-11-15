@@ -183,8 +183,8 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             value = std::uint64_t{e.context_cache.host_kv_capacity_bytes >> 20U};
             break;
         case Field::MaxPrivateContinuations:
-            value = optional_value(e.context_cache.max_private_continuations,
-                                   "default (target/model)");
+            value =
+                optional_value(e.context_cache.max_private_continuations, "default (target/model)");
             break;
         case Field::MaxSharedPrefixes:
             value = optional_value(e.context_cache.max_shared_prefixes, "default (target/model)");
@@ -280,9 +280,8 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             value = server->ignore_eos;
             break;
         case Field::PrefillMissDump:
-            value = server->prefill_miss_dump_dir.empty()
-                        ? std::string("disabled")
-                        : server->prefill_miss_dump_dir.string();
+            value = server->prefill_miss_dump_dir.empty() ? std::string("disabled")
+                                                          : server->prefill_miss_dump_dir.string();
             break;
         case Field::PrefillMissMinTokens:
             value = std::uint64_t{server->prefill_miss_min_tokens};

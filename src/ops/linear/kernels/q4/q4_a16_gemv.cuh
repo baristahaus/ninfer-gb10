@@ -37,7 +37,7 @@ __device__ __forceinline__ void q4_gemv_issue_async_tile(
 
     const int active_code_vectors = active_groups * common::Q4RowSplitStorage::kCodeBytesPerGroup /
                                     static_cast<int>(sizeof(uint4));
-    const auto* global_codes = reinterpret_cast<const uint4*>(
+    const auto* global_codes      = reinterpret_cast<const uint4*>(
         code_row +
         static_cast<std::int64_t>(group_begin) * common::Q4RowSplitStorage::kCodeBytesPerGroup);
 
@@ -182,8 +182,8 @@ q4_gemv_dot_byte_static(Q4GemvTileStorage<Schedule>& shared_tiles, int cta_warp,
     constexpr int kActiveCodeVectors = GroupsPerWarp *
                                        common::Q4RowSplitStorage::kCodeBytesPerGroup /
                                        static_cast<int>(sizeof(uint4));
-    auto* shared_codes       = shared_tiles.codes[cta_warp][0];
-    const auto* global_codes = reinterpret_cast<const uint4*>(
+    auto* shared_codes               = shared_tiles.codes[cta_warp][0];
+    const auto* global_codes         = reinterpret_cast<const uint4*>(
         code_row +
         static_cast<std::int64_t>(group_begin) * common::Q4RowSplitStorage::kCodeBytesPerGroup);
     if (lane < kActiveCodeVectors) { shared_codes[lane] = global_codes[lane]; }
@@ -206,8 +206,8 @@ q4_gemv_dot_byte_static(Q4GemvTileStorage<Schedule>& shared_tiles, int cta_warp,
         const float scale = __half2float(__ushort_as_half(scale_bits));
         const std::uint8_t packed =
             tile_codes[local_group * common::Q4RowSplitStorage::kCodeBytesPerGroup + lane];
-        const int q0      = (static_cast<int>(packed & 0x0fu) ^ 0x08) - 0x08;
-        const int q1      = (static_cast<int>(packed >> 4) ^ 0x08) - 0x08;
+        const int q0 = (static_cast<int>(packed & 0x0fu) ^ 0x08) - 0x08;
+        const int q1 = (static_cast<int>(packed >> 4) ^ 0x08) - 0x08;
         const int k_begin =
             (group_begin + local_group) * common::Q4RowSplitStorage::kGroupK + lane * 2;
         const float2 activation_pair = __bfloat1622float2(activation_pairs[k_begin >> 1]);
@@ -351,9 +351,9 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
         group_end               = pair_end * 2;
     }
 
-    const std::uint8_t* code_row = codes + static_cast<std::int64_t>(row < rows ? row : 0) *
-                                               (padded_k / 64) *
-                                               common::Q4RowSplitStorage::kCodeBytesPerGroup;
+    const std::uint8_t* code_row  = codes + static_cast<std::int64_t>(row < rows ? row : 0) *
+                                                (padded_k / 64) *
+                                                common::Q4RowSplitStorage::kCodeBytesPerGroup;
     const std::uint8_t* scale_row = scales + static_cast<std::int64_t>(row < rows ? row : 0) *
                                                  (padded_k / 64) *
                                                  common::Q4RowSplitStorage::kScaleBytesPerGroup;

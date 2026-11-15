@@ -30,17 +30,16 @@ HostParent make_parent(std::uint64_t rows, std::uint64_t columns) {
     HostParent out;
     out.words.resize(rows * columns);
     const std::vector<std::uint64_t> shape{rows, columns};
-    out.parent.geometry = ninfer::weight_geometry(ninfer::QType::BF16,
-                                                  ninfer::QuantLayout::Contiguous, shape);
+    out.parent.geometry =
+        ninfer::weight_geometry(ninfer::QType::BF16, ninfer::QuantLayout::Contiguous, shape);
     out.parent.device = ninfer::Device::cpu();
     out.parent.data   = reinterpret_cast<const std::byte*>(out.words.data());
     return out;
 }
 
 // The rank's column shard as `shard_parameter` produces it: one part per row.
-ninfer::WeightView column_shard(const HostParent& source, std::uint64_t rows,
-                                std::uint64_t columns, std::uint64_t begin,
-                                std::uint64_t extent) {
+ninfer::WeightView column_shard(const HostParent& source, std::uint64_t rows, std::uint64_t columns,
+                                std::uint64_t begin, std::uint64_t extent) {
     ninfer::WeightView view;
     view.shape = {rows, extent};
     for (std::uint64_t row = 0; row < rows; ++row) {
@@ -74,16 +73,16 @@ int check_agrees(const ninfer::WeightView& view, const ninfer::WeightGeometry& e
 
 int main() {
     try {
-        int failures = 0;
-        constexpr std::uint64_t rows = 64;
+        int failures                    = 0;
+        constexpr std::uint64_t rows    = 64;
         constexpr std::uint64_t columns = 512;
-        HostParent source = make_parent(rows, columns);
+        HostParent source               = make_parent(rows, columns);
 
         // A column shard: the plan must describe the rank's own [rows, columns/2] matrix, which is
         // exactly what the repack builds.
         for (std::uint64_t rank = 0; rank < 2; ++rank) {
-            const auto view = column_shard(source, rows, columns, rank * (columns / 2),
-                                           columns / 2);
+            const auto view =
+                column_shard(source, rows, columns, rank * (columns / 2), columns / 2);
             const std::vector<std::uint64_t> shape{rows, columns / 2};
             const auto expected = ninfer::weight_geometry(ninfer::QType::BF16,
                                                           ninfer::QuantLayout::Contiguous, shape);
@@ -97,7 +96,7 @@ int main() {
 
         // A view spanning two parents has no single answer and must refuse rather than pick one.
         HostParent other = make_parent(rows, columns);
-        auto split = whole(source, rows, columns);
+        auto split       = whole(source, rows, columns);
         split.parts.push_back({&other.parent, 0, 8});
         bool threw = false;
         try {

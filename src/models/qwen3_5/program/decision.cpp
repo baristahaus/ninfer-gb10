@@ -16,8 +16,10 @@ namespace ninfer::models::qwen3_5::detail {
 
 // Weak per-site tag from the launch counter (tests/support/launch_counter.cpp). Null in production.
 extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
-#define NINFER_TAG_SITE(name) do { if (&ninfer_launch_site != nullptr) ninfer_launch_site(name); } while (0)
-
+#define NINFER_TAG_SITE(name)                                                                      \
+    do {                                                                                           \
+        if (&ninfer_launch_site != nullptr) ninfer_launch_site(name);                              \
+    } while (0)
 
 namespace {
 // The stamps themselves live in execution.cpp, defined once; see internal.h.
@@ -38,8 +40,8 @@ Tensor prefix(const Tensor& value, std::initializer_list<std::int32_t> shape) {
 
 namespace {
 // THE DECISION GATE, one line per rank per round. The accept-path gather runs only when
-// decision_supplied is true, and decision_supplied is set from `constrained`, which is computed from
-// operation.sampling -- a per-rank value deciding a cross-rank action. This print is the
+// decision_supplied is true, and decision_supplied is set from `constrained`, which is computed
+// from operation.sampling -- a per-rank value deciding a cross-rank action. This print is the
 // confirmation that the two ranks take different branches.
 void print_decision_gate(int rank, const char* why, std::size_t rows, bool constrained,
                          bool requested, bool supplied) {
@@ -98,10 +100,10 @@ void RankProgramImpl::project_decode(std::uint32_t batch_value, std::uint32_t wi
     lane_stamp(collective_ ? collective_->rank : 0, "project_decode",
                static_cast<int>(collective_ ? collective_->reduce_index : 0));
     // SIX TIMESTAMPS, NOT FOUR: project_decode contains TWO collectives. `execution::project` runs
-    // through the sharded path (sharded_project_columns -> reduce_partials -> allreduce_sum_rank), so
-    // the window between entry and linear_done CONTAINS a mailbox exchange; and
-    // all_gather_logits(..., "decision.sample") is a second one. "The 1 s is in the linear" and "the
-    // 1 s is in the linear's reduce" are different findings, so both boundaries are stamped.
+    // through the sharded path (sharded_project_columns -> reduce_partials -> allreduce_sum_rank),
+    // so the window between entry and linear_done CONTAINS a mailbox exchange; and
+    // all_gather_logits(..., "decision.sample") is a second one. "The 1 s is in the linear" and
+    // "the 1 s is in the linear's reduce" are different findings, so both boundaries are stamped.
     const auto pd_stamp = [&](const char* where) {
         if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
         std::timespec ts{};
@@ -158,10 +160,10 @@ void RankProgramImpl::decide_decode(std::uint32_t batch_value, std::uint32_t wid
     const int rows       = frame.spec.output_rows;
     const int vocabulary = execution::dimension(parameters.profile->public_tokens);
     if (width > 1) {
-        Tensor logits = sharded_ != nullptr
-                            ? execution::sharded_logits_view(*sharded_, collective_->rank, rows,
-                                                             width * batch)
-                            : prefix(frame.logits, {rows, width, batch});
+        Tensor logits =
+            sharded_ != nullptr
+                ? execution::sharded_logits_view(*sharded_, collective_->rank, rows, width * batch)
+                : prefix(frame.logits, {rows, width, batch});
         Tensor argmax = prefix(frame.target_argmax, {width, batch});
         auto drafts =
             prefix(backend == SpeculativeBackend::Mtp ? frame.mtp->drafts : frame.dflash->drafts,
@@ -193,13 +195,14 @@ void RankProgramImpl::decide_decode(std::uint32_t batch_value, std::uint32_t wid
         // vocabulary in this rank's member of the group's logits pair; `frame.logits` is the
         // per-Program buffer the sharded projection never writes, so sampling from it argmaxes
         // zeros and emits token 0 every round. Width 1 keeps the frame buffer, unchanged.
-        Tensor logits = sharded_ != nullptr
-                            ? execution::sharded_logits_view(*sharded_, collective_->rank, rows,
-                                                             batch)
-                            : prefix(frame.logits, {rows, batch});
+        Tensor logits =
+            sharded_ != nullptr
+                ? execution::sharded_logits_view(*sharded_, collective_->rank, rows, batch)
+                : prefix(frame.logits, {rows, batch});
         Tensor tokens = prefix(frame.output_tokens, {batch});
         ops::sample(logits, tokens, vocabulary, frame.sampling, frame.frontiers.slice(0, 0, batch),
-                    ops::kSamplePurposeDecode, resources.work, device.execution_view());        for (int row = 0; row < batch; ++row) {
+                    ops::kSamplePurposeDecode, resources.work, device.execution_view());
+        for (int row = 0; row < batch; ++row) {
             auto count = frame.output_counts.slice(0, row, 1);
             ops::set_i32_scalar(count, 1, device.execution_view());
         }
@@ -228,19 +231,18 @@ void RankProgramImpl::readback_decode() {
 }
 
 void RankProgramImpl::launch_decision(ComputeOperation& operation) {
-    // THE WORK VARIANT, per rank per round. `is_decode` and the variant index decide which branch of
-    // the accept path runs, and the accept-path gather lives in one of them. If the two ranks report
-    // different variants for the same round, the gather is taken on one rank and not the other --
-    // and a cross-rank action that one rank skips is a hang by construction.
+    // THE WORK VARIANT, per rank per round. `is_decode` and the variant index decide which branch
+    // of the accept path runs, and the accept-path gather lives in one of them. If the two ranks
+    // report different variants for the same round, the gather is taken on one rank and not the
+    // other -- and a cross-rank action that one rank skips is a hang by construction.
     if (collective_.has_value() && lane_trace()) {
         // THE LATENESS NUMBER. A timestamp at the decision entry and one at the gather entry give
         // rank 1's lateness directly, instead of inferring it from counters. The counters show both
-        // ranks issuing the same 128 pipelined_20480 exchanges, so the lateness is in the traversal's
-        // structure, not its count.
+        // ranks issuing the same 128 pipelined_20480 exchanges, so the lateness is in the
+        // traversal's structure, not its count.
         std::timespec ts{};
         (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
-        std::fprintf(stderr, "[lane-time] rank=%d at=launch_decision_ns=%lld\n",
-                     collective_->rank,
+        std::fprintf(stderr, "[lane-time] rank=%d at=launch_decision_ns=%lld\n", collective_->rank,
                      (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
         std::fflush(stderr);
         const bool is_decode = std::holds_alternative<DecodeWork>(operation.request.work.operation);
@@ -272,11 +274,11 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
         }
         events.emplace_back(std::move(consumed));
     }
-    // THE UNCONDITIONAL WORKSPACE RESET, BRACKETED. This is not a call the stage machine makes, it is
-    // a SIDE EFFECT of entering the stage -- which is why every bracket placed at a stage transition
-    // missed it. A workspace reset on a large allocation is a free/alloc pair, and a free/alloc pair
-    // that round-trips the driver can cost a second on one rank while costing milliseconds on
-    // another whose pool is warm. The same call can produce both numbers.
+    // THE UNCONDITIONAL WORKSPACE RESET, BRACKETED. This is not a call the stage machine makes, it
+    // is a SIDE EFFECT of entering the stage -- which is why every bracket placed at a stage
+    // transition missed it. A workspace reset on a large allocation is a free/alloc pair, and a
+    // free/alloc pair that round-trips the driver can cost a second on one rank while costing
+    // milliseconds on another whose pool is warm. The same call can produce both numbers.
     stage_stamp(collective_ ? collective_->rank : 0, "work_reset_before");
     resources.work.reset();
     stage_stamp(collective_ ? collective_->rank : 0, "work_reset_after");
@@ -325,8 +327,8 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
             execution::project(hidden, parameters.text.output_head, logits, resources.work,
                                device.execution_view());
         } else {
-            // The same row-sharded head as project_decode, for the one-column call: project into the
-            // rank's rows, gather, then sample the whole vocabulary.
+            // The same row-sharded head as project_decode, for the one-column call: project into
+            // the rank's rows, gather, then sample the whole vocabulary.
             const int rank_rows = parameters.text.output_head.weight.n;
             auto scope          = resources.work.scope();
             Tensor scratch      = resources.work.alloc(DType::BF16, {rank_rows, batch});

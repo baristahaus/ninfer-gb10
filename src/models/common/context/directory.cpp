@@ -37,7 +37,7 @@ void finalize_mappings(ContextActions& actions) {
         auto first           = std::lower_bound(ranges.begin(), ranges.end(), new_begin,
                                                 [](const auto& range, auto begin) {
                                           return range.logical_begin + range.pages.size() < begin;
-                                      });
+                                                });
         auto last            = first;
         std::size_t begin = new_begin, end = new_end;
         while (last != ranges.end() && last->logical_begin <= end) {
@@ -66,7 +66,7 @@ void finalize_mappings(ContextActions& actions) {
     // The rebuild must carry the transaction's spill store: use_spill_store runs during
     // assembly, before this coalescing pass, and the spill actions execute through it.
     ordered.spill_store = actions.spill_store;
-    actions = std::move(ordered);
+    actions             = std::move(ordered);
 }
 } // namespace
 
@@ -101,9 +101,10 @@ ContextTransaction::ContextTransaction(ContextTransaction&& other) noexcept
       cancelled_(other.cancelled_), adopted_(other.adopted_), actions_(std::move(other.actions_)),
       state_operations_(std::move(other.state_operations_)),
       spill_in_operations_(std::move(other.spill_in_operations_)),
-      spill_out_operations_(std::move(other.spill_out_operations_)), state_(std::move(other.state_)),
-      state_copies_(std::move(other.state_copies_)), bindings_(std::move(other.bindings_)),
-      backups_(std::move(other.backups_)), state_readers_(std::move(other.state_readers_)),
+      spill_out_operations_(std::move(other.spill_out_operations_)),
+      state_(std::move(other.state_)), state_copies_(std::move(other.state_copies_)),
+      bindings_(std::move(other.bindings_)), backups_(std::move(other.backups_)),
+      state_readers_(std::move(other.state_readers_)),
       page_readers_(std::move(other.page_readers_)), retired_rows_(std::move(other.retired_rows_)),
       growth_(std::move(other.growth_)), commits_(std::move(other.commits_)) {}
 

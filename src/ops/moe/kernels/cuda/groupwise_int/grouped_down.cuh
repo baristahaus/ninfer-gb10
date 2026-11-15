@@ -100,9 +100,9 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void grouped_integer_down(
                 const int packed_col = begin + column_base + col;
                 auto* dst            = &Bs[stage][col * BK + common::swizzle_xor_64(col, k8 * 8)];
                 const auto* src      = activation +
-                                  static_cast<std::int64_t>(col < cols ? packed_col : begin) *
-                                      Shape::intermediate +
-                                  k0 + k8 * 8;
+                                       static_cast<std::int64_t>(col < cols ? packed_col : begin) *
+                                           Shape::intermediate +
+                                       k0 + k8 * 8;
                 cp_async_zfill<16, Cache::cg>(dst, src, col < cols ? 16 : 0);
             }
 
@@ -277,9 +277,9 @@ __global__ __launch_bounds__(Columns * 4, 1) void grouped_q8_down(
                 const int source_col = begin + column_base + col;
                 auto* dst            = &Bs[stage][col * BK + common::swizzle_xor_64(col, k8 * 8)];
                 const auto* src      = input +
-                                  static_cast<std::int64_t>(col < cols ? source_col : begin) *
-                                      Shape::intermediate +
-                                  k0 + k8 * 8;
+                                       static_cast<std::int64_t>(col < cols ? source_col : begin) *
+                                           Shape::intermediate +
+                                       k0 + k8 * 8;
                 cp_async_zfill<16, Cache::cg>(dst, src, col < cols ? 16 : 0);
                 auto* low_dst       = &Bl[stage][col * BK + common::swizzle_xor_64(col, k8 * 8)];
                 const auto* low_src = input_low + (src - input);

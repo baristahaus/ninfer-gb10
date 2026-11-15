@@ -30,8 +30,8 @@ int main(int argc, char** argv) {
                             launch, restore, flush, device.execution_view(), options.timing,
                             execution, cache, traffic.active_rows == 0);
                         csv.write(row, r, execution, cache,
-                                     traffic.csv(r.gpu.median_us) + ',' +
-                                         (options.op == "fold" ? options.row_metadata : "none"));
+                                  traffic.csv(r.gpu.median_us) + ',' +
+                                      (options.op == "fold" ? options.row_metadata : "none"));
                     }
             };
             if (options.op == "fold") {

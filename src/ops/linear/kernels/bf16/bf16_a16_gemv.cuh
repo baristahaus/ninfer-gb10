@@ -144,7 +144,7 @@ compute_bf16_gemv_rows(const __nv_bfloat16* activation, const __nv_bfloat16* wei
                        int warp_in_row, int lane,
                        float (&accumulators)[Schedule::kRowsPerWarp][Schedule::kAccumulatorChains],
                        int input_rows) {
-    const int K                   = Schedule::kStaticK ? Schedule::kStaticK : input_rows;
+    const int K = Schedule::kStaticK ? Schedule::kStaticK : input_rows;
     constexpr int kValuesPerPhase =
         Schedule::kWarpsPerRow * common::kWarpSize * Schedule::kValuesPerLane;
     const int phases =

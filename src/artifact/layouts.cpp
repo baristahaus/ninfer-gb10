@@ -23,9 +23,7 @@ namespace {
     return a * b;
 }
 
-[[nodiscard]] std::uint64_t align256(std::uint64_t value) {
-    return add64(value, 255) / 256 * 256;
-}
+[[nodiscard]] std::uint64_t align256(std::uint64_t value) { return add64(value, 255) / 256 * 256; }
 
 [[nodiscard]] std::uint64_t read_u64_le(const std::byte* bytes) {
     std::uint64_t value = 0;
@@ -57,21 +55,21 @@ struct DirectoryEntry {
     entries.clear();
     for (std::uint32_t expert = 0; expert < experts; ++expert) {
         const auto* entry = directory.data() + static_cast<std::size_t>(expert) * 16;
-        if (static_cast<std::uint8_t>(entry[13]) != 0 || static_cast<std::uint8_t>(entry[14]) != 0 ||
+        if (static_cast<std::uint8_t>(entry[13]) != 0 ||
+            static_cast<std::uint8_t>(entry[14]) != 0 ||
             static_cast<std::uint8_t>(entry[15]) != 0) {
             return false;
         }
-        entries.push_back({read_u64_le(entry), read_u32_le(entry + 8),
-                           static_cast<std::uint8_t>(entry[12])});
+        entries.push_back(
+            {read_u64_le(entry), read_u32_le(entry + 8), static_cast<std::uint8_t>(entry[12])});
     }
     return true;
 }
 
 // The complete plane structure implied by E experts, validated against the object's bytes.
 [[nodiscard]] bool planes_consistent(const TensorObject& object, std::uint32_t experts,
-                                     const std::vector<DirectoryEntry>& entries,
-                                     std::uint64_t rows, std::uint64_t k,
-                                     Exl3BankGeometry& bank) {
+                                     const std::vector<DirectoryEntry>& entries, std::uint64_t rows,
+                                     std::uint64_t k, Exl3BankGeometry& bank) {
     if (rows % experts != 0) { return false; }
     const auto rows_per_expert = rows / experts;
     if (rows_per_expert == 0 || rows_per_expert % 128 != 0 || k == 0 || k % 128 != 0) {
@@ -80,7 +78,7 @@ struct DirectoryEntry {
     const auto trellis_offset = align256(mul64(experts, 16));
     if (trellis_offset != entries.front().offset) { return false; }
     std::uint64_t trellis_bytes = 0;
-    std::uint64_t cursor         = trellis_offset;
+    std::uint64_t cursor        = trellis_offset;
     for (const auto& entry : entries) {
         if (entry.offset != cursor || entry.offset % 256 != 0 || entry.extent % 256 != 0) {
             return false;
@@ -91,23 +89,23 @@ struct DirectoryEntry {
             if (entry.k2 < 2 || entry.k2 > 16) { return false; }
         } else {
             if (entry.k2 != 3 && entry.k2 != 5 && entry.k2 != 7) { return false; }
-            if (bank.codebook != 2) { return false; }  // Half-integer rates require mul1.
+            if (bank.codebook != 2) { return false; } // Half-integer rates require mul1.
         }
         cursor        = add64(cursor, entry.extent);
         trellis_bytes = add64(trellis_bytes, entry.extent);
     }
     const auto suh_offset = cursor;
-    const auto suh_bytes   = mul64(mul64(experts, k), 2);
+    const auto suh_bytes  = mul64(mul64(experts, k), 2);
     const auto svh_offset = align256(add64(suh_offset, suh_bytes));
-    const auto svh_bytes   = mul64(rows, 2);
+    const auto svh_bytes  = mul64(rows, 2);
     if (add64(svh_offset, add64(svh_bytes, 4)) != object.bytes) { return false; }
-    bank.trellis_offset = trellis_offset;
-    bank.trellis_bytes  = trellis_bytes;
-    bank.suh_offset     = suh_offset;
-    bank.suh_bytes      = suh_bytes;
-    bank.svh_offset     = svh_offset;
-    bank.svh_bytes      = svh_bytes;
-    bank.experts        = experts;
+    bank.trellis_offset  = trellis_offset;
+    bank.trellis_bytes   = trellis_bytes;
+    bank.suh_offset      = suh_offset;
+    bank.suh_bytes       = suh_bytes;
+    bank.svh_offset      = svh_offset;
+    bank.svh_bytes       = svh_bytes;
+    bank.experts         = experts;
     bank.rows_per_expert = static_cast<std::uint32_t>(rows_per_expert);
     bank.trellis_extents.assign(entries.size(), 0);
     bank.k2.assign(entries.size(), 0);
@@ -146,9 +144,9 @@ WeightGeometry describe_exl3_dense(const TensorObject& object,
         if (object.bytes < tail_bytes) {
             throw std::invalid_argument("EXL3 dense linear byte size is below its fixed planes");
         }
-        std::uint32_t found = 0;
+        std::uint32_t found         = 0;
         std::uint64_t trellis_bytes = 0;
-        std::uint32_t k2 = 0;
+        std::uint32_t k2            = 0;
         for (std::uint32_t candidate = 2; candidate <= 16; ++candidate) {
             // Half-integer rates are 1.5, 2.5 and 3.5 only (contract section 2.4).
             if (candidate % 2 != 0 && candidate != 3 && candidate != 5 && candidate != 7) {
@@ -156,10 +154,8 @@ WeightGeometry describe_exl3_dense(const TensorObject& object,
             }
             const auto extent = align256(mul64(mul64(k, rows), candidate) / 16);
             if (add64(extent, tail_bytes) != object.bytes) { continue; }
-            if (found != 0) {
-                throw std::invalid_argument("ambiguous EXL3 dense bitrate");
-            }
-            found        = candidate;
+            if (found != 0) { throw std::invalid_argument("ambiguous EXL3 dense bitrate"); }
+            found         = candidate;
             trellis_bytes = extent;
             k2            = candidate;
         }
@@ -191,9 +187,7 @@ WeightGeometry describe_exl3_dense(const TensorObject& object,
         geometry.alignment = 256;
         geometry.exl3      = std::move(bank);
         return geometry;
-    } catch (const std::exception& error) {
-        throw ArtifactError(object.id + ": " + error.what());
-    }
+    } catch (const std::exception& error) { throw ArtifactError(object.id + ": " + error.what()); }
 }
 
 WeightGeometry describe_tensor(const TensorObject& object) {
@@ -207,9 +201,8 @@ WeightGeometry describe_tensor(const TensorObject& object) {
     } catch (const std::exception& error) { throw ArtifactError(object.id + ": " + error.what()); }
 }
 
-WeightGeometry describe_exl3_bank(const TensorObject& object,
-                                   std::span<const std::byte> directory,
-                                   std::array<std::byte, 4> codebook_word) {
+WeightGeometry describe_exl3_bank(const TensorObject& object, std::span<const std::byte> directory,
+                                  std::array<std::byte, 4> codebook_word) {
     try {
         if (parse_format(object.format) != QType::EXL3 ||
             parse_layout(object.layout) != QuantLayout::Exl3ExpertBank) {
@@ -218,8 +211,8 @@ WeightGeometry describe_exl3_bank(const TensorObject& object,
         if (object.shape.size() != 2) {
             throw std::invalid_argument("EXL3 expert bank must be rank 2 [E*N, K]");
         }
-        const auto rows = object.shape[0];
-        const auto k    = object.shape[1];
+        const auto rows     = object.shape[0];
+        const auto k        = object.shape[1];
         const auto codebook = read_u32_le(codebook_word.data());
         if (codebook > 2) {
             throw std::invalid_argument("unknown EXL3 codebook id " + std::to_string(codebook));
@@ -236,7 +229,7 @@ WeightGeometry describe_exl3_bank(const TensorObject& object,
         // candidates, of which exactly one must reproduce the object's byte size.
         std::vector<DirectoryEntry> entries;
         Exl3BankGeometry bank;
-        bank.codebook = codebook;
+        bank.codebook       = codebook;
         std::uint32_t found = 0;
         const auto first_candidate =
             trellis_offset > 256 ? static_cast<std::uint32_t>((trellis_offset - 256) / 16 + 1) : 1;
@@ -245,8 +238,8 @@ WeightGeometry describe_exl3_bank(const TensorObject& object,
             Exl3BankGeometry candidate = bank;
             if (planes_consistent(object, experts, entries, rows, k, candidate)) {
                 if (found != 0) { throw std::invalid_argument("ambiguous EXL3 expert count"); }
-                found  = experts;
-                bank   = candidate;
+                found = experts;
+                bank  = candidate;
             }
         }
         if (found == 0) {
@@ -261,9 +254,7 @@ WeightGeometry describe_exl3_bank(const TensorObject& object,
         geometry.alignment = 256;
         geometry.exl3      = std::move(bank);
         return geometry;
-    } catch (const std::exception& error) {
-        throw ArtifactError(object.id + ": " + error.what());
-    }
+    } catch (const std::exception& error) { throw ArtifactError(object.id + ": " + error.what()); }
 }
 
 } // namespace ninfer::artifact

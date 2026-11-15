@@ -144,8 +144,8 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
         const auto append_layers = [&](const auto& draft) {
             Tensor context = project_and_norm(draft);
             for (int layer = 0; layer < Config::layers; ++layer) {
-                auto layer_scope = state.execution.work.scope();
-                const auto& weight = draft.layers.at(static_cast<std::size_t>(layer));
+                auto layer_scope        = state.execution.work.scope();
+                const auto& weight      = draft.layers.at(static_cast<std::size_t>(layer));
                 const bool local_layer  = layer < Config::local_layers;
                 const int layer_width   = local_layer ? local_width : width;
                 const int layer_columns = layer_width * batch;
@@ -155,8 +155,8 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
                 Tensor layer_positions  = local_layer && replace_local_window
                                               ? positions.slice(0, local_offset, local_width)
                                               : positions;
-                auto layer_roots =
-                    workspace_recipe::dflash_context_layer<Config>(state.execution.work, layer_columns);
+                auto layer_roots        = workspace_recipe::dflash_context_layer<Config>(
+                    state.execution.work, layer_columns);
                 Tensor key_raw =
                     layer_roots.key_raw.view({Config::head_dim, Config::kv_heads, layer_columns});
                 Tensor value =
@@ -174,12 +174,14 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
                     ops::linear_pair(layer_context, weight.context_key, weight.context_value,
                                      key_flat, value_flat, state.execution.device.execution_view());
                 }
-                Tensor key = layer_roots.key.view({Config::head_dim, Config::kv_heads, layer_columns});
+                Tensor key =
+                    layer_roots.key.view({Config::head_dim, Config::kv_heads, layer_columns});
                 ops::rmsnorm(key_raw, weight.key_norm, Config::rms_epsilon, false, key,
                              state.execution.device.execution_view());
-                ops::rope(layer_positions.view({layer_columns}), Config::head_dim, Config::rope_theta,
-                          key, state.execution.device.execution_view());
-                Tensor key_batch = key.view({Config::head_dim, Config::kv_heads, layer_width, batch});
+                ops::rope(layer_positions.view({layer_columns}), Config::head_dim,
+                          Config::rope_theta, key, state.execution.device.execution_view());
+                Tensor key_batch =
+                    key.view({Config::head_dim, Config::kv_heads, layer_width, batch});
                 Tensor value_batch =
                     value.view({Config::head_dim, Config::kv_heads, layer_width, batch});
                 Tensor position_batch = layer_positions.view({layer_width, batch});
@@ -189,9 +191,10 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
                         dflash_state(state).local_layer(static_cast<std::uint32_t>(layer)),
                         state.execution.device.execution_view());
                 } else {
-                    ops::kv_cache_append_prefix(
-                        key_batch, value_batch, position_batch, commit_counts, table_rows, envelope,
-                        dflash_state(state).full_batch_layer(0), state.execution.device.execution_view());
+                    ops::kv_cache_append_prefix(key_batch, value_batch, position_batch,
+                                                commit_counts, table_rows, envelope,
+                                                dflash_state(state).full_batch_layer(0),
+                                                state.execution.device.execution_view());
                 }
             }
         };
@@ -335,8 +338,10 @@ void propose_batch_impl(DFlashBatchContext& state, qwen3_8_flash_next::DFlashDec
             const auto& proposal = *state.execution.model.optimized_proposal;
             Tensor logits        = state.execution.work.alloc(
                 DType::BF16, {V::draft_head_rows, static_cast<std::int32_t>(k) * batch_size});
-            ops::linear(proposal_hidden, proposal.head, logits, state.execution.device.execution_view());
-            ops::argmax(logits, flat_drafts, V::draft_head_rows, state.execution.device.execution_view());
+            ops::linear(proposal_hidden, proposal.head, logits,
+                        state.execution.device.execution_view());
+            ops::argmax(logits, flat_drafts, V::draft_head_rows,
+                        state.execution.device.execution_view());
             ops::proposal_remap_token_ids(flat_drafts,
                                           static_cast<const std::int32_t*>(proposal.token_ids.data),
                                           V::draft_head_rows, state.execution.device.stream());
@@ -455,7 +460,7 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
                                    sizeof(qwen3_8_flash_next::DFlashDecodeEgress),
                                    cudaMemcpyDeviceToHost, state.execution.device.stream()));
-        };
+    };
 }
 
 } // namespace

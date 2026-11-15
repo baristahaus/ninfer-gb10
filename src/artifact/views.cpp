@@ -10,10 +10,10 @@ WeightView bind_view(const ParameterReference& reference, const MaterializedArti
     std::uint64_t covered = 0;
     for (const auto& part : reference.binding.parts) {
         const bool auto_device = device.type() == DeviceType::None;
-        const auto& parent =
-            (device.type() == DeviceType::CUDA || (auto_device && materialized.has_device(part.object)))
-                ? materialized.device_parent(part.object)
-                : materialized.host_parent(part.object);
+        const auto& parent     = (device.type() == DeviceType::CUDA ||
+                                  (auto_device && materialized.has_device(part.object)))
+                                     ? materialized.device_parent(part.object)
+                                     : materialized.host_parent(part.object);
         if (!auto_device && parent.device != device) {
             throw ArtifactError("weight backing device differs");
         }

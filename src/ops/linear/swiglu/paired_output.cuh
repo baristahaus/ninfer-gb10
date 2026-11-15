@@ -17,7 +17,6 @@ struct ClampedSwiGluProduct {
     }
 };
 
-
 template <int RowsPerBranch, int IntermediateRows = 0>
 struct SwiGluBranchRows {
     static_assert(RowsPerBranch > 0 && (RowsPerBranch & (RowsPerBranch - 1)) == 0);

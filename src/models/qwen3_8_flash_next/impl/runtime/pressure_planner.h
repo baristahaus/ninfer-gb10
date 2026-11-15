@@ -313,7 +313,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::PressurePlanningS
         slot.checkpoint_impacts.reserve(recovery_impact_capacity);
         slot.recovery_alternatives.reserve(recovery_alternative_capacity);
     }
-    using PlanningContractAccess = qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
+    using PlanningContractAccess =
+        qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
 
     for (std::size_t index = 0; index < candidates.size(); ++index) {
         const PhysicalCandidateBinding& binding = candidates[index];
@@ -360,7 +361,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::PressurePlanningS
     owner.pressure_planning_active_ = true;
 }
 
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::~PressurePlanningSessionImpl() noexcept {
+PressurePlanningSessionImpl<
+    NINFER_QWEN38_FLASH_NEXT_VARIANT>::~PressurePlanningSessionImpl() noexcept {
     if (std::any_of(assessment_slots.begin(), assessment_slots.end(),
                     [](const AssessmentSlot& slot) { return slot.leased; })) {
         std::terminate();
@@ -368,7 +370,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::~PressurePlanning
     if (program != nullptr) { program->pressure_planning_active_ = false; }
 }
 
-std::uint32_t PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::acquire_assessment_slot() {
+std::uint32_t
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::acquire_assessment_slot() {
     for (std::uint32_t index = 0; index < assessment_slots.size(); ++index) {
         AssessmentSlot& slot = assessment_slots[index];
         if (slot.leased) { continue; }
@@ -381,9 +384,8 @@ std::uint32_t PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::acq
     throw std::logic_error("pressure runner retained too many simultaneous assessments");
 }
 
-void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_assessment_slot(const void* owner,
-                                                          std::uint32_t slot_index,
-                                                          std::uint32_t slot_generation) noexcept {
+void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_assessment_slot(
+    const void* owner, std::uint32_t slot_index, std::uint32_t slot_generation) noexcept {
     auto* session = const_cast<PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>*>(
         static_cast<const PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>*>(owner));
     if (session == nullptr || slot_index >= session->assessment_slots.size()) { std::terminate(); }
@@ -396,14 +398,15 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_asse
     if (++slot.generation == 0) { ++slot.generation; }
 }
 
-bool PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::valid(qwen3_8_flash_next::PressureTargetHandle target) const noexcept {
+bool PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::valid(
+    qwen3_8_flash_next::PressureTargetHandle target) const noexcept {
     return target.session_ == this && target.generation_ == generation &&
            target.index_ < targets.size() && program != nullptr &&
            program->resource_revision() == resource_revision;
 }
 
-std::uint32_t
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::candidate_index(runtime::PlanningCandidateId candidate) const {
+std::uint32_t PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::candidate_index(
+    runtime::PlanningCandidateId candidate) const {
     const auto found = std::find(candidate_ids.begin(), candidate_ids.end(), candidate);
     if (found == candidate_ids.end()) {
         throw std::invalid_argument("pressure target candidate does not belong to this session");
@@ -412,8 +415,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::candidate_index(r
 }
 
 const PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::TargetNode*
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::find_target(std::uint32_t selected_candidate,
-                                         std::span<const std::uint16_t> choices) const noexcept {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::find_target(
+    std::uint32_t selected_candidate, std::span<const std::uint16_t> choices) const noexcept {
     if (target_hash_table.empty()) { return nullptr; }
     const std::size_t mask = target_hash_table.size() - 1U;
     std::size_t slot =
@@ -440,13 +443,14 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::find_target(std::
 }
 
 PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::TargetNode*
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::find_target(std::uint32_t selected_candidate,
-                                         std::span<const std::uint16_t> choices) noexcept {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::find_target(
+    std::uint32_t selected_candidate, std::span<const std::uint16_t> choices) noexcept {
     return const_cast<TargetNode*>(std::as_const(*this).find_target(selected_candidate, choices));
 }
 
 std::span<const std::uint16_t>
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::victim_choices(const TargetNode& target) const {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::victim_choices(
+    const TargetNode& target) const {
     if (target.victim_choice_offset > target_choice_arena.size() ||
         target.victim_choice_count > target_choice_arena.size() - target.victim_choice_offset) {
         throw std::logic_error("pressure target choice span is invalid");
@@ -455,9 +459,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::victim_choices(co
         .subspan(target.victim_choice_offset, target.victim_choice_count);
 }
 
-std::uint32_t PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::intern_target(std::uint32_t selected_candidate,
-                                                         std::span<const std::uint16_t> choices,
-                                                         bool root_maximal) {
+std::uint32_t PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::intern_target(
+    std::uint32_t selected_candidate, std::span<const std::uint16_t> choices, bool root_maximal) {
     if (selected_candidate >= candidate_options.size() ||
         choices.size() != candidate_options[selected_candidate].victims.size()) {
         throw std::logic_error("pressure target does not match its candidate victim domain");
@@ -487,7 +490,8 @@ std::uint32_t PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::int
     return index;
 }
 
-void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::index_target(std::uint32_t target_index) {
+void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::index_target(
+    std::uint32_t target_index) {
     if (target_index >= targets.size() || target_hash_table.empty()) {
         throw std::logic_error("pressure target hash index is invalid");
     }
@@ -516,7 +520,8 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::index_target
 }
 
 qwen3_8_flash_next::PressureTargetHandle
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::identity_target(runtime::PlanningCandidateId candidate) const {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::identity_target(
+    runtime::PlanningCandidateId candidate) const {
     qwen3_8_flash_next::PressureTargetHandle handle;
     handle.session_    = this;
     handle.generation_ = generation;
@@ -524,7 +529,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::identity_target(r
     return handle;
 }
 
-void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::populate_options(std::uint32_t selected_candidate) {
+void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::populate_options(
+    std::uint32_t selected_candidate) {
     if (selected_candidate >= candidate_options.size()) {
         throw std::out_of_range("pressure candidate index is invalid");
     }
@@ -542,7 +548,8 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::populate_opt
         }
         const Owner& owner                       = owners[victim.owner_index];
         std::vector<PressureDecision>& decisions = victim.decisions;
-        using PlanningContractAccess             = qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
+        using PlanningContractAccess =
+            qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
         if (victim.own_source) {
             // The candidate's own source is never evicted: that would destroy the reuse the
             // candidate exists for. Its maximal outcome is the first half of the
@@ -557,20 +564,18 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::populate_opt
             std::optional<PressureDecision> demote;
             if (owner.shared) {
                 demote = program->inspect_shared_pressure_option(
-                    program->shared_prefix_states[PlanningContractAccess::index(
-                        *owner.shared_handle)],
+                    program
+                        ->shared_prefix_states[PlanningContractAccess::index(*owner.shared_handle)],
                     maximal, &*protection, nullptr);
                 if (demote && !demote->shared_owner) { demote.reset(); }
             } else {
                 demote = program->inspect_pressure_option(
-                    program->continuation_states[PlanningContractAccess::index(
-                        *owner.private_handle)],
+                    program
+                        ->continuation_states[PlanningContractAccess::index(*owner.private_handle)],
                     maximal, &*protection, nullptr, {}, {}, nullptr);
                 if (demote && demote->shared_owner) { demote.reset(); }
             }
-            if (demote && !demote->evicts_continuation) {
-                decisions.push_back(std::move(*demote));
-            }
+            if (demote && !demote->evicts_continuation) { decisions.push_back(std::move(*demote)); }
         } else if (owner.shared) {
             PressureDecision eviction = program->inspect_shared_eviction_option(
                 program->shared_prefix_states[PlanningContractAccess::index(*owner.shared_handle)]);
@@ -594,7 +599,8 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::populate_opt
     options.populated = true;
 }
 
-std::vector<PressureDecision> PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::pressure_successors(
+std::vector<PressureDecision>
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::pressure_successors(
     const CandidateVictimOptions& victim_options, const detail::PhysicalResources& residual,
     const Core::MaterializationSourceProtection& protection,
     const PressureDecision* current) const {
@@ -602,7 +608,8 @@ std::vector<PressureDecision> PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NE
         throw std::out_of_range("pressure successor owner index is invalid");
     }
 
-    using PlanningContractAccess = qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
+    using PlanningContractAccess =
+        qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
     std::vector<PressureDecision> successors;
     const Owner& victim_owner = owners[victim_options.owner_index];
     if (victim_owner.shared) {
@@ -633,7 +640,8 @@ std::vector<PressureDecision> PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NE
 }
 
 qwen3_8_flash_next::PressureTargetHandle
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::root_maximal_target(runtime::PlanningCandidateId root_candidate) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::root_maximal_target(
+    runtime::PlanningCandidateId root_candidate) {
     if (scratch_live) { throw std::logic_error("pressure expansion scratch is still live"); }
     const std::uint32_t selected_candidate = candidate_index(root_candidate);
     populate_options(selected_candidate);
@@ -652,7 +660,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::root_maximal_targ
 }
 
 qwen3_8_flash_next::PressureTargetHandle
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::maximal_target(runtime::PlanningCandidateId id) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::maximal_target(
+    runtime::PlanningCandidateId id) {
     if (scratch_live) { throw std::logic_error("pressure expansion scratch is live"); }
     const auto selected = candidate_index(id);
     populate_options(selected);
@@ -681,8 +690,8 @@ auto PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::construction
     return slot;
 }
 
-void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_construction(const void* owner, std::uint32_t index,
-                                                       std::uint32_t lease) noexcept {
+void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_construction(
+    const void* owner, std::uint32_t index, std::uint32_t lease) noexcept {
     auto& session = *const_cast<PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>*>(
         static_cast<const PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>*>(owner));
     if (index < session.construction_slots.size()) {
@@ -695,15 +704,17 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_cons
 }
 
 detail::PhysicalResources
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::construction_residual(std::uint32_t index,
-                                                   std::span<const std::uint16_t> choices) const {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::construction_residual(
+    std::uint32_t index, std::span<const std::uint16_t> choices) const {
     detail::PhysicalDelta pressure;
     const auto& options = candidate_options[index];
     for (std::size_t owner = 0; owner < choices.size(); ++owner) {
         if (choices[owner] == 0) { continue; }
         const auto& decision = options.victims[owner].decisions[choices[owner] - 1];
-        pressure.added       = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(pressure.added, decision.effect.added);
-        pressure.removed     = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(pressure.removed, decision.effect.removed);
+        pressure.added       = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(
+            pressure.added, decision.effect.added);
+        pressure.removed = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(
+            pressure.removed, decision.effect.removed);
     }
     auto result = program->guided_materialization_deficit(*candidates[index].state, pressure);
     result.host.kv_bytes =
@@ -712,8 +723,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::construction_resi
 }
 
 qwen3_8_flash_next::PressureConstructionCursor
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::begin_construction(qwen3_8_flash_next::PressureTargetHandle target,
-                                                bool restore) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::begin_construction(
+    qwen3_8_flash_next::PressureTargetHandle target, bool restore) {
     if (!valid(target) || scratch_live) { throw std::logic_error("invalid construction parent"); }
     const auto& node = targets[target.index_];
     populate_options(node.candidate_index);
@@ -733,13 +744,14 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::begin_constructio
         slot.generation      = construction_generation;
         slot.scan_generation = 1;
         return qwen3_8_flash_next::PressureConstructionCursor(this, index, slot.generation,
-                                                   &release_construction);
+                                                              &release_construction);
     }
     throw std::length_error("all pressure construction cursors are leased");
 }
 
 runtime::PressureConstructionStep
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::next_construction_option(qwen3_8_flash_next::PressureConstructionCursor& cursor) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::next_construction_option(
+    qwen3_8_flash_next::PressureConstructionCursor& cursor) {
     auto& slot    = construction_slot(cursor);
     auto& options = candidate_options[slot.candidate_index];
     if (slot.next_option < slot.options.size()) {
@@ -787,8 +799,9 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::next_construction
     return {}; // one owner's successor generation is a separately metered operation
 }
 
-void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::choose_construction(qwen3_8_flash_next::PressureConstructionCursor& cursor,
-                                                      runtime::PressureConstructionOptionId id) {
+void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::choose_construction(
+    qwen3_8_flash_next::PressureConstructionCursor& cursor,
+    runtime::PressureConstructionOptionId id) {
     auto& slot = construction_slot(cursor);
     if (id.cursor_generation != slot.generation || id.scan_generation != slot.scan_generation ||
         id.index >= slot.options.size()) {
@@ -816,7 +829,8 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::choose_const
     if (++slot.scan_generation == 0) { ++slot.scan_generation; }
 }
 
-std::optional<qwen3_8_flash_next::PressureTargetHandle> PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::construction_target(
+std::optional<qwen3_8_flash_next::PressureTargetHandle>
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::construction_target(
     const qwen3_8_flash_next::PressureConstructionCursor& cursor) {
     auto& slot = construction_slot(cursor);
     if (!find_target(slot.candidate_index, slot.choices) &&
@@ -832,7 +846,8 @@ std::optional<qwen3_8_flash_next::PressureTargetHandle> PressurePlanningSessionI
 }
 
 runtime::PressureTargetGuidance
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::guidance(qwen3_8_flash_next::PressureTargetHandle target) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::guidance(
+    qwen3_8_flash_next::PressureTargetHandle target) {
     if (!valid(target) || scratch_live) {
         throw std::logic_error("pressure target guidance is stale or conflicts with expansion");
     }
@@ -846,7 +861,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::guidance(qwen3_8_
     return result;
 }
 
-runtime::PressureTargetGuidance PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::guidance_choices(
+runtime::PressureTargetGuidance
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::guidance_choices(
     std::uint32_t candidate_index, std::span<const std::uint16_t> choices, std::uint32_t ordinal,
     std::optional<std::size_t> override_owner, const PressureDecision* override_decision) {
     populate_options(candidate_index);
@@ -896,21 +912,22 @@ runtime::PressureTargetGuidance PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_
              !decision.backend_kv_changes.empty())) {
             recovery_complete = false;
         }
-        approximate_pressure.added =
-            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(approximate_pressure.added, decision.effect.added);
-        approximate_pressure.removed =
-            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(approximate_pressure.removed, decision.effect.removed);
+        approximate_pressure.added = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(
+            approximate_pressure.added, decision.effect.added);
+        approximate_pressure.removed = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_resource_sum(
+            approximate_pressure.removed, decision.effect.removed);
         estimated_pressure.append(decision.transfer_requirements);
-        const std::uint32_t units = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::degradation_units(decision);
-        total_degradation =
-            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(static_cast<std::uint64_t>(total_degradation) + units);
-        total_dropped = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(static_cast<std::uint64_t>(total_dropped) +
-                                                decision.checkpoint_drops);
+        const std::uint32_t units =
+            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::degradation_units(decision);
+        total_degradation = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(
+            static_cast<std::uint64_t>(total_degradation) + units);
+        total_dropped = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(
+            static_cast<std::uint64_t>(total_dropped) + decision.checkpoint_drops);
         guidance_outcomes.push_back(runtime::PressureOwnerOutcome{
-            .owner             = victim_owner.id,
-            .disposition       = decision.evicts_continuation ? runtime::VictimDisposition::Evicted
-                                                              : runtime::VictimDisposition::Retained,
-            .degradation_units = units,
+            .owner       = victim_owner.id,
+            .disposition = decision.evicts_continuation ? runtime::VictimDisposition::Evicted
+                                                        : runtime::VictimDisposition::Retained,
+            .degradation_units   = units,
             .dropped_checkpoints = decision.checkpoint_drops,
         });
     }
@@ -935,7 +952,8 @@ runtime::PressureTargetGuidance PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_
     const auto append_residual = [&](std::uint64_t value, std::uint64_t limit) {
         if (value == 0) { return; }
         ++constraints;
-        NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_add(residual_q20, normalized(value, limit));
+        NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_add(residual_q20,
+                                                                     normalized(value, limit));
     };
     append_residual(residual.device.active_lanes, capacity.device.active_lanes);
     append_residual(residual.device.state_slots, capacity.device.state_slots);
@@ -999,7 +1017,8 @@ runtime::PressureTargetGuidance PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_
         }
         const std::uint64_t steps =
             1U + (residual_values[index] - 1U) / maximum_additional_relief[index];
-        remaining_steps = std::max(remaining_steps, NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(steps));
+        remaining_steps = std::max(
+            remaining_steps, NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(steps));
     }
     return runtime::PressureTargetGuidance{
         .physical =
@@ -1009,7 +1028,8 @@ runtime::PressureTargetGuidance PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_
                 .normalized_residual_q20   = residual_q20,
                 .requires_exact_feedback   = candidate.blocked_host_allocation_bytes != 0,
             },
-        .estimated_machine_work     = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::materialization_machine_work(candidate, estimated_pressure),
+        .estimated_machine_work = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::materialization_machine_work(
+            candidate, estimated_pressure),
         .owner_outcomes             = guidance_outcomes,
         .candidate                  = candidate_ids[candidate_index],
         .stable_target_ordinal      = ordinal,
@@ -1023,7 +1043,8 @@ runtime::PressureTargetGuidance PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_
 }
 
 qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::assess(qwen3_8_flash_next::PressureTargetHandle target) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::assess(
+    qwen3_8_flash_next::PressureTargetHandle target) {
     if (!valid(target) || scratch_live) {
         throw std::logic_error("pressure target assessment is stale or conflicts with expansion");
     }
@@ -1079,17 +1100,19 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::assess(qwen3_8_fl
             selected_private_owner_ids.push_back(owner.id);
             selected_private_decisions.push_back(decision);
         }
-        const std::uint32_t units   = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::degradation_units(*decision);
-        const std::uint32_t dropped = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::dropped_checkpoint_count(*decision);
-        total_degradation =
-            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(static_cast<std::uint64_t>(total_degradation) + units);
-        total_dropped =
-            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(static_cast<std::uint64_t>(total_dropped) + dropped);
+        const std::uint32_t units =
+            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::degradation_units(*decision);
+        const std::uint32_t dropped =
+            NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::dropped_checkpoint_count(*decision);
+        total_degradation = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(
+            static_cast<std::uint64_t>(total_degradation) + units);
+        total_dropped = NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::planning_saturating_u32(
+            static_cast<std::uint64_t>(total_dropped) + dropped);
         assessment_outcomes.push_back(runtime::PressureOwnerOutcome{
-            .owner             = owner.id,
-            .disposition       = decision->evicts_continuation ? runtime::VictimDisposition::Evicted
-                                                               : runtime::VictimDisposition::Retained,
-            .degradation_units = units,
+            .owner       = owner.id,
+            .disposition = decision->evicts_continuation ? runtime::VictimDisposition::Evicted
+                                                         : runtime::VictimDisposition::Retained,
+            .degradation_units   = units,
             .dropped_checkpoints = dropped,
         });
         ++projection_work;
@@ -1164,8 +1187,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::assess(qwen3_8_fl
     }
     const runtime::MaterializationMachineWork machine_work =
         identity_target ? candidate.identity_assessment.machine_work
-                        : NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::materialization_machine_work(*projected, selected_private_decisions,
-                                                       selected_shared_decisions);
+                        : NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::materialization_machine_work(
+                              *projected, selected_private_decisions, selected_shared_decisions);
 
     bool expandable = identity_target || (recovery_projection_valid && composed_valid);
     if (expandable) {
@@ -1264,15 +1287,15 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::assess(qwen3_8_fl
     }
     result.owner_outcomes     = slot.owner_outcomes;
     result.checkpoint_impacts = slot.checkpoint_impacts;
-    return qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>(this, generation, target.index_, result, slot_index,
-                                           slot.generation,
-                                           &PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_assessment_slot,
-                                           std::move(executable), std::move(capture_executable));
+    return qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>(
+        this, generation, target.index_, result, slot_index, slot.generation,
+        &PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::release_assessment_slot,
+        std::move(executable), std::move(capture_executable));
 }
 
 qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::prepare_expansion(qwen3_8_flash_next::PressureTargetHandle parent,
-                                               std::uint32_t maximum_owners) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::prepare_expansion(
+    qwen3_8_flash_next::PressureTargetHandle parent, std::uint32_t maximum_owners) {
     if (!valid(parent) || scratch_live || maximum_owners == 0) {
         throw std::logic_error("pressure expansion parent is stale or scratch is busy");
     }
@@ -1402,12 +1425,13 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::prepare_expansion
 
     if (++scratch_generation == 0) { ++scratch_generation; }
     scratch_live = true;
-    return qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>(this, generation, scratch_generation, parent.index_,
-                                              prepared_new_count);
+    return qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>(
+        this, generation, scratch_generation, parent.index_, prepared_new_count);
 }
 
 qwen3_8_flash_next::PressureExpansionView
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::commit_expansion(qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& prepared) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::commit_expansion(
+    qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& prepared) {
     if (!scratch_live || prepared.session_ != this || prepared.session_generation_ != generation ||
         prepared.scratch_generation_ != scratch_generation ||
         prepared.new_canonical_count_ != prepared_new_count ||
@@ -1491,7 +1515,8 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::commit_expansion(
 }
 
 void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::discard_expansion(
-    qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& prepared) noexcept {
+    qwen3_8_flash_next::PreparedPressureExpansion<NINFER_QWEN38_FLASH_NEXT_VARIANT>&&
+        prepared) noexcept {
     if (scratch_live && prepared.session_ == this && prepared.session_generation_ == generation &&
         prepared.scratch_generation_ == scratch_generation) {
         expansion_scratch.clear();
@@ -1505,9 +1530,10 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::discard_expa
     prepared.scratch_generation_ = 0;
 }
 
-runtime::PrefillWork PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::shared_capture_split_prefill_work(
-    const qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>& assessed, const PreparedPromptData& prompt,
-    std::span<const std::uint32_t> frontiers) const {
+runtime::PrefillWork
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::shared_capture_split_prefill_work(
+    const qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>& assessed,
+    const PreparedPromptData& prompt, std::span<const std::uint32_t> frontiers) const {
     if (assessed.session_ != this || assessed.session_generation_ != generation || scratch_live ||
         assessed.target_index_ >= targets.size() || !assessed.executable_ ||
         assessed.capture_executable_ ||
@@ -1518,9 +1544,9 @@ runtime::PrefillWork PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIAN
 }
 
 std::optional<PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::AdmissionCandidate>
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::seal(qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed,
-                                  const PreparedPromptData& prompt,
-                                  runtime::FinalScheduleIntent intent) {
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::seal(
+    qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed,
+    const PreparedPromptData& prompt, runtime::FinalScheduleIntent intent) {
     if (assessed.session_ != this || assessed.session_generation_ != generation || scratch_live ||
         assessed.target_index_ >= targets.size() || !assessed.executable_ ||
         assessed.capture_executable_ ||
@@ -1537,8 +1563,10 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::seal(qwen3_8_flas
     return sealed;
 }
 
-std::optional<PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::CapturePressureCandidate>
-PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::seal_capture(qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed) {
+std::optional<
+    PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::CapturePressureCandidate>
+PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::seal_capture(
+    qwen3_8_flash_next::AssessedPressureTarget<NINFER_QWEN38_FLASH_NEXT_VARIANT>&& assessed) {
     if (assessed.session_ != this || assessed.session_generation_ != generation || scratch_live ||
         assessed.target_index_ >= targets.size() || assessed.executable_ ||
         !assessed.capture_executable_ ||

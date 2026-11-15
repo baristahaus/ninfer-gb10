@@ -64,7 +64,7 @@ __device__ __forceinline__ unsigned long long sampling_expand_bf16_tile_sort_key
     const unsigned int ordered = key >> S::kSamplingTileIndexBits;
     const unsigned int bits    = (ordered & 0x8000u) ? (ordered ^ 0x8000u) : ((~ordered) & 0xffffu);
     const int token            = tile_start + static_cast<int>(S::kSamplingTileIndexMask) -
-                      static_cast<int>(key & S::kSamplingTileIndexMask);
+                                 static_cast<int>(key & S::kSamplingTileIndexMask);
     return score_id_order_key(__uint_as_float(bits << 16), token);
 }
 

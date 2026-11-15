@@ -9,12 +9,12 @@ namespace {
 template <class S, int Tag>
 struct Bf16VisionFc1Schedule : S {};
 template <class S, int Tag>
-using Fc1         = Bf16VisionFc1Schedule<Bf16RowTailSchedule<Bf16ScheduleInstance<S, 1152>>, Tag>;
-using Small       = Fc1<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
-                                           Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
-                        0>;
-using Hot         = Fc1<Bf16A16TmaMmaSchedule<64, 32, 64, 32, 16, 3, 2>, 1>;
-using Medium      = Fc1<Bf16A16TmaMmaSchedule<64, 64, 64, 32, 16, 3, 2>, 2>;
+using Fc1    = Bf16VisionFc1Schedule<Bf16RowTailSchedule<Bf16ScheduleInstance<S, 1152>>, Tag>;
+using Small  = Fc1<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
+                                      Bf16MmaFragmentPipeline::PingPong, Bf16MmaRaster::TokenFast>,
+                   0>;
+using Hot    = Fc1<Bf16A16TmaMmaSchedule<64, 32, 64, 32, 16, 3, 2>, 1>;
+using Medium = Fc1<Bf16A16TmaMmaSchedule<64, 64, 64, 32, 16, 3, 2>, 2>;
 using QuarterTail = Fc1<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1>, 4>;
 using Wide128     = Fc1<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1>, 10>;
 using Wide192     = Fc1<Bf16A16TmaMmaSchedule<192, 128, 64, 64, 32, 2, 1>, 11>;

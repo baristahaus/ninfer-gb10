@@ -84,7 +84,7 @@ __launch_bounds__(MmaSchedule<TileColumns, kBlockK, kRowsPerProducer>::kThreads,
     extern __shared__ __align__(16) unsigned char shared_bytes[];
     auto& reusable = *reinterpret_cast<MmaReusableStorage<TileColumns, kBlockK, kRowsPerProducer>*>(
         shared_bytes);
-    auto* top_keys = reinterpret_cast<std::uint64_t(*)[kLinearTopK]>(
+    auto* top_keys = reinterpret_cast<std::uint64_t (*)[kLinearTopK]>(
         shared_bytes + sizeof(MmaReusableStorage<TileColumns, kBlockK, kRowsPerProducer>));
     const int column_begin = static_cast<int>(blockIdx.y) * TileColumns;
     const int live_columns = min(TileColumns, columns - column_begin);
@@ -201,8 +201,8 @@ __launch_bounds__(MmaSchedule<TileColumns, kBlockK, kRowsPerProducer>::kThreads,
                     common::cp_commit();
                 }
 
-                const auto load_fragments = [&](int k_step, unsigned(&a)[4],
-                                                unsigned(&b)[kTokenMmas][2]) {
+                const auto load_fragments = [&](int k_step, unsigned (&a)[4],
+                                                unsigned (&b)[kTokenMmas][2]) {
                     const int weight_row = warp_row * 16 + a_rowoff;
                     const int weight_col = k_step * 16 + a_coloff;
                     common::ldmatrix_x4(

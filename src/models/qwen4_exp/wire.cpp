@@ -442,13 +442,12 @@ Result decode_result(Decoder& in) {
         ContextResult v;
         v.transfers.resize(in.count(30));
         for (auto& t : v.transfers) {
-            t.resource =
-                static_cast<runtime::ContextResourceClass>(in.u8());
-            t.direction   = static_cast<runtime::ContextTransferDirection>(in.u8());
-            t.units = in.u64();
+            t.resource   = static_cast<runtime::ContextResourceClass>(in.u8());
+            t.direction  = static_cast<runtime::ContextTransferDirection>(in.u8());
+            t.units      = in.u64();
             t.page_count = in.u32();
-            t.work        = {in.u64(), in.u32()};
-            t.elapsed_ns  = in.u64();
+            t.work       = {in.u64(), in.u32()};
+            t.elapsed_ns = in.u64();
         }
         return v;
     }

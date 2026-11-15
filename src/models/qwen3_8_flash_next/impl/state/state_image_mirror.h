@@ -40,7 +40,9 @@ public:
     MirroredStateImageDevicePool& operator=(const MirroredStateImageDevicePool&) = delete;
 
     [[nodiscard]] const tp2::MirrorTarget& target() const noexcept { return where_; }
+
     [[nodiscard]] StateImageDevicePool& origin_pool() noexcept { return origin_; }
+
     [[nodiscard]] StateImageDevicePool& mirror_pool() noexcept { return mirror_; }
 
     void zero_slot(std::int32_t slot, cudaStream_t stream = nullptr);

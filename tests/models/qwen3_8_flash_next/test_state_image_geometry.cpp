@@ -111,20 +111,20 @@ Planned plan(const q38::StateImageSpec& spec) {
 } // namespace
 
 int main() {
-    int failures = 0;
+    int failures                   = 0;
     const q38::StateImageSpec base = flash_next_spec();
 
     // Width 1 is the single-device lane: unchanged, field for field, and the planned layout is
     // byte-for-byte the same plan.
     const q38::StateImageSpec identity = q38::shard_state_image_spec(base, 1, 0);
     failures += check(same_spec(identity, base), "width 1 did not return the spec unchanged");
-    const Planned whole    = plan(base);
+    const Planned whole         = plan(base);
     const Planned identity_plan = plan(identity);
-    failures += check(whole.bytes == identity_plan.bytes &&
-                          whole.layout.linear.conv.size() == identity_plan.layout.linear.conv.size() &&
-                          whole.layout.linear.conv[0].bytes ==
-                              identity_plan.layout.linear.conv[0].bytes,
-                      "width 1 planned a different StateImage layout");
+    failures +=
+        check(whole.bytes == identity_plan.bytes &&
+                  whole.layout.linear.conv.size() == identity_plan.layout.linear.conv.size() &&
+                  whole.layout.linear.conv[0].bytes == identity_plan.layout.linear.conv[0].bytes,
+              "width 1 planned a different StateImage layout");
 
     // Width 2: exactly three fields shard, and the planned component bytes follow them.
     const q38::StateImageSpec rank0 = q38::shard_state_image_spec(base, 2, 0);
@@ -134,10 +134,10 @@ int main() {
                       "width 2 did not halve the GDN value heads and convolution channels");
     failures += check(rank0.dflash_local && rank0.dflash_local->kv_heads == 1,
                       "width 2 did not halve the DFlash KV heads");
-    q38::StateImageSpec expected = base;
-    expected.linear.value_heads       = 24;
-    expected.linear.conv_channels     = 5120;
-    expected.dflash_local->kv_heads   = 1;
+    q38::StateImageSpec expected    = base;
+    expected.linear.value_heads     = 24;
+    expected.linear.conv_channels   = 5120;
+    expected.dflash_local->kv_heads = 1;
     failures += check(same_spec(rank0, expected),
                       "width 2 changed a field that must stay whole on every rank");
 
@@ -148,10 +148,10 @@ int main() {
     failures += check(sharded.layout.linear.conv[0].bytes == 5120ULL * 3ULL * slots * 2ULL,
                       "sharded convolution state bytes are not conv_channels/width * conv_width * "
                       "slots * BF16");
-    failures += check(sharded.layout.linear.recurrent[0].bytes ==
-                          128ULL * 128ULL * 24ULL * slots * 4ULL,
-                      "sharded recurrent state bytes are not key_head_dim * value_head_dim * "
-                      "value_heads/width * slots * FP32");
+    failures +=
+        check(sharded.layout.linear.recurrent[0].bytes == 128ULL * 128ULL * 24ULL * slots * 4ULL,
+              "sharded recurrent state bytes are not key_head_dim * value_head_dim * "
+              "value_heads/width * slots * FP32");
     failures += check(sharded.layout.continuation_hidden.shape[0] == 2560 &&
                           sharded.layout.continuation_hidden.shape[1] == 4,
                       "the continuation hidden must stay whole and keep the slot count");
@@ -183,14 +183,13 @@ int main() {
     q38::StateImageSpec negative_heads = base;
     negative_heads.linear.value_heads  = -2;
     failures += expect_throws<std::invalid_argument>(
-        [&] { (void)q38::shard_state_image_spec(negative_heads, 2, 0); },
-        "negative value heads");
-    q38::StateImageSpec inconsistent = base;
+        [&] { (void)q38::shard_state_image_spec(negative_heads, 2, 0); }, "negative value heads");
+    q38::StateImageSpec inconsistent  = base;
     inconsistent.linear.conv_channels = 10241; // 2 * key_dim + value_dim cannot be odd
     failures += expect_throws<std::invalid_argument>(
         [&] { (void)q38::shard_state_image_spec(inconsistent, 2, 0); },
         "convolution channels that are not 2 * key_dim + value_dim");
-    q38::StateImageSpec odd_dflash = base;
+    q38::StateImageSpec odd_dflash    = base;
     odd_dflash.dflash_local->kv_heads = 3;
     failures += expect_throws<std::invalid_argument>(
         [&] { (void)q38::shard_state_image_spec(odd_dflash, 2, 0); },

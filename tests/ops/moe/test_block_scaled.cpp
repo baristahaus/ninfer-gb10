@@ -227,7 +227,7 @@ struct Fixture {
         shared_down_d = to_device_bf16(shared_down);
         weights       = {dense(control_d, E + 1, H),
                          {{gu.view(), down.view(), E, control_d.device()},
-                    fp8 ? ops::ExpertActivationDivisors{}
+                          fp8 ? ops::ExpertActivationDivisors{}
                               : ops::ExpertActivationDivisors{719.7991333F, 313.927002F}},
                          {{dense(shared_gu_d, 2 * shared_intermediate, H)},
                           {dense(shared_down_d, H, shared_intermediate)}}};
@@ -503,12 +503,12 @@ int affine_cases(Fixture& f, CudaExecutionView execution) {
             const auto* source =
                 static_cast<const std::byte*>(from.data.data()) + (e & 1) * from.stride;
             cuda_check(cudaMemcpyAsync(static_cast<std::byte*>(codes.data()) + e * cb, source, cb,
-                                        cudaMemcpyDeviceToDevice, execution.stream()),
-                        "affine codes");
+                                       cudaMemcpyDeviceToDevice, execution.stream()),
+                       "affine codes");
             cuda_check(cudaMemcpyAsync(static_cast<std::byte*>(scales.data()) + e * sb,
-                                        source + from.scale_offset, sb, cudaMemcpyDeviceToDevice,
-                                        execution.stream()),
-                        "affine scales");
+                                       source + from.scale_offset, sb, cudaMemcpyDeviceToDevice,
+                                       execution.stream()),
+                       "affine scales");
         }
         auto view            = from.view();
         view.offsets         = nullptr;

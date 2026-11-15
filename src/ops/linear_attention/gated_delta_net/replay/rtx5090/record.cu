@@ -47,11 +47,11 @@ void launch_recurrent_record_fixed(const Tensor& q, const Tensor& k, const Tenso
 // run_recurrent_sequence<FoldEffects> + state store), then the record body matches
 // recurrent_record_kernel exactly, so the fused result equals fold-then-record bit for bit.
 template <bool Masked>
-__global__ void __launch_bounds__(common::kWarpSize * kNumWarps, 2)
+__global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2)
     recurrent_fold_record_plain_kernel(RecordAccess<Masked> access, PendingFoldTable pending) {
     const RecurrentCoordinates coord = access.coordinates();
-    const std::int32_t valid        = access.active_columns(coord);
-    const std::int32_t slot         = access.initial_slots[coord.batch];
+    const std::int32_t valid         = access.active_columns(coord);
+    const std::int32_t slot          = access.initial_slots[coord.batch];
     for (std::int32_t entry = 0; entry < pending.count; ++entry) {
         const GdnReplayFoldKernelRow row = pending.rows[entry];
         if (row.commit_columns <= 0 || row.source_state_slot != slot ||

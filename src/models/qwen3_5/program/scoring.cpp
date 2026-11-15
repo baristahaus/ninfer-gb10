@@ -55,12 +55,14 @@ void RankProgramImpl::launch_score(ComputeOperation& operation) {
                                                 frame.spec.output_rows, count);
     }
     // Diagnostic: NINFER_SCORE_DEBUG_ROUNDS=1 prints this round's shape and how many exchanges its
-    // gather took (reduce_index advances once per exchange). Two runs that fail differently can only
-    // be compared if they make the same number of rounds and exchanges, so this is checked before any
-    // per-position dump is read.
-    if (const char* rounds = std::getenv("NINFER_SCORE_DEBUG_ROUNDS"); rounds != nullptr && *rounds) {
+    // gather took (reduce_index advances once per exchange). Two runs that fail differently can
+    // only be compared if they make the same number of rounds and exchanges, so this is checked
+    // before any per-position dump is read.
+    if (const char* rounds = std::getenv("NINFER_SCORE_DEBUG_ROUNDS");
+        rounds != nullptr && *rounds) {
         std::cerr << "score round: sharded=" << (sharded_ != nullptr ? 1 : 0) << " count=" << count
-                  << " first_column=" << work.first_column << " score_cursor=" << operation.score_cursor
+                  << " first_column=" << work.first_column
+                  << " score_cursor=" << operation.score_cursor
                   << " reduce_index=" << collective_->reduce_index << '\n';
     }
     // Diagnostic: NINFER_SCORE_DEBUG_ROW=<id> prints, for every position of this round whose target
@@ -77,9 +79,9 @@ void RankProgramImpl::launch_score(ComputeOperation& operation) {
         std::vector<std::int32_t> host_targets(static_cast<std::size_t>(count));
         CUDA_CHECK(cudaMemcpy(host_ids.data(), argmax_ids.data, argmax_ids.bytes(),
                               cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host_targets.data(), targets.data, targets.bytes(),
-                              cudaMemcpyDeviceToHost));
-        const auto* base = static_cast<const std::uint8_t*>(logits.data);
+        CUDA_CHECK(
+            cudaMemcpy(host_targets.data(), targets.data, targets.bytes(), cudaMemcpyDeviceToHost));
+        const auto* base    = static_cast<const std::uint8_t*>(logits.data);
         const auto to_float = [](std::uint16_t bits) {
             const std::uint32_t wide = static_cast<std::uint32_t>(bits) << 16;
             float value              = 0.0F;
@@ -95,12 +97,14 @@ void RankProgramImpl::launch_score(ComputeOperation& operation) {
                 2, cudaMemcpyDeviceToHost));
             CUDA_CHECK(cudaMemcpy(&max_bits,
                                   base + (static_cast<std::size_t>(column) * vocabulary +
-                                          static_cast<std::size_t>(host_ids[column])) * 2,
+                                          static_cast<std::size_t>(host_ids[column])) *
+                                             2,
                                   2, cudaMemcpyDeviceToHost));
             std::cerr << "score debug: sharded=" << (sharded_ != nullptr ? 1 : 0)
                       << " col=" << column << " target=" << wanted
-                      << " target_logit=" << to_float(target_bits) << " argmax_id="
-                      << host_ids[column] << " argmax_logit=" << to_float(max_bits) << '\n';
+                      << " target_logit=" << to_float(target_bits)
+                      << " argmax_id=" << host_ids[column] << " argmax_logit=" << to_float(max_bits)
+                      << '\n';
         }
     }
     Tensor scores = frame.score_logprobs.slice(0, 0, count);

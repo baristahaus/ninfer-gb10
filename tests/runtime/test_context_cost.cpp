@@ -35,7 +35,9 @@ void expect_throw(Function&& function, const char* message) {
 
 std::array<ninfer::runtime::ContextTransferCost, ninfer::runtime::kContextTransferDirectionCount>
 transfer(std::uint64_t batch_ns = 10) {
-    std::array<ninfer::runtime::ContextTransferCost, ninfer::runtime::kContextTransferDirectionCount> result;
+    std::array<ninfer::runtime::ContextTransferCost,
+               ninfer::runtime::kContextTransferDirectionCount>
+        result;
     for (auto& direction : result) {
         direction = {.batch_ns        = batch_ns,
                      .operation_ns    = 3,
@@ -61,7 +63,7 @@ Json direction_json(const ninfer::runtime::ContextTransferCost& value) {
 }
 
 Json transfer_json(const std::array<ninfer::runtime::ContextTransferCost,
-                                   ninfer::runtime::kContextTransferDirectionCount>& value) {
+                                    ninfer::runtime::kContextTransferDirectionCount>& value) {
     return Json{{"d2h", direction_json(value[0])},
                 {"h2d", direction_json(value[1])},
                 {"d2d", direction_json(value[2])},
@@ -158,7 +160,7 @@ void test_schema_validation() {
 
     // A calibration that predates the spill directions inherits the host-to-device cost; an
     // explicit spill entry is honored.
-    Json legacy = Json::object();
+    Json legacy   = Json::object();
     legacy["d2h"] = direction_json(transfer()[0]);
     legacy["h2d"] = direction_json({.batch_ns        = 70,
                                     .operation_ns    = 4,
@@ -168,15 +170,16 @@ void test_schema_validation() {
         machine("legacy", legacy, Json::array({prefill_entry("config-and-formats", prefill())}));
     const auto legacy_parsed = ninfer::runtime::parse_context_cost_presets(
         document(Json::array({legacy_machine})).dump(), "legacy");
-    expect(legacy_parsed.size() == 1 && legacy_parsed[0].transfer->at(3) == legacy_parsed[0].transfer->at(1) &&
+    expect(legacy_parsed.size() == 1 &&
+               legacy_parsed[0].transfer->at(3) == legacy_parsed[0].transfer->at(1) &&
                legacy_parsed[0].transfer->at(4) == legacy_parsed[0].transfer->at(1),
            "missing spill directions did not inherit the host-to-device cost");
-    legacy["h2spill"] = direction_json({.batch_ns        = 9,
-                                        .operation_ns    = 2,
-                                        .ns_per_byte_q32 = ninfer::runtime::kContextCostQ32One});
+    legacy["h2spill"] = direction_json(
+        {.batch_ns = 9, .operation_ns = 2, .ns_per_byte_q32 = ninfer::runtime::kContextCostQ32One});
     const auto explicit_parsed = ninfer::runtime::parse_context_cost_presets(
-        document(Json::array({machine("explicit", legacy,
-                                      Json::array({prefill_entry("config-and-formats", prefill())}))}))
+        document(
+            Json::array({machine("explicit", legacy,
+                                 Json::array({prefill_entry("config-and-formats", prefill())}))}))
             .dump(),
         "explicit");
     expect(explicit_parsed.size() == 1 && explicit_parsed[0].transfer->at(3).batch_ns == 9 &&

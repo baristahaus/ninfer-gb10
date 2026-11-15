@@ -117,8 +117,8 @@ void Variant::attention_output_projection(const Tensor& attention, const Weight&
                                           Tensor& residual, qwen3_8_flash_next::TextPhase,
                                           MemoryArena& workspace, CudaExecutionView execution) {
     cudaStream_t stream = execution.stream();
-    auto scope   = workspace.scope();
-    Tensor delta = workspace.alloc(DType::BF16, {weight.n, attention.ne[1]});
+    auto scope          = workspace.scope();
+    Tensor delta        = workspace.alloc(DType::BF16, {weight.n, attention.ne[1]});
     ops::linear(attention, weight, delta, execution);
     ops::residual_add(delta, residual, execution);
 }
@@ -133,7 +133,8 @@ void Variant::mtp_attention_projection(const Tensor& hidden,
 }
 
 void Variant::mtp_kv_projection(const Tensor& hidden, const MtpAttentionProjectionWeights& weights,
-                                Tensor& key, Tensor& value, MemoryArena&, CudaExecutionView execution) {
+                                Tensor& key, Tensor& value, MemoryArena&,
+                                CudaExecutionView execution) {
     cudaStream_t stream = execution.stream();
     ops::linear(hidden, weights.key, key, execution);
     ops::linear(hidden, weights.value, value, execution);
@@ -141,7 +142,8 @@ void Variant::mtp_kv_projection(const Tensor& hidden, const MtpAttentionProjecti
 
 void Variant::mtp_q_gate_projection(const Tensor& hidden,
                                     const MtpAttentionProjectionWeights& weights, Tensor& query,
-                                    Tensor& gate, MemoryArena& workspace, CudaExecutionView execution) {
+                                    Tensor& gate, MemoryArena& workspace,
+                                    CudaExecutionView execution) {
     cudaStream_t stream = execution.stream();
     ops::flash_next_project_query_gate(hidden, weights.query_gate, query, gate, workspace, stream);
 }
@@ -180,8 +182,7 @@ void Variant::gdn_output_projection(const Tensor& hidden, const Weight& weight, 
 void Variant::gdn_norm_control_projection(const Tensor& residual, const Tensor& norm_weight,
                                           float eps, const GdnProjectionWeights& weights,
                                           Tensor& hidden, Tensor& g, Tensor& beta,
-                                          MemoryArena& workspace,
-                                          CudaExecutionView execution) {
+                                          MemoryArena& workspace, CudaExecutionView execution) {
     ops::rmsnorm(residual, norm_weight, eps, true, hidden, execution);
     auto scope = workspace.scope();
     Tensor a   = workspace.alloc(DType::BF16, {48, hidden.ne[1]});
@@ -195,8 +196,8 @@ void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, 
                          qwen3_8_flash_next::TextPhase, MemoryArena& workspace,
                          CudaExecutionView execution) {
     cudaStream_t stream = execution.stream();
-    auto scope   = workspace.scope();
-    Tensor delta = workspace.alloc(DType::BF16, {TextConfig::hidden, hidden.ne[1]});
+    auto scope          = workspace.scope();
+    Tensor delta        = workspace.alloc(DType::BF16, {TextConfig::hidden, hidden.ne[1]});
     if (const auto* sparse = std::get_if<ops::SparseMoeWeights>(&weights)) {
         // sparse_moe's AddResidual epilogue adds the destination's incoming value, so the
         // zeroed scratch turns the epilogue into flash_next_moe's plain overwrite.
@@ -211,9 +212,11 @@ void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, 
 }
 
 void Variant::mtp_post_mixer(const Tensor& hidden, const MtpPostMixerWeights& weights,
-                             Tensor& residual, MemoryArena& workspace, CudaExecutionView execution) {
+                             Tensor& residual, MemoryArena& workspace,
+                             CudaExecutionView execution) {
     cudaStream_t stream = execution.stream();
-    post_mixer(hidden, weights, residual, qwen3_8_flash_next::TextPhase::Verify, workspace, execution);
+    post_mixer(hidden, weights, residual, qwen3_8_flash_next::TextPhase::Verify, workspace,
+               execution);
 }
 
 std::size_t Variant::mtp_attention_projection_workspace_capacity_bytes(std::int32_t first,
@@ -271,9 +274,8 @@ std::size_t Variant::gdn_norm_control_projection_workspace_capacity_bytes(std::i
 std::size_t Variant::post_mixer_workspace_capacity_bytes(WeightsProfile profile,
                                                          qwen3_8_flash_next::TextPhase,
                                                          std::int32_t first, std::int32_t last) {
-    const std::size_t delta =
-        static_cast<std::size_t>(TextConfig::hidden) * static_cast<std::size_t>(last) *
-        sizeof(std::uint16_t);
+    const std::size_t delta = static_cast<std::size_t>(TextConfig::hidden) *
+                              static_cast<std::size_t>(last) * sizeof(std::uint16_t);
     if (profile == WeightsProfile::Exl3) {
         return delta + ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::EXL3, first,
                                                                 last, ops::kSparseMoe125B);

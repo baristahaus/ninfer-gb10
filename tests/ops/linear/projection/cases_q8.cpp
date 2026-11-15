@@ -24,22 +24,22 @@ struct Geometry {
 
 const std::array kGeometries{
 #if NINFER_TARGET_SPARK
-    Geometry{4096, 4096, 947U},  Geometry{12288, 4096, 911U}, Geometry{2560, 3072, 383U},
-    Geometry{8192, 2560, 373U},  Geometry{2560, 4096, 367U}, Geometry{2560, 7680, 379U},
+    Geometry{4096, 4096, 947U}, Geometry{12288, 4096, 911U}, Geometry{2560, 3072, 383U},
+    Geometry{8192, 2560, 373U}, Geometry{2560, 4096, 367U}, Geometry{2560, 7680, 379U},
 #endif
-    Geometry{1024, 2048, 257U},  Geometry{1024, 5120, 223U},  Geometry{2048, 4096, 251U},
-    Geometry{2048, 4608, 271U},  Geometry{2048, 16384, 283U}, Geometry{2560, 6144, 307U},
-    Geometry{4608, 4608, 277U},  Geometry{5120, 4608, 281U},  Geometry{5120, 6144, 239U},
+    Geometry{1024, 2048, 257U}, Geometry{1024, 5120, 223U}, Geometry{2048, 4096, 251U},
+    Geometry{2048, 4608, 271U}, Geometry{2048, 16384, 283U}, Geometry{2560, 6144, 307U},
+    Geometry{4608, 4608, 277U}, Geometry{5120, 4608, 281U}, Geometry{5120, 6144, 239U},
     Geometry{5120, 10240, 211U}, Geometry{5120, 17408, 241U}, Geometry{5120, 25600, 293U},
-    Geometry{6144, 2560, 347U},  Geometry{6144, 5120, 227U},  Geometry{9216, 2048, 263U},
+    Geometry{6144, 2560, 347U}, Geometry{6144, 5120, 227U}, Geometry{9216, 2048, 263U},
     Geometry{10240, 2560, 331U}, Geometry{12288, 2048, 269U}, Geometry{12288, 2560, 313U},
     Geometry{14336, 5120, 229U}, Geometry{16384, 2560, 359U}, Geometry{34816, 5120, 233U},
     Geometry{248320, 5120, 197U},
     // The width-2 MTP geometries. The sweep below already covers T=1 and every band up to 1024,
     // which is what the lane presents: draft_tokens 3 makes the verify block four tokens, so the
     // hot band is T<=4, and prefill of the MTP block re-enters the same ladder from the top.
-    Geometry{7168, 5120, 401U},   Geometry{8704, 5120, 409U}, Geometry{124160, 5120, 419U},
-    Geometry{5120, 3072, 431U},   Geometry{5120, 8704, 433U},
+    Geometry{7168, 5120, 401U}, Geometry{8704, 5120, 409U}, Geometry{124160, 5120, 419U},
+    Geometry{5120, 3072, 431U}, Geometry{5120, 8704, 433U},
     // The fused mlp gate|up parent's Rows-shard half at width 2: 34816 halved to 17408.
     Geometry{17408, 5120, 439U}};
 
@@ -157,9 +157,9 @@ void q8_a16_conformance(Suite& suite) {
             (shape.n == 2560 && shape.k == 6144) || (shape.n == 12288 && shape.k == 2560) ||
             (shape.n == 10240 && shape.k == 2560) || (shape.n == 6144 && shape.k == 2560) ||
             (shape.n == 16384 && shape.k == 2560)) {
-            auto test     = linear_suite::make_case("q8", shape.n, shape.k, 0,
-                                                    ninfer::ops::LinearPolicy::A16Only,
-                                                    linear_suite::Execution::Eager, "workspace-domain");
+            auto test = linear_suite::make_case("q8", shape.n, shape.k, 0,
+                                                ninfer::ops::LinearPolicy::A16Only,
+                                                linear_suite::Execution::Eager, "workspace-domain");
             test.policies = 7;
             suite.add(std::move(test), [shape] { return q8_workspace_domain(shape.n, shape.k); });
             add_workspace_cases(suite, ninfer::QType::Q8_G32_FP16, shape.n, shape.k);

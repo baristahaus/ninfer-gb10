@@ -215,10 +215,9 @@ WeightRegion contiguous_weight_region(const WeightView& view) {
             // never went through the plan's storage, while non-adjacent ranges in one parent is a
             // shard that was never gathered. Those are different bugs in different layers.
             std::string detail = "native input requires one contiguous parent region (parts=" +
-                                 std::to_string(view.parts.size()) + ", part " +
-                                 std::to_string(i) + " begins " + std::to_string(next.begin) +
-                                 " but part " + std::to_string(i - 1) + " ends " +
-                                 std::to_string(merged.end) +
+                                 std::to_string(view.parts.size()) + ", part " + std::to_string(i) +
+                                 " begins " + std::to_string(next.begin) + " but part " +
+                                 std::to_string(i - 1) + " ends " + std::to_string(merged.end) +
                                  (next.parent != merged.parent ? ", different parents" : "") + ")";
             throw std::invalid_argument(detail);
         }
@@ -352,20 +351,20 @@ Weight native_weight(const WeightView& view, float input_divisor) {
             throw std::invalid_argument("native EXL3 weight requires the complete object");
         }
         Weight out;
-        out.device           = region.parent->device;
-        out.payload          = region.parent->data;
-        out.payload_bytes    = g.bytes;
-        out.qtype            = QType::EXL3;
-        out.layout           = g.layout;
-        out.ndim             = 2;
+        out.device        = region.parent->device;
+        out.payload       = region.parent->data;
+        out.payload_bytes = g.bytes;
+        out.qtype         = QType::EXL3;
+        out.layout        = g.layout;
+        out.ndim          = 2;
         out.n = out.shape[0] = out.padded_shape[0] = dimension(view.shape[0]);
         out.k = out.shape[1] = out.padded_shape[1] = dimension(view.shape[1]);
-        out.exl3_trellis_offset = g.exl3.trellis_offset;
-        out.exl3_suh_offset      = g.exl3.suh_offset;
-        out.exl3_svh_offset      = g.exl3.svh_offset;
-        out.exl3_codebook        = g.exl3.codebook;
-        out.exl3_experts         = g.exl3.experts;
-        out.exl3_rows_per_expert = g.exl3.rows_per_expert;
+        out.exl3_trellis_offset                    = g.exl3.trellis_offset;
+        out.exl3_suh_offset                        = g.exl3.suh_offset;
+        out.exl3_svh_offset                        = g.exl3.svh_offset;
+        out.exl3_codebook                          = g.exl3.codebook;
+        out.exl3_experts                           = g.exl3.experts;
+        out.exl3_rows_per_expert                   = g.exl3.rows_per_expert;
         return out;
     }
     Weight out;

@@ -233,8 +233,8 @@ __global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2)
                                      access.heads,
                                      pending.width,
                                      access.state_slot_stride};
-        subgroup::run<16, true, subgroup::Mode::FoldWrite, true>(
-            fold, coord, row.commit_columns, window);
+        subgroup::run<16, true, subgroup::Mode::FoldWrite, true>(fold, coord, row.commit_columns,
+                                                                 window);
         __syncthreads();
         break;
     }

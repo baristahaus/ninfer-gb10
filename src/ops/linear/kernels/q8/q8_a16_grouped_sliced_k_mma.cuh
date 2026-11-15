@@ -183,9 +183,12 @@ __global__ __launch_bounds__(
                         *reinterpret_cast<const unsigned short*>(&code_shared[code_row][offset]));
                 };
                 const unsigned af0 = common::int8x2_to_bf16x2_bits(load_code_pair(gid, code_col));
-                const unsigned af1 = common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
-                const unsigned af2 = common::int8x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
-                const unsigned af3 = common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
+                const unsigned af1 =
+                    common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
+                const unsigned af2 =
+                    common::int8x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
+                const unsigned af3 =
+                    common::int8x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
 #pragma unroll
                 for (int ni = 0; ni < kNt; ++ni) {
                     unsigned bf0, bf1;

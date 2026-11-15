@@ -127,7 +127,7 @@ __device__ __forceinline__ unsigned long long sampling_expand_bf16_tile_sort_key
     const unsigned int ordered = key >> kSamplingTileIndexBits;
     const unsigned int bits    = (ordered & 0x8000u) ? (ordered ^ 0x8000u) : ((~ordered) & 0xffffu);
     const int token            = tile_start + static_cast<int>(kSamplingTileIndexMask) -
-                      static_cast<int>(key & kSamplingTileIndexMask);
+                                 static_cast<int>(key & kSamplingTileIndexMask);
     return sampling_sort_key(__uint_as_float(bits << 16), token);
 }
 

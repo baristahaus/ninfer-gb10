@@ -106,8 +106,10 @@ int run_publish(const std::string& label, int width, const std::vector<std::int3
     PinnedMailbox mailbox;
     DeviceBuffer d_tokens  = to_device(tokens);
     DeviceBuffer d_history = to_device(history);
-    Tensor t_tokens(d_tokens.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {width, batch});
-    Tensor t_history(d_history.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {2, batch});
+    Tensor t_tokens(d_tokens.data(), ninfer::test::cuda_environment().context.device(), DType::I32,
+                    {width, batch});
+    Tensor t_history(d_history.data(), ninfer::test::cuda_environment().context.device(),
+                     DType::I32, {2, batch});
 
     std::vector<std::uint32_t> published;
     std::int32_t published_tokens = 0;
@@ -181,7 +183,8 @@ int run() {
 
 int main() {
     if (ninfer::test::cuda_unavailable()) {
-        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                     "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     try {

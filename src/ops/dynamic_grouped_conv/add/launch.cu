@@ -18,12 +18,12 @@ __device__ __forceinline__ void finish_value(int row, int col, int width, float 
                                              const __nv_bfloat16* delta, __nv_bfloat16* residual) {
     constexpr int kGroupsLocal = H / 16;
     const int index = col * H + row, di = col * 2 * kGroupsLocal + row / 16;
-    float value = fmaf(__bfloat162float(base[2 * H + row]) + __bfloat162float(delta[di]),
-                       current, __bfloat162float(residual[index]));
+    float value = fmaf(__bfloat162float(base[2 * H + row]) + __bfloat162float(delta[di]), current,
+                       __bfloat162float(residual[index]));
     if (col % width != 0)
-        value = fmaf(
-            __bfloat162float(base[3 * H + row]) + __bfloat162float(delta[di + kGroupsLocal]),
-            previous, value);
+        value =
+            fmaf(__bfloat162float(base[3 * H + row]) + __bfloat162float(delta[di + kGroupsLocal]),
+                 previous, value);
     residual[index] = __float2bfloat16_rn(value);
 }
 
@@ -77,8 +77,7 @@ __global__ void finish_kernel(const __nv_bfloat16* projected, const __nv_bfloat1
 
 template <int H>
 void launch_shape(Plan plan, const Tensor& x, const Weight& weight, const Tensor& base,
-                  const Tensor& delta, Tensor& residual, Tensor& projected,
-                  cudaStream_t stream) {
+                  const Tensor& delta, Tensor& residual, Tensor& projected, cudaStream_t stream) {
     const int tokens  = x.ne[1] * x.ne[2];
     const Tensor flat = x.view({x.ne[0], tokens});
     Tensor result     = projected.view({H, tokens});
@@ -98,11 +97,10 @@ void launch_shape(Plan plan, const Tensor& x, const Weight& weight, const Tensor
         break;
     }
     const dim3 grid((H + 255) / 256, tokens);
-    finish_kernel<H><<<grid, 256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(projected.data),
-        static_cast<const __nv_bfloat16*>(base.data),
-        static_cast<const __nv_bfloat16*>(delta.data),
-        static_cast<__nv_bfloat16*>(residual.data), x.ne[1]);
+    finish_kernel<H><<<grid, 256, 0, stream>>>(static_cast<const __nv_bfloat16*>(projected.data),
+                                               static_cast<const __nv_bfloat16*>(base.data),
+                                               static_cast<const __nv_bfloat16*>(delta.data),
+                                               static_cast<__nv_bfloat16*>(residual.data), x.ne[1]);
     CUDA_CHECK(cudaGetLastError());
 }
 } // namespace

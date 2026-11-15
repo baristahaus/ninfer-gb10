@@ -43,8 +43,7 @@ public:
     // Rewrites every non-contiguous view in `weights` to a single region over a parent owned here.
     // A view that already has one contiguous region is left untouched, which is why the
     // single-device lane never enters this path.
-    void gather(std::vector<BoundWeight>& weights,
-                std::span<const FusedGroup> fused = {});
+    void gather(std::vector<BoundWeight>& weights, std::span<const FusedGroup> fused = {});
 
     [[nodiscard]] std::size_t count() const noexcept { return owned_.size(); }
 
@@ -57,6 +56,7 @@ private:
         std::vector<float> divisors;
         WeightParent parent;
     };
+
     std::vector<std::unique_ptr<Owned>> owned_;
 };
 

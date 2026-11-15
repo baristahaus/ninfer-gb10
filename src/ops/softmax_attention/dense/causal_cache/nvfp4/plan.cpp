@@ -29,9 +29,9 @@ Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
         envelope.max_visible_keys > kCausalAttentionMaximumVisibleKeys)
         throw std::invalid_argument("NVFP4 attention: invalid plan inputs");
     constexpr int grouped_limit = Nvfp4KvCausalPlan::kTokenTile;
-    const auto family           = width <= grouped_limit ? Nvfp4KvFamily::Grouped
-                                  : width <= kGroupedPrefillMaxWidth ? Nvfp4KvFamily::ParallelGrouped
-                                                                     : Nvfp4KvFamily::Tiled;
+    const auto family = width <= grouped_limit             ? Nvfp4KvFamily::Grouped
+                        : width <= kGroupedPrefillMaxWidth ? Nvfp4KvFamily::ParallelGrouped
+                                                           : Nvfp4KvFamily::Tiled;
     const int tiles =
         family == Nvfp4KvFamily::ParallelGrouped ? (width + grouped_limit - 1) / grouped_limit : 1;
     const int independent_tiles = batch * kv_heads * tiles;
@@ -40,8 +40,8 @@ Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
                                       : std::min(width, grouped_limit);
     // Keyed on the group size (query heads per KV head), not the head count: 24/4 and 12/2 both
     // group 6, and 16/2 groups 8. A head-count ternary here would mis-tune 12/2.
-    const int row_tiles         = (query_tile * (heads / kv_heads) + 15) / 16;
-    const std::int64_t sms      = multiprocessor_count;
+    const int row_tiles    = (query_tile * (heads / kv_heads) + 15) / 16;
+    const std::int64_t sms = multiprocessor_count;
     const auto budget =
         row_tiles <= 2 || causal_query_tiles_underfill_sms(independent_tiles, multiprocessor_count)
             ? 2 * sms

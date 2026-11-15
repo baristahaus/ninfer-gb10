@@ -110,7 +110,7 @@ constexpr int kFirstExactT = 2;
 constexpr int kLastExactT  = 32;
 using PairOutput           = LinearBf16SegmentedOutput<kRows, kRows>;
 using PairLauncher         = void (*)(const Tensor&, const Weight&, const Weight&, Tensor&, Tensor&,
-                              cudaStream_t);
+                                      cudaStream_t);
 
 struct Q8PairExactTRows {
     static constexpr int kOutputRowsPerCta = kRowsPerCta;

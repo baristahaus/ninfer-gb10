@@ -60,6 +60,7 @@ public:
     // because the mirror needs rank 1's pool, which it does not own.
     [[nodiscard]] DeviceKVPagePool& mirror_origin() const;
     void attach_mirror(tp2::MirroredKVPagePool& mirror);
+
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 
     // Host runs are packed records in the canonical layout. Work excludes record padding.
@@ -153,6 +154,7 @@ public:
     // built on first use, for the same reason `DevicePageStorage::mirror_origin` exists.
     [[nodiscard]] KVExecutionTablePool& table_origin();
     void attach_mirror(tp2::MirroredKVExecutionTables& mirror);
+
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 
 private:

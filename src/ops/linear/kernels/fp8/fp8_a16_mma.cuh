@@ -78,7 +78,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             const int token       = token_begin + local_token;
             const int kk          = k8 * 8;
             auto* destination     = &activation_shared[stage * BN * BK + local_token * BK +
-                                                   common::swizzle_xor_64(local_token, kk)];
+                                                       common::swizzle_xor_64(local_token, kk)];
             if constexpr (FullTokens) {
                 common::cp_async<16, Schedule::kActivationCache>(
                     destination, x + static_cast<std::int64_t>(token) * K + k_begin + kk);

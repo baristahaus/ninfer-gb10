@@ -137,36 +137,38 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
         const bool warp_in_k = group_index * kBlockK + warp_k0 < kHidden;
         if (warp_in_k) {
 #pragma unroll
-        for (int k_step = 0; k_step < kTileK / 16; ++k_step) {
-            const int code_col        = k_step * 16 + lid * 2;
-            const auto load_code_pair = [&](int row, int col) {
-                const int chunk  = (warp_k0 + col) >> 4;
-                const int offset = (chunk ^ (row & 7)) * 16 + (col & 15);
-                return static_cast<unsigned>(
-                    *reinterpret_cast<const std::uint16_t*>(&code_shared[stage][row][offset]));
-            };
-            const unsigned a0 = common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col));
-            const unsigned a1 =
-                common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
-            const unsigned a2 =
-                common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
-            const unsigned a3 =
-                common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
+            for (int k_step = 0; k_step < kTileK / 16; ++k_step) {
+                const int code_col        = k_step * 16 + lid * 2;
+                const auto load_code_pair = [&](int row, int col) {
+                    const int chunk  = (warp_k0 + col) >> 4;
+                    const int offset = (chunk ^ (row & 7)) * 16 + (col & 15);
+                    return static_cast<unsigned>(
+                        *reinterpret_cast<const std::uint16_t*>(&code_shared[stage][row][offset]));
+                };
+                const unsigned a0 =
+                    common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col));
+                const unsigned a1 =
+                    common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
+                const unsigned a2 =
+                    common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
+                const unsigned a3 =
+                    common::fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
 #pragma unroll
-            for (int token_mma = 0; token_mma < kTokenMmas; ++token_mma) {
-                unsigned b0;
-                unsigned b1;
-                const int row = token_mma * 8 + b_row;
-                common::ldmatrix_x2(
-                    b0, b1,
-                    common::smem_addr(
-                        &x_shared[stage][warp][row * kTileK + common::swizzle_xor_64(
-                                                                  row, k_step * 16 + b_k_offset)]));
-                common::mma_bf16(accumulators[token_mma][0], accumulators[token_mma][1],
-                                 accumulators[token_mma][2], accumulators[token_mma][3], a0, a1, a2,
-                                 a3, b0, b1);
+                for (int token_mma = 0; token_mma < kTokenMmas; ++token_mma) {
+                    unsigned b0;
+                    unsigned b1;
+                    const int row = token_mma * 8 + b_row;
+                    common::ldmatrix_x2(
+                        b0, b1,
+                        common::smem_addr(
+                            &x_shared[stage][warp]
+                                     [row * kTileK +
+                                      common::swizzle_xor_64(row, k_step * 16 + b_k_offset)]));
+                    common::mma_bf16(accumulators[token_mma][0], accumulators[token_mma][1],
+                                     accumulators[token_mma][2], accumulators[token_mma][3], a0, a1,
+                                     a2, a3, b0, b1);
+                }
             }
-        }
         }
 
         __syncthreads();

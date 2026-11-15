@@ -136,11 +136,11 @@ __global__ __launch_bounds__(kRouterThreads, 2) void sparse_moe_prefill_router_m
     }
 }
 
-__global__ void sparse_moe_prefill_select_count_kernel(
-    const float* __restrict__ scores, int* __restrict__ ids, float* __restrict__ alpha,
-    float* __restrict__ shared_scale, int* __restrict__ local_rank,
-    int* __restrict__ tile_counts, int tokens,
-    std::uint32_t* __restrict__ expert_activations) {
+__global__ void
+sparse_moe_prefill_select_count_kernel(const float* __restrict__ scores, int* __restrict__ ids,
+                                       float* __restrict__ alpha, float* __restrict__ shared_scale,
+                                       int* __restrict__ local_rank, int* __restrict__ tile_counts,
+                                       int tokens, std::uint32_t* __restrict__ expert_activations) {
     __shared__ int counts[kExperts];
     __shared__ float selected_logits[kSparseMoeRouteTileTokens][kTopK];
     const int tid  = static_cast<int>(threadIdx.x);
@@ -151,11 +151,10 @@ __global__ void sparse_moe_prefill_select_count_kernel(
 
     const int token = static_cast<int>(blockIdx.x) * kSparseMoeRouteTileTokens + warp;
     if (token < tokens) {
-        sparse_moe_select_top8_warp(scores + static_cast<std::int64_t>(token) *
-                                                 kSparseMoeRouterScoreRows,
-                                    ids + token * kTopK, alpha + token * kTopK,
-                                    shared_scale + token, selected_logits[warp],
-                                    expert_activations);
+        sparse_moe_select_top8_warp(
+            scores + static_cast<std::int64_t>(token) * kSparseMoeRouterScoreRows,
+            ids + token * kTopK, alpha + token * kTopK, shared_scale + token, selected_logits[warp],
+            expert_activations);
         __syncwarp();
         if (lane == 0) {
 #pragma unroll
@@ -286,9 +285,9 @@ constexpr int kExpertStages = 2;
 // stages still fit the 48 KiB static shared limit (49 152 B exactly). The routed down walks
 // 8 tiles and the wide plan stages 64 columns; neither has room or reason for more, so both
 // keep the two-stage default.
-constexpr int kGateUpNarrowStages = 6;
-constexpr int kExpertWarps        = 8;
-constexpr int kExpertThreads      = 32 * kExpertWarps;
+constexpr int kGateUpNarrowStages    = 6;
+constexpr int kExpertWarps           = 8;
+constexpr int kExpertThreads         = 32 * kExpertWarps;
 constexpr int kPrefillMaxBlocksPerSm = 32;
 // Upper bound on the persistent grid: 32 blocks per SM of the active device
 // (32 x device_sm_count()). The routed GEMMs stride their work list by gridDim.x,
@@ -324,8 +323,7 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
     const int* __restrict__ route_job_columns, const int* __restrict__ route_job_count,
     const std::uint8_t* __restrict__ codes, const std::uint8_t* __restrict__ scales,
     __nv_bfloat16* __restrict__ activation, const std::uint8_t* __restrict__ warm_codes,
-    const std::uint8_t* __restrict__ warm_scales,
-    const unsigned* __restrict__ expert_residency) {
+    const std::uint8_t* __restrict__ warm_scales, const unsigned* __restrict__ expert_residency) {
     if constexpr (Route != GateUpRoute::Any) {
         const bool spread =
             route_job_count[0] * kGateUpDeepJobsDen < kGateUpDeepJobsNum * route_job_count[1];
@@ -361,19 +359,19 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
     const int total_work     = *route_job_count * row_blocks;
     for (int work = static_cast<int>(blockIdx.x); work < total_work;
          work += static_cast<int>(gridDim.x)) {
-        const int route_job   = work / row_blocks;
-        const int row_block   = work - route_job * row_blocks;
-        const int expert      = route_job_experts[route_job];
-        bool tier_warm = false;
-        int tier_expert = expert;
+        const int route_job = work / row_blocks;
+        const int row_block = work - route_job * row_blocks;
+        const int expert    = route_job_experts[route_job];
+        bool tier_warm      = false;
+        int tier_expert     = expert;
         sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert);
         const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
         const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
-        const int logical0    = row_block * (kExpertBM / 2);
-        const int begin       = expert_offsets[expert];
-        const int count       = expert_offsets[expert + 1] - begin;
-        const int column_base = route_job_columns[route_job];
-        const int cols        = count - column_base < ExpertBN ? count - column_base : ExpertBN;
+        const int logical0              = row_block * (kExpertBM / 2);
+        const int begin                 = expert_offsets[expert];
+        const int count                 = expert_offsets[expert + 1] - begin;
+        const int column_base           = route_job_columns[route_job];
+        const int cols = count - column_base < ExpertBN ? count - column_base : ExpertBN;
         // A thread stages the same columns of all kHidden / kExpertBK tiles, so it resolves their
         // rows once for the whole job instead of reading the map and redoing the row multiply per
         // tile. A column past the tile is clamped onto a live one and then zero-filled.
@@ -570,16 +568,16 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_gate_
     if constexpr (Adaptive) {
         if (*route_job_count < 0) { return; }
     }
-    const int expert      = Routed ? static_cast<int>(blockIdx.y) : 0;
-    bool tier_warm = false;
-    int tier_expert = expert;
+    const int expert = Routed ? static_cast<int>(blockIdx.y) : 0;
+    bool tier_warm   = false;
+    int tier_expert  = expert;
     if (Routed) { sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert); }
     const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
     const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
-    const int logical0 = static_cast<int>(blockIdx.x) * (kExpertBM / 2);
-    const int begin    = Routed ? expert_offsets[expert] : static_cast<int>(blockIdx.y) * kExpertBN;
-    const int count    = Routed ? expert_offsets[expert + 1] - begin
-                                : (tokens - begin < kExpertBN ? tokens - begin : kExpertBN);
+    const int logical0              = static_cast<int>(blockIdx.x) * (kExpertBM / 2);
+    const int begin = Routed ? expert_offsets[expert] : static_cast<int>(blockIdx.y) * kExpertBN;
+    const int count = Routed ? expert_offsets[expert + 1] - begin
+                             : (tokens - begin < kExpertBN ? tokens - begin : kExpertBN);
     if (count <= 0) { return; }
 
     const int a_mat              = lane >> 3;
@@ -803,21 +801,21 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_qx_dow
     const int total_work     = *route_job_count * row_blocks;
     for (int work = static_cast<int>(blockIdx.x); work < total_work;
          work += static_cast<int>(gridDim.x)) {
-        const int route_job   = work / row_blocks;
-        const int row_block   = work - route_job * row_blocks;
-        const int expert      = route_job_experts[route_job];
-        bool tier_warm = false;
-        int tier_expert = expert;
+        const int route_job = work / row_blocks;
+        const int row_block = work - route_job * row_blocks;
+        const int expert    = route_job_experts[route_job];
+        bool tier_warm      = false;
+        int tier_expert     = expert;
         sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert);
-        const std::uint8_t* tier_codes   = tier_warm ? warm_codes : codes;
-        const std::uint8_t* tier_high    = tier_warm ? warm_high : high;
-        const std::uint8_t* tier_scales  = tier_warm ? warm_scales : scales;
-        const int row0        = row_block * kExpertBM;
-        const int begin       = expert_offsets[expert];
-        const int count       = expert_offsets[expert + 1] - begin;
-        const int column_base = route_job_columns[route_job];
-        const int cols        = count - column_base < ExpertBN ? count - column_base : ExpertBN;
-        float acc[4][4]       = {};
+        const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
+        const std::uint8_t* tier_high   = tier_warm ? warm_high : high;
+        const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
+        const int row0                  = row_block * kExpertBM;
+        const int begin                 = expert_offsets[expert];
+        const int count                 = expert_offsets[expert + 1] - begin;
+        const int column_base           = route_job_columns[route_job];
+        const int cols  = count - column_base < ExpertBN ? count - column_base : ExpertBN;
+        float acc[4][4] = {};
 
         auto stage_scales = [&] {
             for (int row = tid; row < kExpertBM; row += ExpertThreads) {
@@ -964,8 +962,7 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_down_
     __nv_bfloat16* __restrict__ grouped_output, const float* __restrict__ routed_sum,
     const float* __restrict__ shared_scale, __nv_bfloat16* __restrict__ destination, int tokens,
     const int* __restrict__ route_job_count, const std::uint8_t* __restrict__ warm_codes,
-    const std::uint8_t* __restrict__ warm_scales,
-    const unsigned* __restrict__ expert_residency) {
+    const std::uint8_t* __restrict__ warm_scales, const unsigned* __restrict__ expert_residency) {
     __shared__ __align__(16) __nv_bfloat16 As[kExpertBM * kExpertBK];
     __shared__ __align__(16) __nv_bfloat16 Bs[kExpertStages][kExpertBN * kExpertBK];
     __shared__ __align__(16) std::uint8_t Cr[kExpertBM * kExpertBK];
@@ -977,16 +974,16 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_down_
     if constexpr (Adaptive) {
         if (*route_job_count < 0) { return; }
     }
-    const int expert      = Routed ? static_cast<int>(blockIdx.y) : 0;
-    bool tier_warm = false;
-    int tier_expert = expert;
+    const int expert = Routed ? static_cast<int>(blockIdx.y) : 0;
+    bool tier_warm   = false;
+    int tier_expert  = expert;
     if (Routed) { sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert); }
     const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
     const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
-    const int row0   = static_cast<int>(blockIdx.x) * kExpertBM;
-    const int begin  = Routed ? expert_offsets[expert] : static_cast<int>(blockIdx.y) * kExpertBN;
-    const int count  = Routed ? expert_offsets[expert + 1] - begin
-                              : (tokens - begin < kExpertBN ? tokens - begin : kExpertBN);
+    const int row0                  = static_cast<int>(blockIdx.x) * kExpertBM;
+    const int begin = Routed ? expert_offsets[expert] : static_cast<int>(blockIdx.y) * kExpertBN;
+    const int count = Routed ? expert_offsets[expert + 1] - begin
+                             : (tokens - begin < kExpertBN ? tokens - begin : kExpertBN);
     if (count <= 0) { return; }
 
     const int a_mat              = lane >> 3;
@@ -1221,13 +1218,16 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
     const auto* routed_down_codes  = static_cast<const std::uint8_t*>(weights.routed_down.qdata);
     const auto* routed_down_high   = static_cast<const std::uint8_t*>(weights.routed_down.qhigh);
     const auto* routed_down_scales = static_cast<const std::uint8_t*>(weights.routed_down.scales);
-    const auto* warm_gate_codes = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qdata);
-    const auto* warm_gate_scales = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.scales);
-    const auto* warm_down_codes  = static_cast<const std::uint8_t*>(weights.warm_routed_down.qdata);
-    const auto* warm_down_high   = static_cast<const std::uint8_t*>(weights.warm_routed_down.qhigh);
-    const auto* warm_down_scales = static_cast<const std::uint8_t*>(weights.warm_routed_down.scales);
+    const auto* warm_gate_codes =
+        static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qdata);
+    const auto* warm_gate_scales =
+        static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.scales);
+    const auto* warm_down_codes = static_cast<const std::uint8_t*>(weights.warm_routed_down.qdata);
+    const auto* warm_down_high  = static_cast<const std::uint8_t*>(weights.warm_routed_down.qhigh);
+    const auto* warm_down_scales =
+        static_cast<const std::uint8_t*>(weights.warm_routed_down.scales);
     const unsigned* expert_residency = weights.expert_residency;
-    const auto* shared_gate_codes  = static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata);
+    const auto* shared_gate_codes = static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata);
     const auto* shared_gate_scales =
         static_cast<const std::uint8_t*>(weights.shared_gate_up.scales);
     const auto* shared_down_codes  = static_cast<const std::uint8_t*>(weights.shared_down.qdata);
@@ -1285,9 +1285,9 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
         // sizing the grid from that product keeps a persistent block on one work item while
         // there are fewer work items than the cap, instead of a fixed count that has to
         // iterate. The exact job count only exists on the device.
-        const int max_route_jobs     = assignments / route_job_bn + kExperts;
-        const int routed_gate_work   = max_route_jobs * (kIntermediate / (kExpertBM / 2));
-        const int routed_down_work   = max_route_jobs * (kHidden / kExpertBM);
+        const int max_route_jobs   = assignments / route_job_bn + kExperts;
+        const int routed_gate_work = max_route_jobs * (kIntermediate / (kExpertBM / 2));
+        const int routed_down_work = max_route_jobs * (kHidden / kExpertBM);
         const int routed_gate_blocks =
             std::min(routed_gate_work, kPrefillMaxBlocksPerSm * device_sm_count());
         const int routed_down_blocks =

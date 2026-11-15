@@ -11,8 +11,7 @@ namespace {
 
 void require_target(const tp2::MirrorTarget& where) {
     if (!where.valid()) {
-        throw std::invalid_argument(
-            "StateImage mirror requires rank 1's device and stream");
+        throw std::invalid_argument("StateImage mirror requires rank 1's device and stream");
     }
 }
 
@@ -34,9 +33,7 @@ void on_mirror_device(const tp2::MirrorTarget& where, Replay&& replay) {
 
 void require_matching_state_image_device_pool(const StateImageDevicePool& origin,
                                               const StateImageDevicePool& mirror) {
-    if (&origin == &mirror) {
-        throw std::invalid_argument("StateImage mirror is the origin pool");
-    }
+    if (&origin == &mirror) { throw std::invalid_argument("StateImage mirror is the origin pool"); }
     if (origin.slot_count() != mirror.slot_count()) {
         throw std::invalid_argument("StateImage mirror slot count differs");
     }
@@ -91,16 +88,14 @@ void MirroredStateImageDevicePool::copy_slot(std::int32_t source, std::int32_t d
     on_mirror_device(where_, [&] { mirror_.copy_slot(source, destination, where_.stream); });
 }
 
-void MirroredStateImageDevicePool::copy_dflash_local(std::int32_t source,
-                                                     std::int32_t destination,
+void MirroredStateImageDevicePool::copy_dflash_local(std::int32_t source, std::int32_t destination,
                                                      cudaStream_t stream) {
     origin_.copy_dflash_local(source, destination, stream);
     on_mirror_device(where_,
                      [&] { mirror_.copy_dflash_local(source, destination, where_.stream); });
 }
 
-void MirroredStateImageDevicePool::copy_to_host(std::int32_t source,
-                                                HostStateImageView destination,
+void MirroredStateImageDevicePool::copy_to_host(std::int32_t source, HostStateImageView destination,
                                                 cudaStream_t stream) const {
     (void)source;
     (void)destination;

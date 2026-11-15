@@ -292,7 +292,7 @@ std::optional<HostKVAllocationRecipe> HostKVArena::plan_after_releases(
     std::vector<FreeExtent> simulated = free_extents_;
     const auto insert_extent          = [&](FreeExtent extent) {
         const auto position = std::lower_bound(simulated.begin(), simulated.end(), extent.offset,
-                                                        [](const FreeExtent& candidate, std::size_t offset) {
+                                               [](const FreeExtent& candidate, std::size_t offset) {
                                                    return candidate.offset < offset;
                                                });
         auto inserted       = simulated.insert(position, extent);
@@ -359,7 +359,7 @@ bool HostKVArena::can_allocate_after_suballocation_releases(
     std::vector<FreeExtent> simulated = free_extents_;
     const auto insert_extent          = [&](FreeExtent extent) {
         const auto position = std::lower_bound(simulated.begin(), simulated.end(), extent.offset,
-                                                        [](const FreeExtent& candidate, std::size_t offset) {
+                                               [](const FreeExtent& candidate, std::size_t offset) {
                                                    return candidate.offset < offset;
                                                });
         auto inserted       = simulated.insert(position, extent);

@@ -33,7 +33,7 @@ bool mentions_refusal(const std::exception& error) {
 } // namespace
 
 int main() {
-    const char* artifact   = std::getenv("NINFER_TEST_ARTIFACT");
+    const char* artifact     = std::getenv("NINFER_TEST_ARTIFACT");
     const bool have_artifact = artifact != nullptr && *artifact != '\0';
     // Both prerequisites are checked before either is reported. Checking only the artifact first
     // told a one-device host that the artifact was missing, which sent a reader after the wrong

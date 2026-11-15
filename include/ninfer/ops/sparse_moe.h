@@ -83,8 +83,8 @@ inline constexpr SparseMoeShape kSparseMoe125B{2560, 512, 10, 640};
  * profiles ignore it and keep the 35B contract geometry.
  */
 [[nodiscard]] std::size_t
-sparse_moe_workspace_capacity_bytes(QType routed_gate_up, QType routed_down, std::int32_t min_tokens,
-                                    std::int32_t max_tokens,
+sparse_moe_workspace_capacity_bytes(QType routed_gate_up, QType routed_down,
+                                    std::int32_t min_tokens, std::int32_t max_tokens,
                                     const SparseMoeShape& shape = kSparseMoe35B);
 
 /**

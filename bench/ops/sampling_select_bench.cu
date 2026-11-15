@@ -211,7 +211,7 @@ DeviceBuffer make_batch_configs(DeviceBuffer& counts, int batch, Mode mode, bool
         config.seed                 = 20260716ull + static_cast<unsigned long long>(row);
         config.token_counts         = mode == Mode::Stochastic && counts_active
                                           ? static_cast<std::int32_t*>(counts.data()) +
-                                        static_cast<std::size_t>(row) * kTokenDomain
+                                                static_cast<std::size_t>(row) * kTokenDomain
                                           : nullptr;
         if (masks.size()) {
             const int words = (kTokenDomain + 31) / 32;

@@ -45,7 +45,7 @@ inline RopeYarnDevice resolve_yarn(float factor, std::int32_t original_max_posit
     params.beta_slow             = beta_slow;
     params.theta                 = theta;
     params.rotary_dim            = rotary_dim;
-    const YarnRamp ramp = yarn_ramp(params);
+    const YarnRamp ramp          = yarn_ramp(params);
     for (int pair = 0; pair < 32; ++pair) {
         device.inv_frequency[pair] = yarn_inv_frequency(params, ramp, pair);
     }

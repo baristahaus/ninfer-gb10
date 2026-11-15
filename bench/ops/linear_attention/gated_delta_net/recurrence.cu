@@ -59,9 +59,9 @@ gdn::Traffic prepare_traffic(const Problem& p) {
     result.logical                  = {2 * p.qk_bytes() + 2 * p.gate_bytes(), packet_bytes(p)};
     result.workspace_requests.write = packet_bytes(p);
     result.modeled_request_bytes    = 2 * p.qk_bytes() * (p.value_heads / p.qk_heads) +
-                                   2 * p.gate_bytes() + result.workspace_requests.write;
-    result.active_rows  = p.batch;
-    result.valid_tokens = p.tokens * p.batch;
+                                      2 * p.gate_bytes() + result.workspace_requests.write;
+    result.active_rows              = p.batch;
+    result.valid_tokens             = p.tokens * p.batch;
     return result;
 }
 
@@ -85,12 +85,12 @@ std::vector<BenchRow> run_batch_update(const Options& options, std::int32_t toke
     const Problem problem{options.qk_heads, options.value_heads, tokens, options.batch};
     Operands operands(problem, false);
 
-    const std::size_t qk_elements = static_cast<std::size_t>(gated_delta_net_detail::kStateDim) *
-                                    problem.qk_heads * tokens * problem.batch;
+    const std::size_t qk_elements    = static_cast<std::size_t>(gated_delta_net_detail::kStateDim) *
+                                       problem.qk_heads * tokens * problem.batch;
     const std::size_t state_elements = static_cast<std::size_t>(gated_delta_net_detail::kStateDim) *
                                        gated_delta_net_detail::kStateDim * problem.value_heads;
-    const std::int32_t slots = 2 * problem.batch;
-    DeviceBuffer states      = bench::make_f32(state_elements * slots, 211U, -.02F, .02F);
+    const std::int32_t slots         = 2 * problem.batch;
+    DeviceBuffer states              = bench::make_f32(state_elements * slots, 211U, -.02F, .02F);
     SavedBuffer initial_states(states);
     const auto restore = [&](CudaExecutionView cuda) { initial_states.restore(cuda); };
     std::vector<std::int32_t> state_slots_host(static_cast<std::size_t>(problem.batch));
@@ -143,8 +143,8 @@ std::vector<BenchRow> run_batch_update(const Options& options, std::int32_t toke
         const Tensor& q_input = composed ? q_norm : q;
         const Tensor& k_input = composed ? k_norm : k;
         ops::gated_delta_net_batch_update(q_input, k_input, v, g, beta, gated_delta_net_scale(),
-                                                  !composed, ssm_states, selected_slots, destinations, out,
-                                                  cuda);
+                                          !composed, ssm_states, selected_slots, destinations, out,
+                                          cuda);
     };
     BenchRow row;
     row.normalization  = composed ? "composed" : "fused";
@@ -219,8 +219,8 @@ std::vector<BenchRow> run_prefill(const Options& options, std::int32_t tokens,
                                                           tokens,
                                                           gated_delta_net_scale()};
     const int tile     = chunked ? ops::detail::gated_delta_net::select_value_tile(
-                                   problem.qk_heads, problem.value_heads, tokens,
-                                   execution.multiprocessor_count())
+                                       problem.qk_heads, problem.value_heads, tokens,
+                                       execution.multiprocessor_count())
                                  : 0;
     const auto prep_io = prepare_traffic(problem);
     const auto rec_io  = recurrence_traffic(problem, tile ? state_dim / tile : 0);
@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
                         row.value_heads     = options.value_heads;
                         row.workspace_bytes = r.workspace_bytes;
                         row.workspace_peak  = r.workspace_peak;
-                        const auto extra    = std::string(r.normalization) + "," +
+                        const auto extra = std::string(r.normalization) + "," +
                                            std::to_string(r.full_chunks) + "," +
                                            std::to_string(r.tail_tokens) + "," +
                                            std::to_string(r.value_tile) + "," + options.state_form +

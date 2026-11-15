@@ -92,7 +92,7 @@ void RankPreparation::prepare(std::uint32_t pages, std::size_t available) {
     options.kv_capacity = KvCapacityPolicy::explicit_capacity(curve_.resolved_tokens(pages));
     const auto reserve  = graph_memory_.rebuild_estimate_bytes;
     auto plan           = plan_execution(profile_, {}, options, device_,
-                               available > reserve ? available - reserve : 0);
+                                         available > reserve ? available - reserve : 0);
     if (!plan) throw DeviceAllocationError("rank runtime capacity exceeds available memory");
     instance_->program = std::make_unique<RankProgram>(
         instance_->parameters, std::move(*plan), device_, options_.startup_observer, binding_);

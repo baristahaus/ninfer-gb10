@@ -446,7 +446,8 @@ private:
     std::uint32_t generation_;
     void (*release_)(const void*, std::uint32_t, std::uint32_t) noexcept;
 
-    template<class Variant> friend struct detail::PressurePlanningSessionImpl;
+    template <class Variant>
+    friend struct detail::PressurePlanningSessionImpl;
 };
 
 template <class Variant>
@@ -562,7 +563,7 @@ private:
 struct PressureExpansionView {
     std::span<const PressureTargetHandle> children;
     std::uint32_t new_canonical_count = 0;
-    bool complete = true;
+    bool complete                     = true;
 };
 
 template <class Variant>
@@ -590,8 +591,9 @@ public:
     construction_target(const PressureConstructionCursor& cursor);
     [[nodiscard]] runtime::PressureTargetGuidance guidance(PressureTargetHandle target);
     [[nodiscard]] AssessedPressureTarget<Variant> assess(PressureTargetHandle target);
-    [[nodiscard]] PreparedPressureExpansion<Variant> prepare_expansion(PressureTargetHandle parent,
-        std::uint32_t maximum_owners = std::numeric_limits<std::uint32_t>::max());
+    [[nodiscard]] PreparedPressureExpansion<Variant>
+    prepare_expansion(PressureTargetHandle parent,
+                      std::uint32_t maximum_owners = std::numeric_limits<std::uint32_t>::max());
     [[nodiscard]] PressureExpansionView
     commit_expansion(PreparedPressureExpansion<Variant>&& prepared);
     void discard_expansion(PreparedPressureExpansion<Variant>&& prepared) noexcept;
@@ -704,6 +706,7 @@ public:
     [[nodiscard]] std::span<const std::int32_t> row_counts() const noexcept { return row_counts_; }
 
     [[nodiscard]] std::uint32_t row_stride() const noexcept { return row_stride_; }
+
     // The probability reports for exactly these tokens, valid for the same window between the
     // round's decode and its commit or abort.
     [[nodiscard]] runtime::RoundTokenScores scores() const noexcept { return scores_; }
@@ -996,10 +999,9 @@ private:
     std::unique_ptr<detail::ProgramImpl<Variant>> impl_;
 
     template <class V>
-    friend std::unique_ptr<Program<V>> create_program(const typename V::ModelView&,
-                                                      typename V::WeightsProfile, SequencePlan<V>&&,
-                                                      DeviceContext&, const StartupObserver&,
-                                                      DeviceContext*);
+    friend std::unique_ptr<Program<V>>
+    create_program(const typename V::ModelView&, typename V::WeightsProfile, SequencePlan<V>&&,
+                   DeviceContext&, const StartupObserver&, DeviceContext*);
 };
 
 namespace detail {

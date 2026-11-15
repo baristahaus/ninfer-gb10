@@ -17,7 +17,7 @@ namespace ninfer::models::qwen3_5::execution {
 // sharded and come from the config, because every rank holds the whole head vector and the whole
 // residual.
 [[nodiscard]] workspace::AttentionExtents attention_extents(const AttentionParameters& parameters,
-                                                           const TextConfig& config);
+                                                            const TextConfig& config);
 
 void attention_projection(const Tensor& hidden, const AttentionParameters& parameters,
                           Tensor& query, Tensor& gate, Tensor& key, Tensor& value,

@@ -297,7 +297,7 @@ std::optional<OperationalRecord> render_tool_call_fallback(const RequestLogConte
     return OperationalRecord{
         .severity = OperationalSeverity::Warning,
         .message  = "req#" + std::to_string(context.id) + " tool markup returned as text | " +
-                   pretty_code(ninfer::tool_call_parse_fallback_reason_name(reason)),
+                    pretty_code(ninfer::tool_call_parse_fallback_reason_name(reason)),
     };
 }
 

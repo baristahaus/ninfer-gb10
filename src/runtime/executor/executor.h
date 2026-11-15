@@ -8,14 +8,14 @@ namespace ninfer::runtime {
 template <class Types>
 class Executor {
 public:
-    virtual ~Executor()                                                              = default;
+    virtual ~Executor() = default;
     // Binds every rank of the group for a caller that acts on all of them in sequence. This is a
     // group-wide bind, not a per-rank bind: after it returns the LAST rank's device is current.
     // Per-rank work binds its own rank first; see LocalExecutor::bind_to_current_thread.
-    virtual void bind_to_current_thread()                                            = 0;
-    [[nodiscard]] virtual SessionEpoch epoch() const noexcept                        = 0;
-    [[nodiscard]] virtual ExecutionCapacity capacity() const noexcept                = 0;
-    [[nodiscard]] virtual std::optional<ExecutionReservation> try_reserve(FrameKind) = 0;
+    virtual void bind_to_current_thread()                                                    = 0;
+    [[nodiscard]] virtual SessionEpoch epoch() const noexcept                                = 0;
+    [[nodiscard]] virtual ExecutionCapacity capacity() const noexcept                        = 0;
+    [[nodiscard]] virtual std::optional<ExecutionReservation> try_reserve(FrameKind)         = 0;
     [[nodiscard]] virtual ExecutionTicket submit(ExecutionReservation, typename Types::Work) = 0;
     virtual void supply(ExecutionTicket, DecisionInput)                                      = 0;
     [[nodiscard]] virtual CommitReceipt commit(ExecutionTicket, typename Types::Commit)      = 0;
@@ -26,8 +26,8 @@ public:
     // the lockstep order: a peer polled before the leading rank completed the same round runs
     // ahead, meets its exchange early, and the round never releases. Every caller polls the
     // leading rank first and touches a peer only once that rank has reported an event.
-    [[nodiscard]] virtual std::optional<ExecutionEvent<Types>> poll()                        = 0;
-    virtual void flush()                                                                     = 0;
+    [[nodiscard]] virtual std::optional<ExecutionEvent<Types>> poll() = 0;
+    virtual void flush()                                              = 0;
     // Closes submission and completes all physical readers before control owners are released.
     virtual void drain()                                         = 0;
     virtual void fail(std::string message)                       = 0;

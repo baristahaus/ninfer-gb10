@@ -30,8 +30,8 @@ void rmsnorm_pack_tail(const Tensor& input, const Tensor& weight, Tensor& output
     require_bf16_contiguous_aligned(weight, "weight");
     require_bf16_contiguous_aligned(output, "output");
 
-    const std::int32_t batch = input.ne[2];
-    const std::int32_t width = input.ne[1];
+    const std::int32_t batch   = input.ne[2];
+    const std::int32_t width   = input.ne[1];
     const bool registered_rows = input.ne[0] == 5120 || input.ne[0] == 2560;
     if (!registered_rows || (width < 2 || width > 16) || batch < 1 || batch > 8 ||
         input.ne[3] != 1) {

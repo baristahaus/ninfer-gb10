@@ -34,16 +34,16 @@ struct RuntimeHostWorkStats {
 
     // Master-generation Flash-Next engine counters. The same accounting as the restructured
     // session/executor splits above, kept additive until the routes share one vocabulary.
-    std::uint64_t program_submit_ns             = 0;
-    std::uint64_t program_post_ns               = 0;
-    std::uint64_t device_wait_ns                = 0;
-    std::uint64_t decode_device_wait_ns         = 0;
-    std::uint64_t prefill_device_wait_ns        = 0;
-    std::uint64_t control_device_wait_ns        = 0;
-    std::uint64_t admission_policy_ns           = 0;
-    std::uint64_t context_progress_ns           = 0;
-    std::uint64_t admission_policy_invocations  = 0;
-    std::uint64_t context_progress_invocations  = 0;
+    std::uint64_t program_submit_ns            = 0;
+    std::uint64_t program_post_ns              = 0;
+    std::uint64_t device_wait_ns               = 0;
+    std::uint64_t decode_device_wait_ns        = 0;
+    std::uint64_t prefill_device_wait_ns       = 0;
+    std::uint64_t control_device_wait_ns       = 0;
+    std::uint64_t admission_policy_ns          = 0;
+    std::uint64_t context_progress_ns          = 0;
+    std::uint64_t admission_policy_invocations = 0;
+    std::uint64_t context_progress_invocations = 0;
 };
 
 // Monotonic execution counters, boundary-consistent current gauges, and explicitly named last

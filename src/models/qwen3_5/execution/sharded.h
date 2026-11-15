@@ -64,12 +64,11 @@
 // (1) the gather's chunk OFFSET (299cf5e7), (2) the gather's chunk COUNT (both ranks must read the
 // same columns), (3) the ROUND INDEX label (a value called "round" that counted gathers), (4) the
 // ACCEPT GATE (decision_supplied computed from a per-rank `constrained`), (5) the WORK VARIANT
-// (is_decode/index inferred from each rank's local work). Each was a quantity that must agree across
-// ranks derived from a local, per-rank value.
-// COROLLARY for shared state, a different shape: a guard shared across ranks must be cleared at a
-// point both ranks agree on, and its state must be readable before it can change an action -- the
-// mailbox hang word is shared, was sticky across rounds, and could change an enqueue's outcome
-// without being read (see PeerMailbox::clear_hang).
+// (is_decode/index inferred from each rank's local work). Each was a quantity that must agree
+// across ranks derived from a local, per-rank value. COROLLARY for shared state, a different shape:
+// a guard shared across ranks must be cleared at a point both ranks agree on, and its state must be
+// readable before it can change an action -- the mailbox hang word is shared, was sticky across
+// rounds, and could change an enqueue's outcome without being read (see PeerMailbox::clear_hang).
 // Write the invariant down when you find the FIRST instance: the first is evidence of a class, the
 // fifth is evidence of a habit.
 
@@ -139,9 +138,8 @@ inline void sharded_project_rows(const Tensor& input, const LinearParameters& p,
 // Column-parallel projection: rank `rank`'s partial into `partials[rank]`, then the cross-rank sum,
 // which leaves the full-width result in both `partials`. No residual.
 void sharded_project_columns(const Tensor& input, const LinearParameters& p,
-                             std::array<Tensor, 2>& partials,
-                             const ShardedCollective& collective, MemoryArena& workspace,
-                             CudaExecutionView execution);
+                             std::array<Tensor, 2>& partials, const ShardedCollective& collective,
+                             MemoryArena& workspace, CudaExecutionView execution);
 
 // The same, then the replicated residual added once after the sum:
 //   residual = residual + allreduce(linear(input, column_shard))
@@ -165,9 +163,9 @@ void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, 
 
 // THE ROW-PARALLEL HEAD'S GATHER. `text/output_head` is Rows-sharded, so rank r's projection
 // produces only its block of the vocabulary. Sampling must see the whole vocabulary — and it must
-// see the SAME values on both ranks, or the two ranks could pick different tokens and the lane would
-// silently diverge. So the two rank-sized blocks are gathered into one full-vocabulary buffer that
-// both ranks hold identically, and then sampled exactly as width 1 samples.
+// see the SAME values on both ranks, or the two ranks could pick different tokens and the lane
+// would silently diverge. So the two rank-sized blocks are gathered into one full-vocabulary buffer
+// that both ranks hold identically, and then sampled exactly as width 1 samples.
 //
 // HOW, and why it is exact. Rank r zero-fills its full buffer, copies its own block into the row
 // range [rank * rank_rows, (rank + 1) * rank_rows), and calls the per-rank allreduce. Every row
@@ -186,11 +184,11 @@ void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, 
 // the plan below, and `slot` advances by exactly that many, which keeps the two ranks' slot
 // sequences in lockstep with the layer reduces that share the same mailbox.
 struct LogitsGatherPlan {
-    std::int32_t vocabulary    = 0; // rows of the full buffer
-    std::int32_t rank_rows     = 0; // rows this rank writes
-    std::int32_t columns       = 0; // columns to gather
-    std::int32_t chunk_columns = 0; // columns one exchange carries
-    std::int32_t exchanges     = 0; // ceil(columns / chunk_columns)
+    std::int32_t vocabulary      = 0; // rows of the full buffer
+    std::int32_t rank_rows       = 0; // rows this rank writes
+    std::int32_t columns         = 0; // columns to gather
+    std::int32_t chunk_columns   = 0; // columns one exchange carries
+    std::int32_t exchanges       = 0; // ceil(columns / chunk_columns)
     std::size_t bytes_per_column = 0;
     std::size_t chunk_bytes      = 0; // the widest exchange's payload
 };
@@ -203,19 +201,21 @@ struct LogitsGatherPlan {
                                                   int rank, std::int32_t columns,
                                                   std::size_t slot_bytes);
 
-// Gathers rank `rank`'s half of the vocabulary into the group's full-vocabulary logits pair. `local`
-// is this rank's [rank_rows, columns] projection; `full` is this rank's member of the group's pair,
-// [vocabulary, logits_columns] with logits_columns >= columns. `slot` is this rank's next exchange
-// index in the Program's deterministic sequence (`ShardedCollective::reduce_index`); it is advanced
-// by the number of exchanges the plan needs, so the caller passes it straight through.
+// Gathers rank `rank`'s half of the vocabulary into the group's full-vocabulary logits pair.
+// `local` is this rank's [rank_rows, columns] projection; `full` is this rank's member of the
+// group's pair, [vocabulary, logits_columns] with logits_columns >= columns. `slot` is this rank's
+// next exchange index in the Program's deterministic sequence (`ShardedCollective::reduce_index`);
+// it is advanced by the number of exchanges the plan needs, so the caller passes it straight
+// through.
 void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t& slot,
                        const Tensor& local, const Tensor& full, CudaExecutionView execution,
                        const char* site = "?");
 
 // This rank's member of the group's full-vocabulary logits pair, viewed at the call's column count.
 // The pair is [vocabulary, logits_columns]; a view at [vocabulary, columns] is its first `columns`
-// columns, which is exactly the region a gather of that many columns wrote, because dim 0 is fastest.
-// Sampling and the speculative accept ops read this instead of the frame's buffer at width 2.
+// columns, which is exactly the region a gather of that many columns wrote, because dim 0 is
+// fastest. Sampling and the speculative accept ops read this instead of the frame's buffer at
+// width 2.
 [[nodiscard]] inline Tensor sharded_logits_view(const models::ShardedGroup& group, int rank,
                                                 std::int32_t rows, std::int32_t columns) {
     const Tensor& pair = group.logits[static_cast<std::size_t>(rank)];

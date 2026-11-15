@@ -133,7 +133,7 @@ __global__ __launch_bounds__(128) void shared_mma(
             for (int m = 0; m < 2; ++m) {
                 const int row = (Gate ? wm * 16 + m * 32 : wm * 32 + m * 16) + (lane & 7) +
                                 ((lane >> 3 & 1) * 8);
-                const int k = ki * 16 + (lane >> 4) * 8;
+                const int k   = ki * 16 + (lane >> 4) * 8;
                 ldmatrix_x4(a[m][0], a[m][1], a[m][2], a[m][3],
                             smem_addr(ws[s] + row * BK + swizzle_xor_64(row, k)));
             }

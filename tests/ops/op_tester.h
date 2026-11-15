@@ -64,8 +64,7 @@ inline bool cuda_unavailable() {
     if (e == cudaSuccess) { return n == 0; }
     // The stub-library case matters: it is how a GPU-less builder links at all, so every Op test
     // must skip on it rather than fail.
-    if (e == cudaErrorNoDevice || e == cudaErrorInsufficientDriver ||
-        e == cudaErrorStubLibrary) {
+    if (e == cudaErrorNoDevice || e == cudaErrorInsufficientDriver || e == cudaErrorStubLibrary) {
         return true;
     }
     throw std::runtime_error(std::string("cudaGetDeviceCount: ") + cudaGetErrorString(e));
@@ -307,7 +306,7 @@ public:
         const auto suffix         = from_device<std::uint8_t>(suffix_device, guard_bytes_);
         const auto intact         = [this](const std::vector<std::uint8_t>& guard) {
             return std::all_of(guard.begin(), guard.end(),
-                                       [this](std::uint8_t value) { return value == guard_byte_; });
+                               [this](std::uint8_t value) { return value == guard_byte_; });
         };
         if (intact(prefix) && intact(suffix)) return 0;
         std::cerr << label << ": device buffer guard was overwritten\n";

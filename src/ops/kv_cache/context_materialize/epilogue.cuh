@@ -59,9 +59,9 @@ __device__ __forceinline__ void store_key_head(const float* input, DeviceLayerVi
 
 __device__ __forceinline__ void store_value(int row, int column, int slot, const int* positions,
                                             DeviceLayerView layer, float result) {
-    const auto dst = layer.value_slot_stride * slot +
-                     kv::cyclic_offset<128, 2048>(positions[column], row / 128,
-                                                  layer.padded_capacity, row % 128);
+    const auto dst     = layer.value_slot_stride * slot +
+                         kv::cyclic_offset<128, 2048>(positions[column], row / 128,
+                                                      layer.padded_capacity, row % 128);
     layer.cache_v[dst] = __float2half_rn(__bfloat162float(__float2bfloat16_rn(result)));
 }
 

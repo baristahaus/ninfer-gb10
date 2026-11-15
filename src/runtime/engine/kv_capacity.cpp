@@ -37,8 +37,8 @@ std::uint32_t explicit_page_groups(const KvCapacityPolicy& policy,
     if (policy.explicit_tokens == 0) {
         throw std::invalid_argument("explicit KV capacity must be positive");
     }
-    const std::uint64_t pages = 1ULL + (static_cast<std::uint64_t>(policy.explicit_tokens) - 1ULL) /
-                                           curve.main_page_tokens;
+    const std::uint64_t pages =
+        1ULL + (static_cast<std::uint64_t>(policy.explicit_tokens) - 1ULL) / curve.main_page_tokens;
     if (pages > std::numeric_limits<std::uint32_t>::max()) {
         throw std::overflow_error("explicit KV page count exceeds uint32");
     }
@@ -67,7 +67,7 @@ std::vector<KvCapacityResolution>
 resolve_group_kv_capacity(const KvCapacityPolicy& policy,
                           std::span<const RankCapacityOffer> offers) {
     if (offers.empty()) throw std::invalid_argument("capacity negotiation requires owners");
-    const auto tokens   = offers.front().curve.main_page_tokens;
+    const auto tokens = offers.front().curve.main_page_tokens;
     for (const auto& offer : offers) {
         validate_curve(offer.curve);
         if (offer.curve.main_page_tokens != tokens)
@@ -79,8 +79,7 @@ resolve_group_kv_capacity(const KvCapacityPolicy& policy,
     std::vector<std::size_t> budgets;
     budgets.reserve(offers.size());
     for (const auto& offer : offers) {
-        budgets.push_back(checked_add(offer.available_bytes,
-                                      offer.unallocated_reservation_bytes,
+        budgets.push_back(checked_add(offer.available_bytes, offer.unallocated_reservation_bytes,
                                       "rank capacity budget overflows size_t"));
     }
 
@@ -93,7 +92,7 @@ resolve_group_kv_capacity(const KvCapacityPolicy& policy,
         // bottleneck a second time would under-size every rank.
         pages = offers.front().curve.maximum_main_page_groups;
         for (std::size_t index = 0; index < offers.size(); ++index) {
-            const auto& curve = offers[index].curve;
+            const auto& curve        = offers[index].curve;
             const std::size_t budget = budgets[index];
             if (budget < policy.automatic_headroom_bytes) {
                 throw std::invalid_argument(
@@ -107,8 +106,7 @@ resolve_group_kv_capacity(const KvCapacityPolicy& policy,
                 throw std::invalid_argument(
                     "minimum Engine runtime reservation requires " +
                     std::to_string(curve.minimum_device_reservation_bytes) +
-                    " bytes in addition to " +
-                    std::to_string(policy.automatic_headroom_bytes) +
+                    " bytes in addition to " + std::to_string(policy.automatic_headroom_bytes) +
                     " bytes of automatic headroom, but rank " + std::to_string(index) + " has " +
                     std::to_string(budget) + " bytes available for runtime capacity");
             }
@@ -121,7 +119,7 @@ resolve_group_kv_capacity(const KvCapacityPolicy& policy,
     std::vector<KvCapacityResolution> result;
     result.reserve(offers.size());
     for (std::size_t index = 0; index < offers.size(); ++index) {
-        const auto& offer = offers[index];
+        const auto& offer   = offers[index];
         const auto resolved = offer.curve.resolved_tokens(pages);
         KvCapacityResolution local;
         try {
@@ -137,7 +135,7 @@ resolve_group_kv_capacity(const KvCapacityPolicy& policy,
                 std::to_string(offer.curve.reservation_bytes(pages)) + " bytes (" + error.what() +
                 ")");
         }
-        local.mode = policy.mode;
+        local.mode                     = policy.mode;
         local.automatic_headroom_bytes = policy.automatic_headroom_bytes;
         result.push_back(local);
     }
@@ -150,13 +148,13 @@ resolve_symmetric_kv_capacity(const KvCapacityPolicy& policy, const SequenceCapa
     if (available_runtime_bytes_per_rank.empty()) {
         throw std::invalid_argument("KV capacity resolution requires at least one rank budget");
     }
-    // One curve, one figure per rank: the bottleneck is the smallest figure, and resolve_kv_capacity
-    // subtracts the automatic headroom once from it. A group of one rank is the single-device path.
+    // One curve, one figure per rank: the bottleneck is the smallest figure, and
+    // resolve_kv_capacity subtracts the automatic headroom once from it. A group of one rank is the
+    // single-device path.
     return resolve_kv_capacity(policy, curve,
                                *std::min_element(available_runtime_bytes_per_rank.begin(),
                                                  available_runtime_bytes_per_rank.end()));
 }
-
 
 std::size_t SequenceCapacityCurve::reservation_bytes(std::uint32_t main_page_groups) const {
     validate_curve(*this);
@@ -184,8 +182,7 @@ std::uint32_t SequenceCapacityCurve::resolved_tokens(std::uint32_t main_page_gro
                                     std::to_string(minimum_main_page_groups) + ", " +
                                     std::to_string(maximum_main_page_groups) + "]");
     }
-    const std::uint64_t tokens =
-        static_cast<std::uint64_t>(main_page_groups) * main_page_tokens;
+    const std::uint64_t tokens = static_cast<std::uint64_t>(main_page_groups) * main_page_tokens;
     if (tokens > std::numeric_limits<std::uint32_t>::max()) {
         throw std::overflow_error("resolved KV token capacity exceeds uint32");
     }
@@ -237,16 +234,16 @@ KvCapacityResolution resolve_kv_capacity(const KvCapacityPolicy& policy,
     }
 
     return KvCapacityResolution{
-        .mode                                    = policy.mode,
+        .mode                                 = policy.mode,
         .main_page_groups                     = pages,
         .maximum_main_page_groups             = curve.maximum_main_page_groups,
-        .resolved_tokens                         = curve.resolved_tokens(pages),
-        .minimum_runtime_reservation_bytes       = curve.minimum_device_reservation_bytes,
+        .resolved_tokens                      = curve.resolved_tokens(pages),
+        .minimum_runtime_reservation_bytes    = curve.minimum_device_reservation_bytes,
         .bytes_per_additional_main_page_group = curve.bytes_per_additional_main_page_group,
-        .runtime_reservation_bytes               = reservation,
-        .available_after_weights_bytes           = available_runtime_bytes,
-        .automatic_headroom_bytes                = policy.automatic_headroom_bytes,
-        .planned_slack_bytes                     = available_runtime_bytes - reservation,
+        .runtime_reservation_bytes            = reservation,
+        .available_after_weights_bytes        = available_runtime_bytes,
+        .automatic_headroom_bytes             = policy.automatic_headroom_bytes,
+        .planned_slack_bytes                  = available_runtime_bytes - reservation,
     };
 }
 

@@ -173,7 +173,7 @@ struct Fixture {
         }
         const auto live = std::max(0, std::min(o.rows, o.domain - o.rank * o.rows));
         logical_bytes   = std::size_t(live) * t * o.batch * 2 + std::size_t(k) * t * o.batch * 8 +
-                        o.batch * (4 + sizeof(ops::SamplingConfig));
+                          o.batch * (4 + sizeof(ops::SamplingConfig));
         if (o.penalties) logical_bytes += std::size_t(live) * o.batch * 4 + drafts.size();
         if (o.mask) logical_bytes += std::size_t((live + 31) / 32) * t * o.batch * 4;
         if (o.op != "candidates")

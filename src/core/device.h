@@ -119,9 +119,11 @@ public:
     explicit ExecutionContext(std::vector<int> device_ids);
 
     [[nodiscard]] int width() const noexcept { return static_cast<int>(devices_.size()); }
+
     [[nodiscard]] bool parallel() const noexcept { return devices_.size() > 1; }
 
     [[nodiscard]] DeviceContext& primary() noexcept { return *devices_.front(); }
+
     [[nodiscard]] const DeviceContext& primary() const noexcept { return *devices_.front(); }
 
     // The device of `rank`; throws std::out_of_range outside [0, width()).

@@ -4,7 +4,8 @@
 
 namespace ninfer::ops::detail {
 namespace {
-// the MTP block's attention input projection at tensor-parallel width 2: the 14336-row packed query|key|gate|value parent, halved by the Rows shard. This is the shape the lane measured.
+// the MTP block's attention input projection at tensor-parallel width 2: the 14336-row packed
+// query|key|gate|value parent, halved by the Rows shard. This is the shape the lane measured.
 //
 // The ladder is N14336K5120's, and that is a derivation rather than a copy: every band in it is
 // chosen from (n / kBlockRows) * ceil(T / BlockTokens) against the tuned wave, and that expression

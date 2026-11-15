@@ -16,7 +16,8 @@ using artifact::ShardAxis;
 // MTP layer. The extents are the fixed 125B-A6B geometry from the model reference.
 constexpr std::array<ParameterShard, 29> kParameterShards{{
     // ---- QSA (12 full-attention layers) -------------------------------------------------------
-    // Rows by the 24 gated query heads: 12288 = 48 head-slots of 256. See the header's packing note.
+    // Rows by the 24 gated query heads: 12288 = 48 head-slots of 256. See the header's packing
+    // note.
     {"self_attn.q_proj.weight", ShardAxis::Rows, {12288}, 1},
     // Rows by the 2 KV heads: 512 = 2 x 256.
     {"self_attn.k_proj.weight", ShardAxis::Rows, {512}, 1},
@@ -39,7 +40,8 @@ constexpr std::array<ParameterShard, 29> kParameterShards{{
     {"linear_attn.in_proj_a.weight", ShardAxis::Rows, {48}, 1},
     {"linear_attn.in_proj_b.weight", ShardAxis::Rows, {48}, 1},
     // Columns by the 10240 Q|K|V convolution channels, as THREE segments: the convolution is the
-    // same [4, 10240] tensor whose channels are Q|K|V (2048 | 2048 | 6144), which is exactly how the
+    // same [4, 10240] tensor whose channels are Q|K|V (2048 | 2048 | 6144), which is exactly how
+    // the
     // QKV projection's rows are segmented below. A single contiguous half would hand rank 0 the
     // channels Q2048 + K2048 + V1024 while its projection produces Q1024 + K1024 + V3072 — a wrong
     // convolution weight per rank, silently. Each segment must divide on its own.
@@ -102,8 +104,8 @@ std::vector<artifact::ShardRange> ranges_for(const ParameterShard& shard, int wi
     std::int64_t offset = 0;
     for (std::uint8_t index = 0; index < shard.segment_count; ++index) {
         const std::int64_t segment = shard.segments[index];
-        const auto placement = artifact::split_evenly(shard.axis, segment, width);
-        const auto& range    = placement.ranges[static_cast<std::size_t>(rank)];
+        const auto placement       = artifact::split_evenly(shard.axis, segment, width);
+        const auto& range          = placement.ranges[static_cast<std::size_t>(rank)];
         ranges.push_back(artifact::ShardRange{offset + range.begin, range.extent});
         offset += segment;
     }
@@ -139,8 +141,8 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     // The check exists to catch a table/model mismatch for a parameter that actually SPLITS: the
     // table declares the extent along the sharded axis, and `shape[axis]` must agree. A Replicated
     // or PrimaryOnly placement never reads its extent — the ranges are the whole parameter — so
-    // validating it there would only police a number nothing uses, and the tables legitimately state
-    // the leading dimension for those rows.
+    // validating it there would only police a number nothing uses, and the tables legitimately
+    // state the leading dimension for those rows.
     if (shard->axis == artifact::ShardAxis::Rows || shard->axis == artifact::ShardAxis::Columns) {
         const std::size_t axis_index = shard->axis == artifact::ShardAxis::Rows ? 0 : 1;
         if (reference.shape.size() <= axis_index) {
@@ -150,10 +152,9 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
         const std::uint64_t declared = static_cast<std::uint64_t>(total_extent(*shard));
         const std::uint64_t bound    = reference.shape[axis_index];
         if (declared != bound) {
-            throw std::invalid_argument("sharding: " + std::string(reference.name) + " binds " +
-                                        std::to_string(bound) +
-                                        " along its sharded axis but the table declares " +
-                                        std::to_string(declared));
+            throw std::invalid_argument(
+                "sharding: " + std::string(reference.name) + " binds " + std::to_string(bound) +
+                " along its sharded axis but the table declares " + std::to_string(declared));
         }
     }
 
@@ -197,7 +198,8 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     } catch (const std::invalid_argument& error) {
         // The resolver has no parameter name, so a range error there is anonymous. Name the
         // parameter here: an error that says which weight is wrong is worth the two lines.
-        throw std::invalid_argument("sharding: " + std::string(reference.name) + ": " + error.what());
+        throw std::invalid_argument("sharding: " + std::string(reference.name) + ": " +
+                                    error.what());
     }
 
     std::uint64_t share = 0;
@@ -219,9 +221,7 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     return sharded;
 }
 
-std::span<const ParameterShard> parameter_shards() noexcept {
-    return kParameterShards;
-}
+std::span<const ParameterShard> parameter_shards() noexcept { return kParameterShards; }
 
 artifact::Binder::ShardTransform shard_transform(int width, int rank) {
     if (width <= 1) { return {}; }

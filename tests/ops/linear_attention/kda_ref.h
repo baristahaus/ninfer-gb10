@@ -105,9 +105,9 @@ inline Result evaluate(const Inputs& in, double lower_bound, double scale) {
                 const std::size_t qk_base =
                     static_cast<std::size_t>((token * Hq + head / (H / Hq)) * D);
                 for (std::int64_t column = 0; column < D; ++column) {
-                    const double gate = static_cast<double>(in.g[vector_base + column]) +
-                                        static_cast<double>(in.dt_bias[dt_base + column]);
-                    const double log_decay                  = lower_bound * sigmoid(a_scale * gate);
+                    const double gate      = static_cast<double>(in.g[vector_base + column]) +
+                                             static_cast<double>(in.dt_bias[dt_base + column]);
+                    const double log_decay = lower_bound * sigmoid(a_scale * gate);
                     alpha[static_cast<std::size_t>(column)] = std::exp(log_decay);
                 }
                 const double beta = sigmoid(

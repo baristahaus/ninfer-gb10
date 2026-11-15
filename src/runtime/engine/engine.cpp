@@ -156,11 +156,11 @@ GenerationResult GenerationHandle::wait(OutputSink* sink, const CancellationView
 
 class Engine::Impl {
 public:
-    using Qwen35            = runtime::InferenceInstance<models::qwen3_5::RuntimeTypes>;
-    using GenerationCore    = runtime::EngineCore<Qwen35>;
-    using ScoringCore       = runtime::CausalScoreCore<Qwen35>;
-    using Qwen4             = runtime::InferenceInstance<models::qwen4_exp::RuntimeTypes>;
-    using FlashInstance     = flashnext_runtime::FlashNextInstance;
+    using Qwen35              = runtime::InferenceInstance<models::qwen3_5::RuntimeTypes>;
+    using GenerationCore      = runtime::EngineCore<Qwen35>;
+    using ScoringCore         = runtime::CausalScoreCore<Qwen35>;
+    using Qwen4               = runtime::InferenceInstance<models::qwen4_exp::RuntimeTypes>;
+    using FlashInstance       = flashnext_runtime::FlashNextInstance;
     using FlashGenerationCore = flashnext_runtime::EngineCore<FlashInstance>;
     using FlashScoringCore    = flashnext_runtime::CausalScoreCore<FlashInstance>;
     using Core =
@@ -172,12 +172,12 @@ public:
     explicit Impl(EngineOptions engine_options)
         : options(runtime::normalize_engine_options(std::move(engine_options))) {
         nvtx::ScopedRange load_range(nvtx::Name::EngineLoad, nvtx::Category::Runtime);
-        auto constructed  = runtime::construct_model(options);
-        active            = std::move(constructed.instance);
-        startup.load      = std::move(constructed.load);
-        flash_execution   = std::move(constructed.execution);
+        auto constructed = runtime::construct_model(options);
+        active           = std::move(constructed.instance);
+        startup.load     = std::move(constructed.load);
+        flash_execution  = std::move(constructed.execution);
         // Take the owner out of the local, or its destructor frees it here.
-        sharded           = std::move(constructed.sharded);
+        sharded = std::move(constructed.sharded);
         std::visit(
             [&](const auto& instance) {
                 using Instance = typename std::remove_cvref_t<decltype(instance)>::element_type;
@@ -196,7 +196,8 @@ public:
                 using Instance = typename std::remove_cvref_t<decltype(instance)>::element_type;
                 if constexpr (std::is_same_v<Instance, FlashInstance>) {
                     if (options.purpose == EnginePurpose::CausalScoring) {
-                        core = std::make_unique<FlashScoringCore>(*instance, flash_execution->primary());
+                        core = std::make_unique<FlashScoringCore>(*instance,
+                                                                  flash_execution->primary());
                     } else {
                         core = std::make_unique<FlashGenerationCore>(
                             *instance, flash_execution->primary(), options,
@@ -235,14 +236,14 @@ public:
     EngineOptions options;
     std::unique_ptr<ExecutionContext> flash_execution;
     // The two-GPU lane's group-scoped resources: the ONE mailbox and the ONE partial pair (plus the
-    // logits pair) both Programs share. Declared after the devices and BEFORE the Programs, so it is
-    // destroyed after the Programs that borrow it and before the devices it is allocated on.
+    // logits pair) both Programs share. Declared after the devices and BEFORE the Programs, so it
+    // is destroyed after the Programs that borrow it and before the devices it is allocated on.
     //
-    // THIS MEMBER IS THE OWNER, and the boundary matters. `construct_model` returns the owner inside
-    // `ConstructedModel`; a local of that type dies at the end of this constructor, so a route that
-    // moves `instance` out and leaves `sharded` behind frees the mailbox and the partial pair while
-    // both Programs keep raw pointers into it — the first column-parallel projection then writes
-    // into freed device memory (cudaErrorIllegalAddress, Xid 31).
+    // THIS MEMBER IS THE OWNER, and the boundary matters. `construct_model` returns the owner
+    // inside `ConstructedModel`; a local of that type dies at the end of this constructor, so a
+    // route that moves `instance` out and leaves `sharded` behind frees the mailbox and the partial
+    // pair while both Programs keep raw pointers into it — the first column-parallel projection
+    // then writes into freed device memory (cudaErrorIllegalAddress, Xid 31).
     std::unique_ptr<models::ShardedGroupOwner> sharded;
     runtime::ActiveModel active;
     EngineDescription description;
@@ -265,8 +266,8 @@ private:
                     description.kv_capacity = instance->kv_capacity_resolution.resolved_tokens;
                     // This route has no executor observations, so the startup record used to
                     // describe no device and no allocation. Report the one resident device.
-                    const MemorySummary memory = instance->program->memory_summary();
-                    description.device_state_capacity      = memory.host_state_capacity_slots;
+                    const MemorySummary memory              = instance->program->memory_summary();
+                    description.device_state_capacity       = memory.host_state_capacity_slots;
                     description.host_context_capacity_bytes = memory.host_kv_capacity_bytes;
                     startup.ranks.push_back(flashnext_runtime::rank_memory_budget(memory));
                     const DeviceMemorySnapshot physical =
@@ -274,8 +275,8 @@ private:
                     description.ranks.push_back(
                         {0, 0, options.device, {}, physical.shared_physical_memory});
                 } else {
-                    const auto usage                  = instance->session->physical_usage();
-                    description.device_state_capacity = usage.capacity.state_slots;
+                    const auto usage                        = instance->session->physical_usage();
+                    description.device_state_capacity       = usage.capacity.state_slots;
                     description.host_context_capacity_bytes = usage.capacity.host_bytes;
                     description.kv_capacity = instance->kv_capacity_resolution.resolved_tokens;
                     startup.ranks           = instance->rank_budgets;
@@ -286,7 +287,8 @@ private:
                     // the observation's own `rank` field labelled every rank as 0, because a
                     // RankWorker does not carry its index -- the executor's order is the authority.
                     const auto observations = instance->executor->observations();
-                    for (std::size_t rank_index = 0; rank_index < observations.size(); ++rank_index) {
+                    for (std::size_t rank_index = 0; rank_index < observations.size();
+                         ++rank_index) {
                         const auto& rank = observations[rank_index];
                         int device       = options.device;
                         if (options.deployment)
@@ -341,9 +343,9 @@ PreparedPrompt Engine::prepare_tokens(std::vector<TokenId> token_ids,
     return std::visit(
         [&](const auto& instance) -> PreparedPrompt {
             if (token_ids.size() > impl_->options.max_context) {
-                throw RequestError(RequestErrorKind::ContextLengthExceeded,
-                                   context_capacity_error(token_ids.size(),
-                                                          impl_->options.max_context));
+                throw RequestError(
+                    RequestErrorKind::ContextLengthExceeded,
+                    context_capacity_error(token_ids.size(), impl_->options.max_context));
             }
             auto prepared =
                 instance->frontend.prepare_tokens(std::move(token_ids), allow_prefix_identity);
@@ -488,10 +490,9 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
                 if (value == nullptr) {
                     throw std::invalid_argument("prompt belongs to another model family");
                 }
-                auto submission =
-                    core->submit(std::move(*value), prompt_summary, prepare_seconds,
-                                 std::move(resolved_options), consumer_mode, std::move(observation),
-                                 pending_deadline);
+                auto submission = core->submit(std::move(*value), prompt_summary, prepare_seconds,
+                                               std::move(resolved_options), consumer_mode,
+                                               std::move(observation), pending_deadline);
                 return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
                     impl_, std::move(submission), resolved_sampling));
             }
@@ -533,9 +534,9 @@ EngineSnapshot Engine::snapshot() const {
                 return core->snapshot();
         },
         impl_->core);
-    result.media = std::visit(
-        [](const auto& instance) { return instance->frontend.media_cache_summary(); },
-        impl_->active);
+    result.media =
+        std::visit([](const auto& instance) { return instance->frontend.media_cache_summary(); },
+                   impl_->active);
     return result;
 }
 

@@ -112,6 +112,7 @@ struct DFlash2Plan {
     artifact::ParameterReference feature_projection;
     artifact::ParameterReference context_norm;
     artifact::ParameterReference final_norm;
+
     struct Layer {
         artifact::ParameterReference input_norm;
         artifact::ParameterReference post_attention_norm;
@@ -128,6 +129,7 @@ struct DFlash2Plan {
         artifact::ParameterReference mlp_gate_up;
         artifact::ParameterReference mlp_down;
     };
+
     std::array<Layer, 5> layers;
     artifact::ParameterReference selector_hidden_projection;
     artifact::ParameterReference selector_predecessor_codebook;

@@ -115,9 +115,12 @@ void q8_a16_conformance(ninfer::test::linear_suite::Suite& suite) {
                                                       .route_interiors = full_tokens,
                                                       .full_output     = true});
     }
-    for (const auto [n, k] : std::array<std::array<int, 2>, 6>{
-             {{2048, 4096}, {2048, 6144}, {5120, 6144}, {5120, 17408}, {5120, 3072},
-              {5120, 8704}}}) {
+    for (const auto [n, k] : std::array<std::array<int, 2>, 6>{{{2048, 4096},
+                                                                {2048, 6144},
+                                                                {5120, 6144},
+                                                                {5120, 17408},
+                                                                {5120, 3072},
+                                                                {5120, 8704}}}) {
         suite.add(ninfer::test::linear_suite::make_case(
                       "q8", n, k, 129, ninfer::ops::LinearPolicy::A16Only,
                       ninfer::test::linear_suite::Execution::Eager,

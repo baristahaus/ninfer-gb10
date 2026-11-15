@@ -218,7 +218,8 @@ void ple_window(q4::Resources& resources, const q4::ModelShard& model, DeviceCon
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "SKIP: the test needs an explicit artifact; CTest supplies none. Set NINFER_TEST_ARTIFACT to a .ninfer file, or pass --artifact <file>.ninfer\n";
+        std::cerr << "SKIP: the test needs an explicit artifact; CTest supplies none. Set "
+                     "NINFER_TEST_ARTIFACT to a .ninfer file, or pass --artifact <file>.ninfer\n";
         return 77;
     }
     try {
@@ -261,10 +262,10 @@ int main(int argc, char** argv) {
                 scoring.prefill_chunk  = 4096;
                 scoring.kv_capacity    = KvCapacityPolicy::explicit_capacity(4096);
                 scoring.context_cache  = {
-                     .enabled = false, .extra_state_slots = 0, .host_capacity_bytes = 0};
+                    .enabled = false, .extra_state_slots = 0, .host_capacity_bytes = 0};
                 auto definition = q4::read_definition(reader, models::load_options(scoring));
                 auto load       = q4::resolve_load(reader, definition, device.device(),
-                                             host ? Device::cpu() : device.device());
+                                                   host ? Device::cpu() : device.device());
                 auto p          = q4::execution::describe_model(*definition);
                 const auto plan = plan_for(p, load.ple_table().geometry(), scoring, 8 * GiB);
                 require(plan && !plan->persistent.buffers.logits &&
@@ -290,7 +291,7 @@ int main(int argc, char** argv) {
                     }
                     auto definition = q4::read_definition(reader, models::load_options(options));
                     auto load       = q4::resolve_load(reader, definition, device.device(),
-                                                 host ? Device::cpu() : device.device());
+                                                       host ? Device::cpu() : device.device());
                     profile         = q4::execution::describe_model(*definition);
                     placement(load, host);
                     const auto weights   = load.materialization().device_capacity_bytes;
@@ -353,7 +354,7 @@ int main(int argc, char** argv) {
             q4::Resources resources(parameters, std::move(*selected), device);
             ple_window(resources, *model, device);
 
-            struct rusage usage {};
+            struct rusage usage{};
 
             getrusage(RUSAGE_SELF, &usage);
             const auto& s = model->storage_stats();

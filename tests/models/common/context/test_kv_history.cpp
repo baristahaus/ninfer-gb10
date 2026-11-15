@@ -1158,11 +1158,11 @@ void accepted_frontier_and_retirement(DeviceContext& device) {
 
 void page_spill_roundtrip(DeviceContext& device) {
     Fixture f(device);
-    auto owner  = f.create(130);
-    auto prefix = f.histories->retain_prefix(owner.handle(), 130);
+    auto owner          = f.create(130);
+    auto prefix         = f.histories->retain_prefix(owner.handle(), 130);
     const auto original = f.logical(owner.handle());
     owner.reset();
-    const auto extent = f.backup(original);
+    const auto extent  = f.backup(original);
     const auto replica = f.pages->host_replica(original[0]);
     const auto before  = f.host_view(f.host->view(replica.extent));
     std::vector<std::byte> expected(static_cast<const std::byte*>(before.data),
@@ -1268,7 +1268,8 @@ int main() {
         int count        = 0;
         const auto error = cudaGetDeviceCount(&count);
         if (error == cudaErrorNoDevice || error == cudaErrorInsufficientDriver || count == 0) {
-            std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+            std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with "
+                         "CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
             return 77;
         }
         CUDA_CHECK(error);

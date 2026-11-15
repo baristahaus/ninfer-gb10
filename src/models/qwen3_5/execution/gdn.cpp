@@ -17,9 +17,9 @@ std::size_t gdn_projection_workspace_bytes(const GdnProfile& parameters, std::in
         // The two role dispatches run under their own scopes; the peak is the larger.
         std::size_t peak = 0;
         for (const auto& role : *parameters.role_profiles) {
-            peak = std::max(peak, ops::linear_workspace_capacity_bytes(
-                                      role.qtype, role.n, role.k, role.policy, first, last,
-                                      "gdn_role"));
+            peak = std::max(peak, ops::linear_workspace_capacity_bytes(role.qtype, role.n, role.k,
+                                                                       role.policy, first, last,
+                                                                       "gdn_role"));
         }
         return peak;
     }
@@ -63,9 +63,11 @@ void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tenso
         if (expected.type() == DeviceType::CUDA &&
             (current != expected.index() || stream_device != expected.index())) {
             throw std::runtime_error(
-                "gdn projection: the execution view's stream does not belong to its device (expected "
-                "device " + std::to_string(expected.index()) + ", current device " +
-                std::to_string(current) + ", stream's device " + std::to_string(stream_device) +
+                "gdn projection: the execution view's stream does not belong to its device "
+                "(expected "
+                "device " +
+                std::to_string(expected.index()) + ", current device " + std::to_string(current) +
+                ", stream's device " + std::to_string(stream_device) +
                 "); a dispatch on this stream would launch in the wrong context");
         }
     }
@@ -101,11 +103,11 @@ workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
     // the fused a|b form (two rows per head). Ask the same function the op asks.
     out.value_heads = ops::gdn_control_heads(parameters.control);
     // The control projection's input rows are the residual width, which every rank holds whole.
-    out.hidden_size = control_profile.first.k;
+    out.hidden_size       = control_profile.first.k;
     std::int32_t qkv_rows = 0;
     if (parameters.role_rows) {
-        qkv_rows          = ops::projection_profile(parameters.role_rows->at(0)).first.n;
-        out.value_width   = ops::projection_profile(parameters.role_rows->at(1)).first.n;
+        qkv_rows        = ops::projection_profile(parameters.role_rows->at(0)).first.n;
+        out.value_width = ops::projection_profile(parameters.role_rows->at(1)).first.n;
     } else {
         const auto profile = ops::projection_profile(parameters.projection);
         qkv_rows           = profile.first.n;

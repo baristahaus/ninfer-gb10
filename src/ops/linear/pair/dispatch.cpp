@@ -36,13 +36,12 @@ void require_adjacent_parent_views(const Weight& first_weight, const Weight& sec
 // rows; both are the same kernel. The only shape that still needs an exact row count is the K=2048
 // adjacent-parent form, which `require_adjacent_parent_views` checks separately.
 void require_weight(const Weight& w, int k) {
-    const std::uint64_t payload_bytes =
-        std::uint64_t(w.n) * k + std::uint64_t(w.n) * (k / 32) * 2;
+    const std::uint64_t payload_bytes = std::uint64_t(w.n) * k + std::uint64_t(w.n) * (k / 32) * 2;
     if (w.qtype != QType::Q8_G32_FP16 || w.layout != QuantLayout::RowSplit ||
         w.scale_dtype != DType::FP16 || w.group != 32 || w.group_size != 32 || w.ndim != 2 ||
-        w.n <= 0 || w.k != k || w.shape[0] != w.n || w.shape[1] != k ||
-        w.padded_shape[0] != w.n || w.padded_shape[1] != k || w.payload_bytes < payload_bytes ||
-        w.qhigh != nullptr || w.high_plane_bytes != 0 || !common::operand::aligned(w.qdata, 16) ||
+        w.n <= 0 || w.k != k || w.shape[0] != w.n || w.shape[1] != k || w.padded_shape[0] != w.n ||
+        w.padded_shape[1] != k || w.payload_bytes < payload_bytes || w.qhigh != nullptr ||
+        w.high_plane_bytes != 0 || !common::operand::aligned(w.qdata, 16) ||
         !common::operand::aligned(w.scales, 16))
         throw std::invalid_argument(
             "linear_pair: invalid Q8 row-split weight representation or alignment");

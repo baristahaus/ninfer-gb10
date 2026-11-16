@@ -117,6 +117,17 @@ struct Timing {
         // one. Non-transfer calls leave both at zero and the line omits them.
         std::uint64_t bytes = 0;
         int direction       = -1;
+        // THE COPY'S OWN DEVICE TIME, in microseconds, or 0 when it was not measured. A host gap
+        // around a copy is ambiguous: it is either the device working through what the stream
+        // already holds, or the driver blocking the host for its own reasons, and the two need
+        // opposite fixes. Host timing cannot separate them; events on the copy's stream can,
+        // because an event recorded before the copy completes only when the prior work does.
+        std::uint64_t device_us = 0;
+        // NOTE ON WHAT THE GAP IS. `ns` is the host time from the PREVIOUS shim call's entry to
+        // THIS one's entry. It therefore covers the previous call's own execution and all the work
+        // in between, and it is named after the call that ENDS it. A 752 ms gap reported against a
+        // 10 KB device-to-device copy is not a 752 ms copy: it is 752 ms of work before the copy,
+        // and the copy's own device time is in device_us, where it reads 0.
     };
 
     SlowCall ring[kRingCapacity];
@@ -250,11 +261,46 @@ cudaError_t __wrap_cudaLaunchKernelExC(const cudaLaunchConfig_t* config, const v
     return __real_cudaLaunchKernelExC(config, func, args);
 }
 
+// Time the copy on its own stream, so the ring can say whether the host gap was the copy waiting
+// for queued work or the host being blocked. Only device-to-device copies are timed: they are the
+// ones the stall reports show, and every event costs a little of what it measures.
+std::uint64_t timed_device_to_device_copy(void* dst, const void* src, std::size_t bytes,
+                                          cudaMemcpyKind kind, cudaStream_t stream,
+                                          cudaError_t* status) {
+    if (kind != cudaMemcpyDeviceToDevice) {
+        *status = __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
+        return 0;
+    }
+    static thread_local cudaEvent_t start = nullptr;
+    static thread_local cudaEvent_t stop  = nullptr;
+    static thread_local bool unusable     = false;
+    if (!unusable && start == nullptr &&
+        (cudaEventCreateWithFlags(&start, cudaEventDefault) != cudaSuccess ||
+         cudaEventCreateWithFlags(&stop, cudaEventDefault) != cudaSuccess)) {
+        unusable = true;
+    }
+    const bool timed = !unusable && cudaEventRecord(start, stream) == cudaSuccess;
+    *status          = __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
+    if (!timed || cudaEventRecord(stop, stream) != cudaSuccess ||
+        cudaEventSynchronize(stop) != cudaSuccess) {
+        return 0;
+    }
+    float elapsed = 0.0F;
+    if (cudaEventElapsedTime(&elapsed, start, stop) != cudaSuccess) return 0;
+    return static_cast<std::uint64_t>(elapsed * 1000.0F);
+}
+
 cudaError_t __wrap_cudaMemcpyAsync(void* dst, const void* src, std::size_t bytes,
                                    cudaMemcpyKind kind, cudaStream_t stream) {
     note_shim("cudaMemcpyAsync");
     bump(&Counts::memcpy, "memcpy", stream, bytes, static_cast<int>(kind));
-    return __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
+    cudaError_t status = cudaSuccess;
+    const std::uint64_t device_us =
+        timed_device_to_device_copy(dst, src, bytes, kind, stream, &status);
+    g_timing[device_index()]
+        .ring[g_timing[device_index()].calls % Timing::kRingCapacity]
+        .device_us = device_us;
+    return status;
 }
 
 cudaError_t __wrap_cudaMemsetAsync(void* dst, int value, std::size_t bytes, cudaStream_t stream) {
@@ -359,7 +405,7 @@ void ninfer_launch_round_boundary(void) {
         g_snapshot[rank] = g_counts[rank];
         std::fprintf(stderr,
                      "[launch-count] round=%d rank=%d gap_total_us=%llu gap_max_us=%llu "
-                     "gap_max_at_call=%llu calls=%llu gap_kind=%s gap_before=%s "
+                     "gap_max_before_call=%llu calls=%llu gap_kind=%s gap_before=%s "
                      "gap_before2=%s gap_free_mb=%llu gap_device=%d gap_stream=%p phase=%s\n",
                      g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
@@ -383,10 +429,11 @@ void ninfer_launch_round_boundary(void) {
                 if (slot.ns < kSlowCallNs) { continue; }
                 std::fprintf(stderr,
                              "[launch-count] round=%d rank=%d   call=%llu kind=%s us=%llu "
-                             "bytes=%llu direction=%d\n",
+                             "bytes=%llu direction=%d device_us=%llu\n",
                              g_round, rank, static_cast<unsigned long long>(call), slot.kind,
                              static_cast<unsigned long long>(slot.ns / 1000),
-                             static_cast<unsigned long long>(slot.bytes), slot.direction);
+                             static_cast<unsigned long long>(slot.bytes), slot.direction,
+                             static_cast<unsigned long long>(slot.device_us));
             }
         }
         g_timing[rank] = Timing{};

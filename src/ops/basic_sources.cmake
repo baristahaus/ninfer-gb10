@@ -32,8 +32,6 @@ target_sources(ninfer_ops PRIVATE
   "${NINFER_OPS_DIR}/kernel/target_logprobs.cuh"
   "${NINFER_OPS_DIR}/wrapper/mtp_round.cpp"
   "${NINFER_OPS_DIR}/launcher/mtp_round.cu"
-  "${NINFER_OPS_DIR}/wrapper/scatter.cpp"
-  "${NINFER_OPS_DIR}/launcher/scatter.cu"
   "${NINFER_OPS_DIR}/wrapper/speculative_round.cpp"
   "${NINFER_OPS_DIR}/launcher/speculative_round.cu"
   "${NINFER_OPS_DIR}/wrapper/mtp_pack.cpp"

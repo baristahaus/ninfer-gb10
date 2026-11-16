@@ -160,12 +160,49 @@ std::string chain_text(const std::vector<ninfer::TokenId>& tokens) {
     return text;
 }
 
-// The chain a lane must reproduce, named after the speculative backend so the MTP lane has its own.
-const char* golden_name(bool mtp) { return mtp ? "golden_mtp.ids" : "golden_plain.ids"; }
+// The chain a lane must reproduce, named after the speculative backend so every lane has its own.
+const char* golden_name(ninfer::SpeculativeBackend backend) {
+    switch (backend) {
+    case ninfer::SpeculativeBackend::Mtp:
+        return "golden_mtp.ids";
+    case ninfer::SpeculativeBackend::DFlash:
+        return "golden_dflash.ids";
+    case ninfer::SpeculativeBackend::DFlash2:
+        return "golden_dflash2.ids";
+    default:
+        return "golden_plain.ids";
+    }
+}
+
+// The draft window each lane runs. The MTP lane proposes three drafts; the masked-draft lanes take
+// a wider window, and four keeps the round short enough to compare across two hosts while still
+// exercising a multi-draft accept.
+std::uint32_t lane_draft_tokens(ninfer::SpeculativeBackend backend) {
+    switch (backend) {
+    case ninfer::SpeculativeBackend::Mtp:
+        return 3;
+    case ninfer::SpeculativeBackend::DFlash:
+    case ninfer::SpeculativeBackend::DFlash2:
+        return 4;
+    default:
+        return 0;
+    }
+}
+
+// NINFER_TP2_SPEC names the lane. Unset is the plain lane.
+ninfer::SpeculativeBackend lane_from_env(const char* spec) {
+    if (spec == nullptr || *spec == '\0') return ninfer::SpeculativeBackend::None;
+    const std::string_view name(spec);
+    if (name == "mtp") return ninfer::SpeculativeBackend::Mtp;
+    if (name == "dflash") return ninfer::SpeculativeBackend::DFlash;
+    if (name == "dflash2") return ninfer::SpeculativeBackend::DFlash2;
+    throw std::invalid_argument(std::string("unknown NINFER_TP2_SPEC lane: ") + std::string(name) +
+                                " (expected mtp, dflash or dflash2)");
+}
 
 std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int device,
                                        const std::vector<ninfer::TokenId>& prompt_tokens,
-                                       bool mtp) {
+                                       ninfer::SpeculativeBackend backend) {
     ninfer::EngineOptions options;
     options.artifact_path  = artifact;
     options.use_cuda_graph = false; // width > 1 refuses capture (caf91488)
@@ -174,14 +211,10 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     // two-rank round has been compared for them, so the test states the configuration it exercises
     // instead of inheriting defaults that the gate would refuse. Each of those combinations gets
     // its own row in that table, and its own comparison, when it is validated.
-    options.context_cache.enabled = false;
-    if (mtp) {
-        options.speculative.backend      = ninfer::SpeculativeBackend::Mtp;
-        options.speculative.draft_tokens = 3;
-    } else {
-        options.speculative.backend = ninfer::SpeculativeBackend::None;
-    }
-    options.max_context = 2048;
+    options.context_cache.enabled    = false;
+    options.speculative.backend      = backend;
+    options.speculative.draft_tokens = lane_draft_tokens(backend);
+    options.max_context              = 2048;
     // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without
     // this the engine refuses at option validation before either round runs.
     options.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(2048);
@@ -248,8 +281,10 @@ int main() {
 
     // NINFER_TP2_SPEC selects a speculative backend so one binary can run each option-gate
     // comparison. Unset means the plain lane, which is the configuration this test validated first.
-    const char* spec   = std::getenv("NINFER_TP2_SPEC");
-    const bool mtp     = spec != nullptr && std::string_view(spec) == "mtp";
+    ninfer::SpeculativeBackend backend = ninfer::SpeculativeBackend::None;
+    try {
+        backend = lane_from_env(std::getenv("NINFER_TP2_SPEC"));
+    } catch (const std::exception& error) { return fail(error.what()); }
     const bool capture = std::getenv("NINFER_TP2_CAPTURE") != nullptr;
 
     // The prompt is read up front; a golden is read only AFTER the round has produced tokens, so a
@@ -270,14 +305,14 @@ int main() {
         const int width = std::atoi(arm);
         std::vector<ninfer::TokenId> tokens;
         try {
-            tokens = run_round(artifact, width, 0, prompt, mtp);
+            tokens = run_round(artifact, width, 0, prompt, backend);
         } catch (const std::exception& error) {
             return fail(std::string("width ") + arm + " round threw: " + error.what());
         }
         std::cout << "arm " << width << " tokens (" << tokens.size() << "): " << chain_text(tokens)
                   << '\n';
         if (capture) {
-            std::cout << "capture: write the chain above into " << golden_name(mtp) << '\n';
+            std::cout << "capture: write the chain above into " << golden_name(backend) << '\n';
             return 0;
         }
         // NINFER_TP2_COMPARE names the OTHER arm's chain: the reference host scores both candidates
@@ -287,7 +322,7 @@ int main() {
         std::vector<ninfer::TokenId> expected;
         try {
             expected = read_ids(compare != nullptr ? std::string(compare)
-                                                   : fixture_path(golden_name(mtp)));
+                                                   : fixture_path(golden_name(backend)));
         } catch (const std::exception& error) { return fail(error.what()); }
         if (tokens != expected) {
             if (tokens.size() != expected.size()) {
@@ -335,7 +370,7 @@ int main() {
 
     std::vector<ninfer::TokenId> single;
     try {
-        single = run_round(artifact, 1, 0, prompt, mtp);
+        single = run_round(artifact, 1, 0, prompt, backend);
     } catch (const std::exception& error) {
         return fail(std::string("the single-device reference round threw: ") + error.what());
     }
@@ -343,7 +378,7 @@ int main() {
 
     std::vector<ninfer::TokenId> sharded;
     try {
-        sharded = run_round(artifact, 2, 0, prompt, mtp);
+        sharded = run_round(artifact, 2, 0, prompt, backend);
     } catch (const std::exception& error) {
         // With the flag set, a refusal is exactly what this test exists to prevent shipping.
         return fail(std::string("the width-2 round did not run: ") + error.what());
@@ -381,7 +416,7 @@ int main() {
     if (!capture) {
         std::vector<ninfer::TokenId> golden;
         try {
-            golden = read_ids(fixture_path(golden_name(mtp)));
+            golden = read_ids(fixture_path(golden_name(backend)));
         } catch (const std::exception& error) { return fail(error.what()); }
         if (single != golden) {
             return fail("the reference lane does not reproduce the golden\n  golden: " +

@@ -23,6 +23,12 @@ namespace {
 // stall produces at most ten lines a second.
 constexpr long long kStampPeriodNs = 100'000'000;
 
+// THE THROTTLE IS A THROTTLE, NOT A MEASUREMENT. When a site is busy, this suppresses a stamp that
+// follows the previous one too closely, so consecutive lines for one site always appear about the
+// throttle interval apart whatever the real event spacing is. Reading those intervals as a cadence
+// is wrong, and it was read that way once: the lines suggested a 100 ms round cadence when the
+// generation phase is 0.46 s for 32 tokens. The round's own wall time is on the [round] boundary
+// line, which is not throttled.
 bool stamp_due(int rank, const char* where, int round) {
     static const bool on = std::getenv("NINFER_LANE_TRACE") != nullptr;
     if (!on) { return false; }

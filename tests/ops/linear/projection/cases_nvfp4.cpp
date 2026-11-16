@@ -85,8 +85,14 @@ void run_nvfp4_a4(Suite& suite) {
     // where width 1 presents 17408. The sweep above already crosses the shapes' own A4 thresholds
     // (8 for mlp/down and the 8704-row role, 4 for the 14336 parent), so the first call above each
     // threshold is what a missing quantize geometry would refuse.
-    for (auto [n, k, seed] : {std::tuple{17408, 5120, 727U}, std::tuple{8704, 5120, 729U},
-                              std::tuple{5120, 8704, 731U}}) {
+    // THE SAME SHAPE UNDER THREE SEEDS, on purpose. 17408x5120 at one token fails the reduction
+    // criterion under seed 727 (ninfer-gb10-izs) and passes under 733 and 735, while 8704x5120 and
+    // 5120x8704 pass at one token under their own seeds. Two seeds that pass at the failing shape
+    // are what turn "the A4 route is broken at this shape" into "this weight and activation pair is
+    // broken", and they cost two invocations each.
+    for (auto [n, k, seed] :
+         {std::tuple{17408, 5120, 727U}, std::tuple{8704, 5120, 729U}, std::tuple{5120, 8704, 731U},
+          std::tuple{17408, 5120, 733U}, std::tuple{17408, 5120, 735U}}) {
         add_shape(suite, ninfer::QType::NVFP4, ActivationRecipe::Hashed, make_nvfp4_weight,
                   {n, k, seed, Comparison::Sampled, true, invocations});
     }

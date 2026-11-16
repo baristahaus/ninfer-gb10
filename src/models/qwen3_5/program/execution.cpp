@@ -7,6 +7,7 @@
 #include <mutex>
 #include <utility>
 #include "models/qwen3_5/program/internal.h"
+#include "runtime/executor/round_trace.h"
 #include "models/qwen3_5/execution/draft.h"
 #include "models/qwen3_5/execution/text.h"
 
@@ -145,9 +146,23 @@ void RankProgramImpl::progress() {
         compute_retired.record(device.stream());
         operation.stage = ComputeStage::Retiring;
     }
+    // WHERE THE HOST TIME GOES. A single progress() call can spend most of a round's wall time on
+    // the host with the device idle -- the round trace reports it as one number,
+    // submit.progress.end elapsed-us, and that number does not say which stage. These two sections
+    // are the candidates: the Inputs case builds the frame and enqueues the forward, and the
+    // Forward case polls it. The lines print only when a section is slow, so a normal round stays
+    // silent.
+    const auto slow_section = [](const char* name, std::uint64_t began) {
+        const std::uint64_t elapsed = runtime::round_trace_now_ns() - began;
+        if (elapsed < 5'000'000ULL) { return; }
+        runtime::round_trace(
+            "%s elapsed-us=%llu (host time inside the stage machine, device not counted)", name,
+            static_cast<unsigned long long>(elapsed / 1000ULL));
+    };
     for (;;) {
         switch (operation.stage) {
-        case ComputeStage::Inputs:
+        case ComputeStage::Inputs: {
+            const auto inputs_began = runtime::round_trace_now_ns();
             if (std::holds_alternative<NormalizeWork>(operation.request.work.operation)) {
                 append_draft_history(operation);
                 gpu_timer.record_result();
@@ -163,10 +178,15 @@ void RankProgramImpl::progress() {
                 append_draft_history(operation);
             request_decision(operation);
             begin_target(operation);
+            slow_section("progress.inputs", inputs_began);
             operation.stage = ComputeStage::Forward;
             break;
-        case ComputeStage::Forward:
-            if (!advance_target(operation)) {
+        }
+        case ComputeStage::Forward: {
+            const auto forward_began = runtime::round_trace_now_ns();
+            const bool finished      = advance_target(operation);
+            slow_section("progress.forward", forward_began);
+            if (!finished) {
                 request_decision(operation);
                 return;
             }
@@ -220,6 +240,7 @@ void RankProgramImpl::progress() {
             result_ready.record(device.stream());
             operation.stage = ComputeStage::History;
             break;
+        }
         case ComputeStage::History:
             if (!result_ready.ready()) return;
             if (operation.width)

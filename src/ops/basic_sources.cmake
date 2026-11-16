@@ -30,9 +30,7 @@ target_sources(ninfer_ops PRIVATE
   "${NINFER_OPS_DIR}/wrapper/mtp_round.cpp"
   "${NINFER_OPS_DIR}/launcher/mtp_round.cu"
   "${NINFER_OPS_DIR}/wrapper/mtp_pack.cpp"
-  "${NINFER_OPS_DIR}/launcher/mtp_pack.cu"
-  "${NINFER_OPS_DIR}/wrapper/argmax.cpp"
-  "${NINFER_OPS_DIR}/launcher/argmax.cu")
+  "${NINFER_OPS_DIR}/launcher/mtp_pack.cu")
 
 # Public wrappers for the same no-counterpart ops.
 foreach(_f IN ITEMS

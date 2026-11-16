@@ -12,7 +12,7 @@
 # at their first divergence, because the scoring route is single-device only.
 #
 # Usage:
-#   tools/lane/sweep-tp2-lane.sh [--lengths "8 10 ..."] [--work DIR] [--dry-run] [--no-build]
+#   tools/lane/sweep-tp2-lane.sh [--lengths "8 10 ..."] [--work DIR] [--spec BACKEND] [--dry-run] [--no-build]
 #
 # Resumable: a length whose row already exists in $WORK/sweep.tsv is skipped, so an interrupted
 # sweep is continued by running the same command again. Partial rows are never written; a row is
@@ -59,6 +59,11 @@ NO_BUILD=0
 # Derived from measurement, not guessed: the reference arm takes ~8 min (67 rounds, arm 1 tokens (32)
 # on trueno), so 1200 s is 2.5x that and generous enough for the sharded arm to finish if it can.
 ARM_TIMEOUT=${ARM_TIMEOUT:-1200}
+# THE LANES ARE VALIDATED ONE AT A TIME. NINFER_TP2_SPEC selects a speculative backend, and the
+# sharded forward has to reproduce each lane's reference before kShardedForwardWired can be flipped.
+# Without this option the sweep could only run the plain lane, which is why the speculative lanes
+# stayed unvalidated at width 2.
+SPEC=${SPEC:-}
 # This workstation's /etc/ssh/ssh_config.d carries a file with wrong ownership, so the default system
 # config makes every ssh fail with "Bad owner or permissions" before it reaches the host. The lane
 # hosts are addressed by IP, so an empty config is both sufficient and reproducible; SSH_CONFIG can
@@ -74,6 +79,7 @@ while [ $# -gt 0 ]; do
         --lengths) LENGTHS="${2:?--lengths needs a list}"; shift 2 ;;
         --work)    WORK="${2:?--work needs a directory}"; shift 2 ;;
         --no-build) NO_BUILD=1; shift ;;
+        --spec)     SPEC="${2:?--spec needs a backend name (mtp, dflash2)}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -96,6 +102,7 @@ say "   work     $WORK"
 say "   reference $REF_HOST ($REF_ART)"
 say "   sharded   $LANE_HOST ($LANE_ART)"
 say "   checkout  $SRC -> $DST"
+if [ -n "$SPEC" ]; then say "   spec      $SPEC (both arms run that lane)"; fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     say "== dry run: nothing synced, built or run"
@@ -230,7 +237,9 @@ run_arm() {
     # read from the same run that produced the row instead of from a separate reproduction.
     local trace=""
     if [ -n "${NINFER_LANE_TRACE:-}" ]; then trace="NINFER_LANE_TRACE=$NINFER_LANE_TRACE "; fi
-    local command="cd '$DST' && timeout $ARM_TIMEOUT env ${visible}${trace}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
+    local spec=""
+    if [ -n "$SPEC" ]; then spec="NINFER_TP2_SPEC=$SPEC "; fi
+    local command="cd '$DST' && timeout $ARM_TIMEOUT env ${visible}${trace}${spec}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
         NINFER_TP2_PROMPT='$prompt' NINFER_TEST_ARTIFACT='$artifact' \
         ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test"
     # One run per arm: the chain and the log come from the same execution, so a length costs two GPU

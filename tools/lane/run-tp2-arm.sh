@@ -30,6 +30,10 @@ ARTIFACT=/home/barista/artifacts/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfe
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DST=/home/barista/src/wt-tp2
 BUILD=build/rtx5090-release
+# NINFER_TP2_SPEC selects a speculative backend (mtp, dflash2) so one binary can run each lane. The
+# sharded forward has to be validated lane by lane, and before this option the runner could only
+# exercise the plain lane, which left the speculative lanes unvalidated at width 2.
+SPEC=${SPEC:-}
 DRY_RUN=0
 
 usage() {
@@ -45,6 +49,7 @@ while [ $# -gt 0 ]; do
         --src)      SRC="${2:?--src needs a directory}"; shift 2 ;;
         --dst)      DST="${2:?--dst needs a directory}"; shift 2 ;;
         --build)    BUILD="${2:?--build needs a directory}"; shift 2 ;;
+        --spec)     SPEC="${2:?--spec needs a backend name (mtp, dflash2)}"; shift 2 ;;
         --dry-run)  DRY_RUN=1; shift ;;
         -h|--help)  usage 0 ;;
         *) echo "unknown argument: $1" >&2; usage 2 ;;
@@ -109,6 +114,8 @@ rsync -a --delete --exclude=.git --exclude=build --exclude=.agents --exclude=.ag
 say "== build $BUILD on $HOST"
 remote "cd $DST && cmake --build $BUILD -j 16 2>&1 | tail -5"
 
-say "== arm $ARM"
-remote "cd $DST && NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM \
+spec_env=""
+if [ -n "$SPEC" ]; then spec_env="NINFER_TP2_SPEC=$SPEC "; fi
+say "== arm $ARM${SPEC:+ (spec=$SPEC)}"
+remote "cd $DST && ${spec_env}NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM \
         NINFER_TEST_ARTIFACT=$ARTIFACT ./$BUILD/tests/ninfer_qwen3_5_tp2_accept_real_test 2>&1 | tail -40"

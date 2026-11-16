@@ -52,17 +52,19 @@ int main() {
     expect(sharded_forward_refusal(true, true).empty(),
            "a sharded lane with a wired forward must not be refused");
 
-    // THE CASE dee06f5d GOT WRONG. Mirrors present AND the group bundle present (so `sharded_` is
-    // non-null, which is what dee06f5d passed as the 'wired' input) but the forward is NOT
-    // implemented: dee06f5d's caller passed `sharded_ != nullptr` == true here and the refusal
-    // returned empty, so the round would have RUN the unwired forward. The flag says what it means,
-    // so this case refuses.
-    expect(!sharded_forward_refusal(true, kShardedForwardWired).empty(),
-           "mirrors + group bundle + forward NOT wired must refuse (the case dee06f5d ran)");
-    expect(
-        sharded_forward_refusal(true, kShardedForwardWired).find("sharded forward is not wired") !=
-            std::string::npos,
-        "that refusal names the reason");
+    // THE CASE dee06f5d GOT WRONG, stated so it holds whatever the flag says. Mirrors present AND
+    // the group bundle present (so `sharded_` is non-null, which is what dee06f5d passed as the
+    // 'wired' input): dee06f5d's caller passed `sharded_ != nullptr` == true as the wired input and
+    // the refusal returned empty, so the round would have RUN the forward while the flag said it
+    // was not implemented. The predicate must answer from the flag it is given and from nothing
+    // else, so the expected answer here is exactly the flag's value.
+    expect(sharded_forward_refusal(true, kShardedForwardWired).empty() == kShardedForwardWired,
+           "mirrors + group bundle must refuse exactly when the forward is not wired");
+    if (!kShardedForwardWired) {
+        expect(sharded_forward_refusal(true, kShardedForwardWired)
+                       .find("sharded forward is not wired") != std::string::npos,
+               "an unwired refusal names the reason");
+    }
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

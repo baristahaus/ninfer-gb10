@@ -108,11 +108,18 @@ struct ContextOperation {
 // forward that is only half wired -- a guard outliving its reason, which this phase has hit twice.
 // The refusal fires only when the lane is sharded AND the forward is not wired. A fully wired
 // sharded lane returns empty and runs; a single-device lane returns empty and runs.
-// THE ONE FLAG THAT MEANS WHAT IT SAYS: is the sharded forward IMPLEMENTED? False today, because it
-// is not. It is deliberately NOT derived from `sharded_` -- that pointer says the group bundle
+// THE ONE FLAG THAT MEANS WHAT IT SAYS: is the sharded forward IMPLEMENTED? It is, and it is on by
+// default now. It is deliberately NOT derived from `sharded_` -- that pointer says the group bundle
 // exists, which is true on this lane and was therefore the wrong input for this question. A
 // predicate whose input is described by a name it does not measure is wrong in both directions.
-inline constexpr bool kShardedForwardWired = false;
+//
+// THIS FLAG IS NOT THE SAFETY GATE FOR UNVALIDATED OPTIONS. It says the forward exists; the width-2
+// register in runtime/engine/startup.cpp says which option combinations have been compared against
+// width 1, and it refuses the rest before a program is built. The two gates compose: with this flag
+// true the validated lanes run sharded and every unvalidated option still refuses at width 2 with
+// its own reason. That is why the flag can be on while --spec dflash, --spec dflash2,
+// --causal-scoring and --vision still refuse.
+inline constexpr bool kShardedForwardWired = true;
 
 [[nodiscard]] std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired);
 

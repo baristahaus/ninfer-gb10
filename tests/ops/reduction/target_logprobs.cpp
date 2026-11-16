@@ -232,6 +232,147 @@ int run_validation_cases() {
     return failures;
 }
 
+// The ranking form of the Op. Its contract is the scalar one plus, per column, the `top_k` largest
+// valid-row logits reported as (id, log-probability) pairs ordered by higher value first and lower
+// vocabulary index on a tie. The kernel writes element `rank + column * top_k`, so the tensors are
+// [top_k, columns] with the rank axis fastest. Ranks past min(top_k, valid_rows) are
+// kNoReportedLogprobRank with -inf.
+struct RankingExpectation {
+    std::vector<std::int32_t> ids;
+    std::vector<float> values;
+};
+
+std::vector<std::uint16_t> make_tied_logits(std::int32_t physical_rows, std::int32_t valid_rows,
+                                            std::int32_t columns) {
+    std::vector<std::uint16_t> logits(static_cast<std::size_t>(physical_rows) *
+                                      static_cast<std::size_t>(columns));
+    for (std::int32_t column = 0; column < columns; ++column) {
+        const std::size_t base =
+            static_cast<std::size_t>(column) * static_cast<std::size_t>(physical_rows);
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            // Multiples of 0.5 are exact in BF16, and the modulus repeats values so the tie rule
+            // has something to decide.
+            const int step = (row * 13 + column * 7) % 17;
+            logits[base + static_cast<std::size_t>(row)] =
+                f32_to_bf16(static_cast<float>(step) * 0.5f - 4.0f);
+        }
+        for (std::int32_t row = valid_rows; row < physical_rows; ++row) {
+            logits[base + static_cast<std::size_t>(row)] = f32_to_bf16(120.0f);
+        }
+    }
+    return logits;
+}
+
+RankingExpectation ranking_oracle(const std::vector<std::uint16_t>& logits,
+                                  std::int32_t physical_rows, std::int32_t valid_rows,
+                                  std::int32_t columns, std::int32_t top_k) {
+    RankingExpectation expected;
+    expected.ids.resize(static_cast<std::size_t>(top_k) * static_cast<std::size_t>(columns));
+    expected.values.resize(expected.ids.size());
+    for (std::int32_t column = 0; column < columns; ++column) {
+        const std::size_t base =
+            static_cast<std::size_t>(column) * static_cast<std::size_t>(physical_rows);
+        double maximum = -std::numeric_limits<double>::infinity();
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            maximum = std::max(maximum, static_cast<double>(bf16_to_f32(logits[base + row])));
+        }
+        double sum = 0.0;
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            sum += std::exp(static_cast<double>(bf16_to_f32(logits[base + row])) - maximum);
+        }
+        const double normalizer = maximum + std::log(sum);
+        std::vector<std::int32_t> order(static_cast<std::size_t>(valid_rows));
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            order[static_cast<std::size_t>(row)] = row;
+        }
+        std::stable_sort(order.begin(), order.end(), [&](std::int32_t left, std::int32_t right) {
+            const double lv = static_cast<double>(bf16_to_f32(logits[base + left]));
+            const double rv = static_cast<double>(bf16_to_f32(logits[base + right]));
+            if (lv != rv) { return lv > rv; }
+            return left < right;
+        });
+        const std::int32_t reported = top_k < valid_rows ? top_k : valid_rows;
+        for (std::int32_t rank = 0; rank < top_k; ++rank) {
+            const std::size_t slot =
+                static_cast<std::size_t>(rank) +
+                static_cast<std::size_t>(column) * static_cast<std::size_t>(top_k);
+            if (rank < reported) {
+                const std::int32_t row = order[static_cast<std::size_t>(rank)];
+                expected.ids[slot]     = row;
+                expected.values[slot]  = static_cast<float>(
+                    static_cast<double>(bf16_to_f32(logits[base + row])) - normalizer);
+            } else {
+                expected.ids[slot]    = ops::kNoReportedLogprobRank;
+                expected.values[slot] = -std::numeric_limits<float>::infinity();
+            }
+        }
+    }
+    return expected;
+}
+
+int run_ranking_case(const std::string& label, std::int32_t physical_rows, std::int32_t valid_rows,
+                     std::int32_t columns, std::int32_t top_k) {
+    const auto logits   = make_tied_logits(physical_rows, valid_rows, columns);
+    const auto targets  = make_targets(valid_rows, columns);
+    const auto scalar   = target_logprobs_oracle(logits, targets, physical_rows, valid_rows);
+    const auto expected = ranking_oracle(logits, physical_rows, valid_rows, columns, top_k);
+
+    GuardedDeviceBuffer device_logits(logits.size() * sizeof(std::uint16_t));
+    GuardedDeviceBuffer device_targets(targets.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer device_output(targets.size() * sizeof(float));
+    GuardedDeviceBuffer device_ids(expected.ids.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer device_values(expected.values.size() * sizeof(float));
+    device_logits.copy_from_host(logits.data(), device_logits.bytes());
+    device_targets.copy_from_host(targets.data(), device_targets.bytes());
+    device_output.fill(0xcd);
+    device_ids.fill(0xcd);
+    device_values.fill(0xcd);
+
+    Tensor logits_tensor(device_logits.span(), DType::BF16, {physical_rows, columns});
+    Tensor targets_tensor(device_targets.span(), DType::I32, {columns});
+    Tensor output_tensor(device_output.span(), DType::FP32, {columns});
+    Tensor ids_tensor(device_ids.span(), DType::I32, {top_k, columns});
+    Tensor values_tensor(device_values.span(), DType::FP32, {top_k, columns});
+    ops::target_logprobs(logits_tensor, targets_tensor, valid_rows, output_tensor, &ids_tensor,
+                         &values_tensor,
+                         ninfer::test::cuda_environment().default_execution.stream());
+    cuda_synchronize();
+
+    int failures = verify_reduction(label, fp32_as_double(device_output.data(), targets.size()),
+                                    scalar, kTargetLogprobsFp32Criterion);
+    failures += verify_exact((label + " ranks").c_str(),
+                             from_device<std::int32_t>(device_ids.data(), expected.ids.size()),
+                             expected.ids);
+    // Ranks past the reported count are -inf on both sides, which a reduction criterion cannot
+    // compare, so the finite ranks are checked as a reduction and the rest exactly.
+    const std::int32_t reported = top_k < valid_rows ? top_k : valid_rows;
+    std::vector<double> got_values;
+    std::vector<double> want_values;
+    for (std::int32_t column = 0; column < columns; ++column) {
+        const auto got = from_device<float>(device_values.data(), expected.values.size());
+        for (std::int32_t rank = 0; rank < reported; ++rank) {
+            const std::size_t slot =
+                static_cast<std::size_t>(rank) +
+                static_cast<std::size_t>(column) * static_cast<std::size_t>(top_k);
+            got_values.push_back(static_cast<double>(got[slot]));
+            want_values.push_back(static_cast<double>(expected.values[slot]));
+        }
+        for (std::int32_t rank = reported; rank < top_k; ++rank) {
+            const std::size_t slot =
+                static_cast<std::size_t>(rank) +
+                static_cast<std::size_t>(column) * static_cast<std::size_t>(top_k);
+            if (!(std::isinf(got[slot]) && got[slot] < 0.0f)) {
+                std::cerr << label << ": rank " << rank << " column " << column
+                          << " should be -inf\n";
+                ++failures;
+            }
+        }
+    }
+    failures += verify_reduction(label + " rank values", got_values, want_values,
+                                 kTargetLogprobsFp32Criterion);
+    return failures;
+}
+
 } // namespace
 
 void add_target_logprobs_cases(ninfer::test::OpSuite& suite) {
@@ -285,6 +426,11 @@ void add_target_logprobs_cases(ninfer::test::OpSuite& suite) {
                                   make_shift_logits(257, 257, 31, 32.0f));
               },
               {{"execution", "eager"}});
+    suite.add("target_logprobs/ranking/tied",
+              [] { return run_ranking_case("target_logprobs ranking tied", 64, 40, 3, 5); });
+    suite.add("target_logprobs/ranking/topk/exceeds/rows", [] {
+        return run_ranking_case("target_logprobs ranking top_k exceeds rows", 17, 5, 2, 8);
+    });
     suite.add("target_logprobs/validation_cases", [] { return run_validation_cases(); },
               {{"execution", "eager"}});
 }

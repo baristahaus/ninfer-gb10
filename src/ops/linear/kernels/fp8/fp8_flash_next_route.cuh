@@ -10,8 +10,8 @@
 // projection's scaled SiLU, or the up projection's gate mix) runs the same route at every width.
 //
 // MOVED HERE from ops/linear/fp8/fp8_flash_next_route.cuh with the fp8 tree merge. Only the generic
-// form came across: the flat route's launch_fp8_dense_linear and Fp8FlashNextVocabularyRoute have no
-// consumer, because the projection shapes already use fp8_dense's own copies of them.
+// form came across: the flat route's launch_fp8_dense_linear and Fp8FlashNextVocabularyRoute have
+// no consumer, because the projection shapes already use fp8_dense's own copies of them.
 
 #include "ops/linear/kernels/fp8/fp8_instances.cuh"
 #include "ops/linear/kernels/fp8/fp8_launch.h"

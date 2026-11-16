@@ -370,9 +370,15 @@ inline int verify_reduction(std::string_view label, std::span<const double> got,
         std::cerr << label << ": non-finite value at index " << stats.first_non_finite << '\n';
         return 1;
     }
+    // The overall agreement matters as much as the worst element: a tight criterion with a tiny
+    // relative L2 is a tolerance question, and a large relative L2 is a wrong result. The old
+    // message printed neither, so a reader could not tell the two apart.
     std::cerr << label << ": reduction criterion failed at index " << stats.maximum_error_index
               << " actual=" << stats.actual_at_maximum
-              << " reference=" << stats.reference_at_maximum << '\n';
+              << " reference=" << stats.reference_at_maximum
+              << " max_abs=" << stats.maximum_absolute_error << " relative_l2=" << stats.relative_l2
+              << " rms=" << stats.root_mean_squared_error
+              << " reference_rms=" << stats.reference_root_mean_square << '\n';
     return 1;
 }
 

@@ -9,7 +9,7 @@ set(NINFER_OPS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 # Low-level CUDA kernels for the restored ops.
 foreach(_f IN ITEMS
-    prepare_ragged_prefix.cuh prepare_masked_block.cuh vision_pos_embed.cuh)
+    vision_pos_embed.cuh)
   if(EXISTS "${NINFER_OPS_DIR}/kernel/${_f}")
     target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/kernel/${_f}")
   endif()
@@ -17,7 +17,7 @@ endforeach()
 
 # Launchers for ops without a restructured-layer counterpart.
 foreach(_f IN ITEMS
-    prepare_ragged_prefix.cu prepare_masked_block.cu vision_pos_embed.cu gdn_gating.cu)
+    vision_pos_embed.cu gdn_gating.cu)
   if(EXISTS "${NINFER_OPS_DIR}/launcher/${_f}")
     target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/launcher/${_f}")
   endif()
@@ -43,7 +43,7 @@ target_sources(ninfer_ops PRIVATE
 
 # Public wrappers for the same no-counterpart ops.
 foreach(_f IN ITEMS
-    prepare_ragged_prefix.cpp prepare_masked_block.cpp vision_pos_embed.cpp
+    vision_pos_embed.cpp
     gdn_gating.cpp gdn_input_proj_exl3.cpp)
   target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/wrapper/${_f}")
 endforeach()

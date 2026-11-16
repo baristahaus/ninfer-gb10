@@ -36,8 +36,6 @@ target_sources(ninfer_ops PRIVATE
   "${NINFER_OPS_DIR}/launcher/speculative_round.cu"
   "${NINFER_OPS_DIR}/wrapper/mtp_pack.cpp"
   "${NINFER_OPS_DIR}/launcher/mtp_pack.cu"
-  "${NINFER_OPS_DIR}/wrapper/position.cpp"
-  "${NINFER_OPS_DIR}/launcher/position.cu"
   "${NINFER_OPS_DIR}/wrapper/argmax.cpp"
   "${NINFER_OPS_DIR}/launcher/argmax.cu")
 

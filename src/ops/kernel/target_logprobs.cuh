@@ -87,9 +87,10 @@ target_logprob_merge_lists(float (&left)[kMaxReportedLogprobRanks],
 
 template <int BlockSize, bool ReportRanking>
 __launch_bounds__(BlockSize) __global__
-    void target_logprobs_kernel(const __nv_bfloat16* logits, const std::int32_t* target_ids,
-                                float* output, std::int32_t valid_rows, std::int32_t physical_rows,
-                                std::int32_t top_k, std::int32_t* top_ids, float* top_logprobs) {
+    void legacy_target_logprobs_kernel(const __nv_bfloat16* logits, const std::int32_t* target_ids,
+                                       float* output, std::int32_t valid_rows,
+                                       std::int32_t physical_rows, std::int32_t top_k,
+                                       std::int32_t* top_ids, float* top_logprobs) {
     static_assert(BlockSize == kTargetLogprobsBlock);
 
     constexpr int kRanks = kMaxReportedLogprobRanks;

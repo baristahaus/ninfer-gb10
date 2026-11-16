@@ -59,7 +59,7 @@ void speculative_accept_greedy_drafts_launch(const Tensor& target_tokens, const 
     const std::int32_t batch             = drafts.ne[1];
     const SamplingWorkspaceLayout layout = make_sampling_workspace_layout(token_domain, cols);
     if (!layout.multiblock) {
-        speculative_accept_greedy_drafts_kernel<<<batch, kSamplerBlock, 0, stream>>>(
+        legacy_speculative_accept_greedy_drafts_kernel<<<batch, kSamplerBlock, 0, stream>>>(
             static_cast<const std::int32_t*>(target_tokens.data),
             static_cast<const __nv_bfloat16*>(logits.data),
             static_cast<const std::int32_t*>(drafts.data),
@@ -77,7 +77,7 @@ void speculative_accept_greedy_drafts_launch(const Tensor& target_tokens, const 
     const SamplingWorkspace scratch   = layout.bind(workspace);
     const dim3 partial_grid(static_cast<unsigned int>(partial_blocks),
                             static_cast<unsigned int>(cols), static_cast<unsigned int>(batch));
-    speculative_sampling_partial_topk_kernel<<<partial_grid, kSamplerBlock, 0, stream>>>(
+    legacy_speculative_sampling_partial_topk_kernel<<<partial_grid, kSamplerBlock, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(logits.data),
         static_cast<const std::int32_t*>(drafts.data),
         static_cast<const std::int32_t*>(current_extents.data), configs, token_domain,
@@ -86,7 +86,7 @@ void speculative_accept_greedy_drafts_launch(const Tensor& target_tokens, const 
     const dim3 batched_group_grid(static_cast<unsigned int>(groups),
                                   static_cast<unsigned int>(cols),
                                   static_cast<unsigned int>(batch));
-    speculative_sampling_group_finalize_kernel<false>
+    legacy_speculative_sampling_group_finalize_kernel<false>
         <<<batched_group_grid, kSamplerGroupBlock, 0, stream>>>(
             static_cast<const std::int32_t*>(target_tokens.data),
             static_cast<const std::int32_t*>(drafts.data), nullptr, nullptr,
@@ -124,7 +124,7 @@ void speculative_accept_sparse_drafts_launch(
     const SamplingWorkspace scratch      = layout.bind(workspace);
     const dim3 partial_grid(static_cast<unsigned int>(partial_blocks),
                             static_cast<unsigned int>(cols), static_cast<unsigned int>(batch));
-    speculative_sampling_partial_topk_kernel<<<partial_grid, kSamplerBlock, 0, stream>>>(
+    legacy_speculative_sampling_partial_topk_kernel<<<partial_grid, kSamplerBlock, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(logits.data),
         static_cast<const std::int32_t*>(drafts.data),
         static_cast<const std::int32_t*>(current_extents.data), configs, token_domain, logits.ne[0],
@@ -134,18 +134,19 @@ void speculative_accept_sparse_drafts_launch(
     const dim3 group_grid(static_cast<unsigned int>(groups), static_cast<unsigned int>(cols),
                           static_cast<unsigned int>(batch));
 
-    speculative_sampling_group_finalize_kernel<true><<<group_grid, kSamplerGroupBlock, 0, stream>>>(
-        static_cast<const std::int32_t*>(target_tokens.data),
-        static_cast<const std::int32_t*>(drafts.data),
-        static_cast<const std::int32_t*>(candidate_ids.data),
-        static_cast<const float*>(proposal_q.data),
-        static_cast<const std::int32_t*>(current_extents.data),
-        static_cast<std::int32_t*>(round_lengths.data),
-        static_cast<std::int32_t*>(round_anchors.data),
-        static_cast<std::int32_t*>(licensed_tokens.data),
-        static_cast<std::int32_t*>(licensed_counts.data),
-        static_cast<std::int32_t*>(accepted_drafts.data), configs, token_domain, cols,
-        partial_blocks, groups, scratch, layout.bytes);
+    legacy_speculative_sampling_group_finalize_kernel<true>
+        <<<group_grid, kSamplerGroupBlock, 0, stream>>>(
+            static_cast<const std::int32_t*>(target_tokens.data),
+            static_cast<const std::int32_t*>(drafts.data),
+            static_cast<const std::int32_t*>(candidate_ids.data),
+            static_cast<const float*>(proposal_q.data),
+            static_cast<const std::int32_t*>(current_extents.data),
+            static_cast<std::int32_t*>(round_lengths.data),
+            static_cast<std::int32_t*>(round_anchors.data),
+            static_cast<std::int32_t*>(licensed_tokens.data),
+            static_cast<std::int32_t*>(licensed_counts.data),
+            static_cast<std::int32_t*>(accepted_drafts.data), configs, token_domain, cols,
+            partial_blocks, groups, scratch, layout.bytes);
 
     CUDA_CHECK(cudaGetLastError());
 }

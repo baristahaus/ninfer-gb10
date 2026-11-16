@@ -58,8 +58,8 @@ __device__ __forceinline__ void argmax_block_reduce(float& value, std::int32_t& 
 }
 
 __launch_bounds__(kArgmaxBlock) __global__
-    void argmax_kernel(const __nv_bfloat16* logits, std::int32_t* out, std::int32_t valid_rows,
-                       std::int32_t physical_rows) {
+    void legacy_argmax_kernel(const __nv_bfloat16* logits, std::int32_t* out,
+                              std::int32_t valid_rows, std::int32_t physical_rows) {
     const std::int32_t t    = static_cast<std::int32_t>(blockIdx.x);
     const std::int64_t base = static_cast<std::int64_t>(t) * physical_rows;
 
@@ -96,8 +96,8 @@ __launch_bounds__(kArgmaxBlock) __global__
 }
 
 __launch_bounds__(kArgmaxBlock) __global__
-    void argmax_tiled_atomic_kernel(const __nv_bfloat16* logits, std::int32_t* out,
-                                    std::int32_t valid_rows, std::int32_t physical_rows) {
+    void legacy_argmax_tiled_atomic_kernel(const __nv_bfloat16* logits, std::int32_t* out,
+                                           std::int32_t valid_rows, std::int32_t physical_rows) {
     const std::int32_t t    = static_cast<std::int32_t>(blockIdx.y);
     const std::int64_t base = static_cast<std::int64_t>(t) * physical_rows;
     const std::int32_t tile_start =

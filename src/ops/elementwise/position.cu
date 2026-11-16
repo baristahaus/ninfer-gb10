@@ -14,6 +14,11 @@ __global__ void fill_i32_positions_kernel(std::int32_t* positions, std::int32_t 
     if (i < count) { positions[i] = start + i; }
 }
 
+__global__ void fill_i32_kernel(std::int32_t* destination, std::int32_t count, std::int32_t value) {
+    const std::int32_t i = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (i < count) { destination[i] = value; }
+}
+
 __global__ void offset_i32_positions_kernel(const std::int32_t* source, const std::int32_t* delta,
                                             std::int32_t* destination, std::int32_t count) {
     const std::int32_t i = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
@@ -76,6 +81,15 @@ void offset_i32_positions(const Tensor& source, const Tensor& delta, Tensor& des
     offset_i32_positions_kernel<<<grid, block, 0, stream>>>(
         static_cast<const std::int32_t*>(source.data), static_cast<const std::int32_t*>(delta.data),
         static_cast<std::int32_t*>(destination.data), source.ne[0]);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+void fill_i32(Tensor& destination, std::int32_t value, cudaStream_t stream) {
+    require_i32_vector(destination, "fill_i32 destination");
+    constexpr int block = 256;
+    const int grid      = common::div_up(destination.ne[0], block);
+    fill_i32_kernel<<<grid, block, 0, stream>>>(static_cast<std::int32_t*>(destination.data),
+                                                destination.ne[0], value);
     CUDA_CHECK(cudaGetLastError());
 }
 

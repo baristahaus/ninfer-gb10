@@ -16,7 +16,7 @@ template <bool ReportRanking>
 void launch_columns(unsigned int columns, const Tensor& logits, const Tensor& target_ids,
                     float* output, std::int32_t valid_rows, std::int32_t top_k,
                     std::int32_t* top_ids, float* top_logprobs, cudaStream_t stream) {
-    target_logprobs_kernel<kTargetLogprobsBlock, ReportRanking>
+    legacy_target_logprobs_kernel<kTargetLogprobsBlock, ReportRanking>
         <<<columns, kTargetLogprobsBlock, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(logits.data),
             static_cast<const std::int32_t*>(target_ids.data), output, valid_rows,

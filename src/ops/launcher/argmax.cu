@@ -46,7 +46,7 @@ void argmax_launch(const Tensor& logits, Tensor& out, std::int32_t valid_rows,
     constexpr int kTileElems = kArgmaxBlock * kArgmaxItemsPerThread;
     const int tiled_blocks   = div_up(valid_rows, kTileElems);
     if (tiled_blocks < 2) {
-        argmax_kernel<<<static_cast<unsigned int>(t_count), kArgmaxBlock, 0, stream>>>(
+        legacy_argmax_kernel<<<static_cast<unsigned int>(t_count), kArgmaxBlock, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(logits.data), static_cast<std::int32_t*>(out.data),
             valid_rows, physical_rows);
         CUDA_CHECK(cudaGetLastError());
@@ -111,7 +111,7 @@ void argmax_tiled_atomic_launch(const Tensor& logits, Tensor& out, std::int32_t 
                                    stream));
         const dim3 grid(static_cast<unsigned int>(tiled_blocks),
                         static_cast<unsigned int>(token_count));
-        argmax_tiled_atomic_kernel<<<grid, block, 0, stream>>>(
+        legacy_argmax_tiled_atomic_kernel<<<grid, block, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(logits_slice.data),
             static_cast<std::int32_t*>(out_slice.data), valid_rows, physical_rows);
         CUDA_CHECK(cudaGetLastError());

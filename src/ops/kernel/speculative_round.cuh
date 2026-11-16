@@ -226,7 +226,7 @@ __device__ __forceinline__ void speculative_sparse_warp_accept(
 // collapses to `u < p_i(drafts[i])`. Launch with a single block of kSamplerBlock
 // threads; only thread 0 performs the sequential accept/commit while the whole
 // block cooperates on the per-column truncated-distribution build.
-__launch_bounds__(kSamplerBlock) __global__ void speculative_accept_greedy_drafts_kernel(
+__launch_bounds__(kSamplerBlock) __global__ void legacy_speculative_accept_greedy_drafts_kernel(
     const std::int32_t* target_tokens, const __nv_bfloat16* logits, const std::int32_t* drafts,
     const std::int32_t* current_extents, std::int32_t* lengths, std::int32_t* anchors,
     std::int32_t* licensed_tokens, std::int32_t* licensed_counts, std::int32_t* accepted,
@@ -383,7 +383,7 @@ __launch_bounds__(kSamplerBlock) __global__ void speculative_accept_greedy_draft
     }
 }
 
-__launch_bounds__(kSamplerBlock) __global__ void speculative_sampling_partial_topk_kernel(
+__launch_bounds__(kSamplerBlock) __global__ void legacy_speculative_sampling_partial_topk_kernel(
     const __nv_bfloat16* logits, const std::int32_t* drafts, const std::int32_t* current_extents,
     const SamplingConfig* configs, std::int32_t token_domain, std::int32_t physical_rows,
     std::int32_t cols, std::int32_t k, SamplingWorkspace workspace,
@@ -464,13 +464,15 @@ __launch_bounds__(kSamplerBlock) __global__ void speculative_sampling_partial_to
 }
 
 template <bool SparseProposal>
-__launch_bounds__(kSamplerGroupBlock) __global__ void speculative_sampling_group_finalize_kernel(
-    const std::int32_t* target_tokens, const std::int32_t* drafts,
-    const std::int32_t* candidate_ids, const float* proposal_q, const std::int32_t* current_extents,
-    std::int32_t* lengths, std::int32_t* anchors, std::int32_t* licensed_tokens,
-    std::int32_t* licensed_counts, std::int32_t* accepted, const SamplingConfig* configs,
-    std::int32_t token_domain, std::int32_t cols, std::int32_t partial_blocks,
-    std::int32_t group_count, SamplingWorkspace workspace, std::size_t workspace_row_stride) {
+__launch_bounds__(kSamplerGroupBlock) __global__
+    void legacy_speculative_sampling_group_finalize_kernel(
+        const std::int32_t* target_tokens, const std::int32_t* drafts,
+        const std::int32_t* candidate_ids, const float* proposal_q,
+        const std::int32_t* current_extents, std::int32_t* lengths, std::int32_t* anchors,
+        std::int32_t* licensed_tokens, std::int32_t* licensed_counts, std::int32_t* accepted,
+        const SamplingConfig* configs, std::int32_t token_domain, std::int32_t cols,
+        std::int32_t partial_blocks, std::int32_t group_count, SamplingWorkspace workspace,
+        std::size_t workspace_row_stride) {
     const int row   = static_cast<int>(blockIdx.z);
     const int group = static_cast<int>(blockIdx.x);
     const int col   = static_cast<int>(blockIdx.y);

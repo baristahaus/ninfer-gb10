@@ -102,7 +102,32 @@ struct Timing {
     const void* gap_stream = nullptr;
     const char* previous   = "none";
     const char* previous2  = "none";
+    // THE WHOLE ROUND'S SLOW CALLS, not only its largest. One number per call cannot say whether a
+    // 750 ms round was one 750 ms call or seven hundred 1 ms ones, and that distinction is the
+    // difference between a one-time setup and a steady cost. The ring is small on purpose: a round
+    // that is slow has few calls, and the ring only prints when the round's largest gap is large.
+    static constexpr int kRingCapacity = 16;
+
+    struct SlowCall {
+        const char* kind = "none";
+        std::uint64_t ns = 0;
+        // WHAT THE CALL TRANSFERRED. A 751 ms memcpy is identified by its size and direction, not
+        // by the word "memcpy": a pageable host-to-device copy of 60 MB and a device-to-device copy
+        // of the same size are different faults, and the direction is a value, so it is printed as
+        // one. Non-transfer calls leave both at zero and the line omits them.
+        std::uint64_t bytes = 0;
+        int direction       = -1;
+    };
+
+    SlowCall ring[kRingCapacity];
 };
+
+// A round whose largest gap is at least this slow prints its whole ring. Below it the ring is
+// silent, so an ordinary round costs one branch and no output.
+inline constexpr std::uint64_t kSlowRoundNs = 100ull * 1000ull * 1000ull;
+// A call is listed only if it is at least this slow, so the ring shows the shape of the round
+// rather than every microsecond-scale enqueue.
+inline constexpr std::uint64_t kSlowCallNs = 1ull * 1000ull * 1000ull;
 
 Timing g_timing[2];
 
@@ -140,7 +165,8 @@ int device_index() {
     return device;
 }
 
-void bump(std::uint64_t Counts::* member, const char* kind, const void* stream = nullptr) {
+void bump(std::uint64_t Counts::* member, const char* kind, const void* stream = nullptr,
+          std::uint64_t bytes = 0, int direction = -1) {
     const int device = device_index();
     g_counts[device].*member += 1;
     std::timespec now{};
@@ -151,6 +177,8 @@ void bump(std::uint64_t Counts::* member, const char* kind, const void* stream =
         const std::int64_t nanos   = static_cast<std::int64_t>(now.tv_nsec) - timing.last.tv_nsec;
         const std::uint64_t gap_ns = static_cast<std::uint64_t>(seconds * 1000000000LL + nanos);
         timing.total_ns += gap_ns;
+        timing.ring[timing.calls % Timing::kRingCapacity] =
+            Timing::SlowCall{kind, gap_ns, bytes, direction};
         if (gap_ns > timing.max_ns) {
             timing.max_ns      = gap_ns;
             timing.max_index   = timing.calls;
@@ -225,7 +253,7 @@ cudaError_t __wrap_cudaLaunchKernelExC(const cudaLaunchConfig_t* config, const v
 cudaError_t __wrap_cudaMemcpyAsync(void* dst, const void* src, std::size_t bytes,
                                    cudaMemcpyKind kind, cudaStream_t stream) {
     note_shim("cudaMemcpyAsync");
-    bump(&Counts::memcpy, "memcpy", stream);
+    bump(&Counts::memcpy, "memcpy", stream, bytes, static_cast<int>(kind));
     return __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
 }
 
@@ -341,6 +369,26 @@ void ninfer_launch_round_boundary(void) {
                      static_cast<unsigned long long>(g_timing[rank].gap_free_mb),
                      g_timing[rank].gap_device, g_timing[rank].gap_stream,
                      g_phase_labelled ? "round" : "startup+round0");
+        if (g_timing[rank].max_ns >= kSlowRoundNs) {
+            // Oldest first: the ring is indexed by call number modulo its capacity, so the walk
+            // starts at the slot that holds the oldest surviving call.
+            const auto& timing = g_timing[rank];
+            const std::uint64_t first =
+                timing.calls > Timing::kRingCapacity ? timing.calls - Timing::kRingCapacity : 0;
+            std::fprintf(stderr, "[launch-count] round=%d rank=%d slow_calls=%llu of %llu:\n",
+                         g_round, rank, static_cast<unsigned long long>(timing.calls),
+                         static_cast<unsigned long long>(timing.calls));
+            for (std::uint64_t call = first; call < timing.calls; ++call) {
+                const auto& slot = timing.ring[call % Timing::kRingCapacity];
+                if (slot.ns < kSlowCallNs) { continue; }
+                std::fprintf(stderr,
+                             "[launch-count] round=%d rank=%d   call=%llu kind=%s us=%llu "
+                             "bytes=%llu direction=%d\n",
+                             g_round, rank, static_cast<unsigned long long>(call), slot.kind,
+                             static_cast<unsigned long long>(slot.ns / 1000),
+                             static_cast<unsigned long long>(slot.bytes), slot.direction);
+            }
+        }
         g_timing[rank] = Timing{};
     }
     // THE BOUND PROBE: each rank's free memory read from a thread explicitly bound to that rank,

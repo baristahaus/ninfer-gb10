@@ -1,18 +1,33 @@
 # Repository checks.
 #
-# Two jobs, because the project has two kinds of check and they need different machines.
+# ONE JOB. These are the host-side guards. They are Python only, need no CUDA and no GPU, and
+# finish in seconds on a hosted runner. This is the job that must stay green on every change: it is
+# what stops a documentation, weight, provenance, test-skip or formatting regression from reaching
+# `master`.
 #
-# `guards` runs the host-side guards. They are Python only and need no CUDA, so they run on a
-# hosted runner and finish in seconds. This job is the one that must stay green on every change:
-# it is the only thing that stops a documentation, weight, provenance, test-skip or formatting
-# regression from reaching `master`.
+# THE BUILD AND TEST JOB IS GONE, AND THE REASON IS TWO FACTS RATHER THAN A PREFERENCE.
 #
-# `build-and-test` compiles the engine and runs the test suite. It uses the CUDA development image
-# that `Dockerfile` already validates, and it runs the suite against the build's own CUDA stub, so
-# no GPU is needed. Tests that need a device report `SKIP: no usable CUDA device` and ctest counts
-# them as skipped, not as failures. Expect roughly 130 of 241 tests to skip on this runner; that is
-# the designed behaviour, not a failure. The GPU-bearing lanes are validated on the project's own
-# hardware (see `docs/lane.md` and `AGENTS.md`).
+# First, it never ran. Every one of its thirteen runs failed at "Initialize containers", twelve
+# seconds in, before it reached the configure step. The image it asked for,
+# nvidia/cuda:13.4.92-devel-ubuntu24.04, is not a published tag: the CUDA development image tags on
+# Docker Hub are versioned 13.4.3 (13.4.3-devel-ubuntu24.04 and the rest), and 13.4.92 is this
+# project's local toolkit version string, which is not a tag. A workflow that fails before its first
+# real step reports a red mark on every push and tells nobody anything.
+#
+# Second, even with a correct tag it would validate little. GitHub-hosted runners have no GPU, so the
+# suite would run against the build's own CUDA stub and about 130 of the 242 tests would report
+# `SKIP: no usable CUDA device`. That is the designed behaviour of a stubbed run, not a failure, but
+# it means the thing this project most needs checked -- that the kernels compute what they claim on
+# real hardware -- cannot be checked here at all.
+#
+# WHAT COVERS THE BUILD INSTEAD. The local gate in AGENTS.md is the authority: a clean build, the
+# full ctest run, the six guards below, and `tools/check_duplicate_kernels.py` against the real build
+# directory, which needs the linked libraries and therefore a build. The GPU lanes run on the
+# project's own hardware and are described in docs/lane.md.
+#
+# IF A CUDA BUILD JOB IS EVER WANTED BACK, two things are needed and both are cheap: use a tag that
+# exists (13.4.3-devel-ubuntu24.04 as of this writing), and keep the duplicate-kernel step after the
+# build step because it reads the built libraries. It still will not replace a GPU lane.
 name: checks
 
 on:
@@ -52,38 +67,3 @@ jobs:
         run: python3 tools/check_test_skips.py .
       - name: formatting guard
         run: python3 tools/check_format.py .
-
-  build-and-test:
-    name: build and ctest (CUDA stub, no GPU)
-    runs-on: ubuntu-24.04
-    container:
-      image: nvidia/cuda:13.4.92-devel-ubuntu24.04
-    timeout-minutes: 300
-    steps:
-      - name: install build dependencies
-        # `git` is here because the checkout step runs inside this container.
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-            ca-certificates cmake git libavcodec-dev libavformat-dev libavutil-dev \
-            libcurl4-openssl-dev libhwloc-dev libswscale-dev ninja-build pkg-config
-          rm -rf /var/lib/apt/lists/*
-      - uses: actions/checkout@v4
-      - name: configure
-        run: cmake --preset rtx5090-dev
-      - name: build
-        run: cmake --build build/rtx5090-dev -j "$(nproc)"
-      - name: duplicate-kernel guard
-        # The linked artifacts must register no kernel twice; compute-sanitizer and cuda-gdb refuse
-        # a module that does. Runs after the build because it reads the built libraries.
-        run: python3 tools/check_duplicate_kernels.py . --build-dir build/rtx5090-dev
-      - name: ctest
-        run: |
-          LD_LIBRARY_PATH="$PWD/build/rtx5090-dev/cuda-stub" \
-            ctest --test-dir build/rtx5090-dev -j "$(nproc)" --output-on-failure
-      - name: report the skip count
-        if: always()
-        run: |
-          if [ -f build/rtx5090-dev/Testing/Temporary/LastTest.log ]; then
-            grep -c 'SKIP:' build/rtx5090-dev/Testing/Temporary/LastTest.log || true
-          fi

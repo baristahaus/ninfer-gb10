@@ -8,7 +8,7 @@ separately.
 
 ## 1. Registered formats
 
-NInfer has exactly twelve persistent numeric tensor formats in five categories.
+NInfer has exactly fourteen persistent numeric tensor formats in eight categories.
 
 Direct scalar formats preserve one logical scalar word per tensor element:
 
@@ -34,11 +34,23 @@ The block-scaled floating-point weight format is:
 |---|---|---:|---|---|
 | `nvfp4` | E2M1, 4 bits/weight | 16 | one E4M3FN word/group | one positive FP32 weight divisor |
 
+The NF4 block-scaled weight format is:
+
+| Canonical name | Code | K group | Block scale | Global field |
+|---|---|---:|---|---|
+| `nf4_g16_e4m3fn` | NF4, 4 bits/weight | 16 | one E4M3FN word/group | one positive FP32 object divisor |
+
 The row-scaled floating-point weight format is:
 
 | Canonical name | Code | Scale granularity | Scale |
 |---|---|---|---|
 | `fp8_e4m3fn_row_bf16` | E4M3FN, 8 bits/weight | one multiplier per logical row | BF16 |
+
+The block-scaled FP8 weight format is:
+
+| Canonical name | Code | Block | Block scale | Global field |
+|---|---|---|---|---|
+| `fp8_e4m3fn_block128x128_bf16` | E4M3FN, 8 bits/weight | 128 rows by 128 columns | one BF16 multiplier/block | none |
 
 The block-exponent floating-point weight format is:
 
@@ -375,6 +387,64 @@ The format does not define how a floating-point source is quantized to E4M3FN co
 exponents, nor how activations are quantized at execution time. A recipe either preserves
 already-selected code and exponent words exactly or names its conversion method. Site-level
 activation scales are separate compute concerns, not persistent fields of this format.
+
+### 3.7 `nf4_g16_e4m3fn`
+
+`nf4_g16_e4m3fn` is a block-scaled weight representation with a fixed 4-bit codebook. For a logical
+matrix `[N,K]` with `K % 16 == 0`, every K-axis group of 16 weights carries one E4M3FN scale word,
+and the whole object carries one positive finite FP32 divisor.
+
+A 4-bit code selects one of sixteen fixed levels. The levels are the NF4 codebook, exactly:
+
+```text
+code:   0        1        2        3        4        5        6        7
+level: -1.0     -0.69619 -0.52507 -0.39492 -0.28444 -0.18477 -0.09105  0.0
+code:   8        9        10       11       12       13       14       15
+level:  0.07958  0.16093  0.24611  0.33792  0.44071  0.56262  0.72296  1.0
+```
+
+The codebook is a persistent identity of the format. It is not a conversion choice, and a producer
+must not substitute another 16-level table.
+
+The scale word is a nonnegative finite E4M3FN word in `[0, 126]`. Word 127 is NaN and is illegal. A
+scale word of zero is legal only for a group whose codes are all signed zero, and code 7 is the zero
+level.
+
+For code word `c[n,k]` and scale word `s[n,g]` with `g = floor(k/16)`, the exact represented weight
+is:
+
+```text
+W[n,k] = nf4_level(c[n,k]) * decode_e4m3fn(s[n,g]) / D
+```
+
+`D` is the object divisor, a positive finite FP32 value. The divisor is one field for the whole
+object, not one field per group.
+
+The format fixes the decode only. How a floating-point source becomes codes and scales belongs to the
+conversion method; Section 10 states the method the converter uses for this format.
+
+### 3.8 `fp8_e4m3fn_block128x128_bf16`
+
+`fp8_e4m3fn_block128x128_bf16` is a block-scaled floating-point weight representation. The logical
+shape is `[N,K]` or `[E,N,K]` with `N % 128 == 0` and `K % 128 == 0`. Every 128-by-128 block of the
+last two axes carries exactly one BF16 multiplier. The format has no global scale field.
+
+The code word is the E4M3FN word defined in Section 3.3, and it must be finite: the words whose
+exponent and fraction are both all ones are illegal. The multiplier must be a nonnegative finite
+BF16 word. A zero multiplier is legal only for a block whose codes are all signed zero.
+
+For code word `c[n,k]` and multiplier `m[bn,bk]` with `bn = floor(n/128)` and `bk = floor(k/128)`,
+the exact represented weight is:
+
+```text
+W[n,k] = decode_e4m3fn(c[n,k]) * m[bn,bk]
+```
+
+The product is one exact multiplication of an E4M3FN value by a BF16 value. The format fixes the
+decode only; the conversion method owns the choice of codes and multipliers.
+
+This format is a storage and reader/writer route. No model family binds it as an execution format, so
+its consumer is the artifact codec and its contract tests, not a kernel.
 
 ## 4. Grouped signed-integer tensor model
 
@@ -735,6 +805,48 @@ input/output formats, output tolerance, and real target shapes. The
 3.4; a producer that copies an upstream quantized tensor is protected by exact source-word
 comparison, while any source-to-FP8 encoder is protected under its own named profile. Private
 activation quantization, staging, and accumulation remain implementation choices.
+
+## 10. The stored-scale MSE conversion method
+
+`stored_scale_mse` converts a floating-point source to `nf4_g16_e4m3fn` or `nvfp4`. It works at two
+levels: one divisor for the object, then one scale search per group of 16.
+
+The first pass computes the object's maximum absolute value `A` over every source value, and fails
+if any source value is non-finite. The divisor is:
+
+```text
+D = FP32(limit / A)     when A > 0
+D = 1.0                 otherwise
+```
+
+`limit` is `448` for `nf4_g16_e4m3fn` and `2688` for `nvfp4`. `448` is the largest finite E4M3FN
+magnitude. `2688` is that magnitude times `6`, the largest E2M1 magnitude. The divisor must be a
+positive finite FP32 word, and the conversion fails rather than store another word.
+
+The second pass encodes each group independently. Every value is multiplied by the divisor, and then
+every candidate scale word `s` is scored:
+
+```text
+x[i]     = FP64(source[i] * D)
+c[i]     = the code whose level is nearest to x[i] * s
+error(s) = sum over the 16 values of (x[i] - level(c[i]) * s)^2
+```
+
+The candidates are the positive finite E4M3FN words, `1` through `126`. The encoder keeps the scale
+with the smallest error. Word `0` is not a candidate; it is written only for a group whose values are
+all zero, and that group takes the zero level. For `nvfp4` the code is E2M1 with the sign in bit 3,
+so the search compares magnitudes and the sign is applied afterwards.
+
+A tie is resolved by the first candidate in the search order. For `nf4_g16_e4m3fn` the order is the
+codebook order of Section 3.7. For `nvfp4` the magnitudes are compared in the E2M1 code order
+`0, 2, 4, 6, 1, 3, 5, 7`, which is the order of the magnitudes `0, 1, 2, 4, 0.5, 1.5, 3, 6`.
+
+The comparison is in FP64 because the object divisor is already rounded to FP32. The factor `1/D^2`
+is the same for every candidate, so it cannot change the choice.
+
+The result is one code per value and one E4M3FN scale word per group. `nf4_g16_e4m3fn` packs two
+codes per byte, low code first, and stores the scales after the codes of each row. `nvfp4` stores the
+E2M1 codes in its block-scaled layout. Both store the object divisor in the object payload.
 
 ## Raw E4M3FN
 

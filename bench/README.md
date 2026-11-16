@@ -1143,6 +1143,46 @@ closed.
 ./build/rtx5090-dev/bench/ninfer_causal_conv1d_silu_bench --legacy-stage --split --cache cold --channels 8192 --tokens 1024,8192
 ```
 
+## Distributed collective benchmark
+
+`ninfer_collective_bench` measures `ops::all_reduce` across two ranks on two hosts. The coordinator
+reads a deployment file and drives both workers, so the binary starts once per rank:
+
+```bash
+./build/rtx5090-dev/bench/ninfer_collective_bench --config deployment.toml   # coordinator
+./build/rtx5090-dev/bench/ninfer_collective_bench --worker                   # one per rank
+```
+
+The deployment file must name exactly two ranks. The coordinator sweeps payload size
+`8 B, 5120 B, 40 KiB, 320 KiB, 5 MiB, 20 MiB`, chain length `1` and `96` reductions per iteration,
+and eager or captured-graph execution. The 8-byte point uses `U64` with a `Max` reduction; every
+other size uses `BF16` with a `Sum` reduction. Each point runs 5 warmups and then 100 iterations at
+chain 1 or 10 iterations at chain 96.
+
+One `all_reduce` completes immediately before the start event, so control-plane skew stays outside
+the timed range. The CSV header is
+`bytes,chain,mode,rank0_gpu_us,rank1_gpu_us,max_gpu_us,host_enqueue_us,logical_GBps`. The two rank
+columns are device time per iteration on each rank, `max_gpu_us` is the slower rank, and
+`logical_GBps` is `bytes * chain / max_gpu_us / 1000`. A command that does not complete within 90
+seconds aborts the run.
+
+## Hardware references
+
+The Op and Linear reports use fixed device constants, not per-run measurements:
+
+| Constant | Value | Source |
+|---|---:|---|
+| RTX 5090 DRAM bandwidth | 1792 GB/s | vendor specification |
+| RTX 5090 pure-read ceiling | 1674.5 GB/s | `tools/hbm_bandwidth_probe.cu` |
+| RTX 5090 BF16 dense Tensor Core peak | 209.5 TFLOP/s | vendor specification |
+
+Reported effective bandwidth divides the encoded weight planes plus one BF16 activation read and one
+BF16 output write by the measured latency. `READ_%` compares the same one-read model bytes with the
+pure-read ceiling. Reported FLOPs are the mathematical `2*N*K*T`. Neither metric includes route-private
+tile, replay, padding, split, schedule, host-launcher, or kernel-instance work, so they are logical
+work rates rather than hardware-counter results. Physical traffic and instruction utilization require
+NCU.
+
 ## Reports
 
 Table, JSON, and CSV reports identify the architecture, model instance, artifact, Engine configuration,

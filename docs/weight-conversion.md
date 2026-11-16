@@ -155,7 +155,7 @@ row-FP8 quantization on the GPU; encoded NVFP4/block-FP8 imports retain their or
 `stored_scale_mse` first finds the whole object's maximum, then selects stored scales/codes.
 Its cache avoids rereading eligible objects between these passes. CUDA candidate pruning uses
 conservative error bounds and retains the FP64 selection and tie rules defined in the
-[numeric contract](maintainer/tensor-formats.md#36-stored_scale_mse-conversion-method).
+[numeric contract](maintainer/tensor-formats.md#10-the-stored-scale-mse-conversion-method).
 The conversion report records resource settings and per-object conversion times.
 
 ## Change part of a recipe

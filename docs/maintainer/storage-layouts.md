@@ -7,7 +7,7 @@ ranges come from [`artifact-container.md`](artifact-container.md).
 
 ## 1. Registered identities
 
-The storage registry contains exactly these identities:
+The storage registry contains exactly these identities: twelve tensor layouts and one resource encoding.
 
 | Identity | Kind | Compatible numeric formats | Logical shape | Object alignment |
 |---|---|---|---|---:|
@@ -18,12 +18,20 @@ The storage registry contains exactly these identities:
 | `dense_block_scale_k32_mxfp8_v1` | tensor layout | `mxfp8` | rank 2 `[N,K]`, `K % 32 == 0` | 256 bytes |
 | `block_scale_k16_v1` | tensor layout | `nvfp4` | rank 2 `[N,K]`, `K % 16 == 0` | 256 bytes |
 | `expert_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
+| `row_paged_g16_4k_v1` | tensor layout | `nf4_g16_e4m3fn` | rank 2 `[N,K]`, `K % 16 == 0` | 4096 bytes |
+| `block_scale_m128_k128_v1` | tensor layout | `fp8_e4m3fn_block128x128_bf16` | rank 2 `[N,K]` or rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 128 == 0` | 256 bytes |
+| `batched_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `exl3_expert_bank` | tensor layout | `exl3` | rank 2 `[E*N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
 | `exl3_dense_v1` | tensor layout | `exl3` | rank 2 `[N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
 | `raw_bytes_v1` | resource encoding | not applicable | nonempty byte string | 1 byte |
 
+`batched_block_scale_k16_m128x4_v1` and `expert_block_scale_k16_m128x4_v1` are two spellings of
+the same `[E,N,K]` bank encoding. The Flash-Next artifacts carry the `expert_` spelling because the
+master converter wrote it before the layout was renamed; a reader accepts both and resolves them to
+one layout.
+
 These format/layout pairs define the current codec support. Native consumer requirements are
-covered separately in Section 10.
+covered separately in Section 14.
 
 Object alignment applies to the object's payload-relative `offset` in the `.ninfer` JSON. Internal
 plane offsets and padding belong to the selected layout. Inter-object padding belongs to the
@@ -472,7 +480,62 @@ trailing padding. The resource object's JSON `bytes` is its exact nonzero length
 returns the complete span unchanged. A model contract assigns a resource name and interprets those
 bytes; the common encoding does not infer that meaning from the name.
 
-## 11. Decode boundary
+## 11. `row_paged_g16_4k_v1`
+
+`row_paged_g16_4k_v1` stores `nf4_g16_e4m3fn` rows in complete 4 KiB pages. A row of `K` weights is
+one encoded unit of `K/2` packed code bytes followed by `K/16` scale bytes:
+
+```text
+row_bytes     = K/2 + K/16
+rows_per_page = floor(4096 / row_bytes)
+pages         = ceil(N / rows_per_page)
+payload_bytes = pages * 4096 + 4
+alignment     = 4096
+```
+
+The row's encoded length must not exceed 4096 bytes, so `rows_per_page` is at least one.
+
+The row `r` starts at:
+
+```text
+row_offset(r) = (r / rows_per_page) * 4096 + (r % rows_per_page) * row_bytes
+```
+
+The scale byte of group `g` in row `r` is at `row_offset(r) + K/2 + g`. The last four payload bytes
+hold the object's positive finite FP32 divisor, which `tensor-formats.md` Section 3.7 defines.
+
+Every unused byte is zero. That includes the tail of each page after the last full row, and the tail
+of the final page after the last logical row. A reader rejects a payload with a nonzero byte in
+either region, with a scale word above 126, or with a divisor that is not a positive finite FP32
+word.
+
+The layout requires per-row encoded addressing. A binding cannot address a paged object through the
+row-plane view of Section 14, because rows are not contiguous across a page boundary.
+
+## 12. `block_scale_m128_k128_v1`
+
+`block_scale_m128_k128_v1` stores `fp8_e4m3fn_block128x128_bf16` codes with one BF16 multiplier per
+128-by-128 block. For `[N,K]` or `[E,N,K]` with `N % 128 == 0` and `K % 128 == 0`:
+
+```text
+matrices         = E, or 1 for a rank-2 object
+code_bytes       = matrices * N * K
+scale_rows       = N / 128
+scale_columns    = K / 128
+scale_offset     = align_up(code_bytes, 256)
+scale_bytes      = matrices * scale_rows * scale_columns * 2
+payload_bytes    = scale_offset + scale_bytes
+alignment        = 256
+```
+
+The code plane is the natural row-major E4M3FN words. The scale plane is the BF16 multipliers in
+`[matrix][scale_row][scale_column]` order. The block that contains logical element `(n,k)` carries
+multiplier `(n/128, k/128)`.
+
+The layout has no global field. A reader rejects a NaN code word, a negative or non-finite BF16
+multiplier, and a zero multiplier in a block that holds any nonzero code.
+
+## 13. Decode boundary
 
 Layout decoding yields only persistent logical words:
 
@@ -487,13 +550,17 @@ Layout decoding yields only persistent logical words:
   exponent word per K-axis group of 32;
 - `block_scale_k16_v1` yields the natural row-major packed E2M1 words, the natural E4M3FN
   group-scale words, and the FP32 `scale_2` word;
+- `row_paged_g16_4k_v1` yields the packed NF4 codes, the natural E4M3FN group-scale words, and the
+  object FP32 divisor;
+- `block_scale_m128_k128_v1` yields the natural row-major E4M3FN code words and one BF16 multiplier
+  per 128-by-128 block;
 - `raw_bytes_v1` yields the enclosing resource bytes.
 
 Dequantized values follow the reconstruction rule in `tensor-formats.md`. This document does
 not select a quantization encoder, output dtype, accumulation dtype, kernel, runtime device layout,
 or model consumer.
 
-## 12. Logical views and native operands
+## 14. Logical views and native operands
 
 Bindings address C-order logical element ranges of a parent object. The parent retains its full
 geometry and backing allocation, so a view can locate code and scale planes using the original

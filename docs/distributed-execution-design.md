@@ -156,7 +156,7 @@ are different fields; the TP/EP/DP/PP coordinates come from the plan, the proces
 SSH owns process launch and the forwarding of logs and exit status; once the control connection is established, commands travel over Unix or TCP, and GPU
 tensors travel over NCCL. The frontend service is exposed only on the coordinator. The state of the product worker model-materialization wiring is in section 1.1;
 the two-machine checks and communication measurement commands that can already run are in [Tests](../tests/README.md#distributed-execution) and
-[Benchmarks](../bench/README.md#distributed-collectives).
+[Benchmarks](../bench/README.md#distributed-collective-benchmark).
 
 ### 3.2 Launch protocol
 

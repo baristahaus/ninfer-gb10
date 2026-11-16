@@ -282,12 +282,12 @@ An object can continue across V3 volumes, and the directory maps the actual file
 
 The 128 NF4 parents of PLE keep the original shard boundaries and their own divisors.
 `stored_scale_mse` performs a bounded two-pass conversion on each shard. The error computation, the scale search and the tie rule appear in
-[the conversion numeric contract](tensor-formats.md#36-stored_scale_mse-conversion-method).
+[the conversion numeric contract](tensor-formats.md#10-the-stored-scale-mse-conversion-method).
 
 `row_paged_g16_4k_v1` uses 90 B per row: 80 B of packed codes and 10 B of scales.
 Each 4 KiB data page holds 45 rows, and the last page holds 37 rows. Each shard payload is 227557380 B.
 A global row g belongs to `shard=g/2500012` and `row=g%2500012`, and a hash head does not correspond to a fixed shard.
-The exact padding, the divisor address and the encoding appear in [the layout contract](storage-layouts.md#6-row_paged_g16_4k_v1).
+The exact padding, the divisor address and the encoding appear in [the layout contract](storage-layouts.md#11-row_paged_g16_4k_v1).
 
 `text.resources.ple_hash_controls` is a 280 B `raw_bytes_v1` Resource, in this order:
 three layer multipliers, sixteen head vocab sizes and sixteen head offsets,

@@ -20,7 +20,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/linear/tests.cmake")
 # this oracle. Compiled as a .cu, skips without a device.
 ninfer_add_test(ninfer_hyperconnection_math_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/hyperconnection_math_test.cu"
-  LIBRARIES ninfer_core CUDA::cudart)
+  LIBRARIES ninfer_ops ninfer_core CUDA::cudart)
 set_tests_properties(ninfer_hyperconnection_math_test PROPERTIES SKIP_RETURN_CODE 77)
 include("${CMAKE_CURRENT_LIST_DIR}/dynamic_grouped_conv/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/gated_residual/tests.cmake")

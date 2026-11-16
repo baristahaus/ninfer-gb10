@@ -93,9 +93,15 @@ struct Timing {
     // THE DEVICE THE PROBE ACTUALLY READ, printed with the number rather than inherited from the
     // counter's attribution: cudaMemGetInfo reports the CALLING THREAD'S current device, so a
     // number that carries no device can be attributed to the wrong rank.
-    int gap_device        = -1;
-    const char* previous  = "none";
-    const char* previous2 = "none";
+    int gap_device = -1;
+    // THE STREAM THE BLOCKING CALL WAS ISSUED ON, and it must be printed with the gap: a copy on
+    // the legacy default stream waits for every other stream's work, so a hundreds-of-milliseconds
+    // block inside an async copy is the expected shape of that mistake rather than a reclaim. A
+    // null stream prints as 0, which is the legacy default stream's own value and cannot be
+    // confused with a real stream handle.
+    const void* gap_stream = nullptr;
+    const char* previous   = "none";
+    const char* previous2  = "none";
 };
 
 Timing g_timing[2];
@@ -134,7 +140,7 @@ int device_index() {
     return device;
 }
 
-void bump(std::uint64_t Counts::* member, const char* kind) {
+void bump(std::uint64_t Counts::* member, const char* kind, const void* stream = nullptr) {
     const int device = device_index();
     g_counts[device].*member += 1;
     std::timespec now{};
@@ -160,6 +166,7 @@ void bump(std::uint64_t Counts::* member, const char* kind) {
                 timing.gap_free_mb = free_bytes / (1024u * 1024u);
             }
             timing.gap_device = probe_device;
+            timing.gap_stream = stream;
         }
     }
     timing.previous2 = timing.previous;
@@ -189,7 +196,7 @@ cudaError_t __real_cudaMemcpy3DAsync(const cudaMemcpy3DParms*, cudaStream_t);
 cudaError_t __wrap_cudaLaunchKernel(const void* func, dim3 grid, dim3 block, void** args,
                                     std::size_t shared, cudaStream_t stream) {
     note_shim("cudaLaunchKernel");
-    bump(&Counts::launch, "launch");
+    bump(&Counts::launch, "launch", stream);
     return __real_cudaLaunchKernel(func, grid, block, args, shared, stream);
 }
 
@@ -218,18 +225,18 @@ cudaError_t __wrap_cudaLaunchKernelExC(const cudaLaunchConfig_t* config, const v
 cudaError_t __wrap_cudaMemcpyAsync(void* dst, const void* src, std::size_t bytes,
                                    cudaMemcpyKind kind, cudaStream_t stream) {
     note_shim("cudaMemcpyAsync");
-    bump(&Counts::memcpy, "memcpy");
+    bump(&Counts::memcpy, "memcpy", stream);
     return __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
 }
 
 cudaError_t __wrap_cudaMemsetAsync(void* dst, int value, std::size_t bytes, cudaStream_t stream) {
-    bump(&Counts::memset, "memset");
+    bump(&Counts::memset, "memset", stream);
     return __real_cudaMemsetAsync(dst, value, bytes, stream);
 }
 
 cudaError_t __wrap_cudaGraphLaunch(cudaGraphExec_t exec, cudaStream_t stream) {
     note_shim("cudaGraphLaunch");
-    bump(&Counts::graph, "graph");
+    bump(&Counts::graph, "graph", stream);
     return __real_cudaGraphLaunch(exec, stream);
 }
 
@@ -246,12 +253,12 @@ cudaError_t __wrap_cudaMemcpy2DAsync(void* dst, std::size_t dpitch, const void* 
                                      std::size_t spitch, std::size_t width, std::size_t height,
                                      cudaMemcpyKind kind, cudaStream_t stream) {
     note_shim("cudaMemcpy2DAsync");
-    bump(&Counts::copy2d, "copy2d");
+    bump(&Counts::copy2d, "copy2d", stream);
     return __real_cudaMemcpy2DAsync(dst, dpitch, src, spitch, width, height, kind, stream);
 }
 
 cudaError_t __wrap_cudaMemcpy3DAsync(const cudaMemcpy3DParms* params, cudaStream_t stream) {
-    bump(&Counts::copy3d, "copy3d");
+    bump(&Counts::copy3d, "copy3d", stream);
     return __real_cudaMemcpy3DAsync(params, stream);
 }
 
@@ -325,14 +332,15 @@ void ninfer_launch_round_boundary(void) {
         std::fprintf(stderr,
                      "[launch-count] round=%d rank=%d gap_total_us=%llu gap_max_us=%llu "
                      "gap_max_at_call=%llu calls=%llu gap_kind=%s gap_before=%s "
-                     "gap_before2=%s gap_free_mb=%llu gap_device=%d phase=%s\n",
+                     "gap_before2=%s gap_free_mb=%llu gap_device=%d gap_stream=%p phase=%s\n",
                      g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_index),
                      static_cast<unsigned long long>(g_timing[rank].calls), g_timing[rank].gap_kind,
                      g_timing[rank].gap_before, g_timing[rank].gap_before2,
                      static_cast<unsigned long long>(g_timing[rank].gap_free_mb),
-                     g_timing[rank].gap_device, g_phase_labelled ? "round" : "startup+round0");
+                     g_timing[rank].gap_device, g_timing[rank].gap_stream,
+                     g_phase_labelled ? "round" : "startup+round0");
         g_timing[rank] = Timing{};
     }
     // THE BOUND PROBE: each rank's free memory read from a thread explicitly bound to that rank,

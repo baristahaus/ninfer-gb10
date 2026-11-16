@@ -232,8 +232,13 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
                                        const std::vector<ninfer::TokenId>& prompt_tokens,
                                        const Lane& lane) {
     ninfer::EngineOptions options;
-    options.artifact_path  = artifact;
-    options.use_cuda_graph = false; // width > 1 refuses capture (caf91488)
+    options.artifact_path = artifact;
+    // WIDTH 1 CAPTURES, AND THE PRODUCT DOES IT BY DEFAULT. `use_cuda_graph` defaults to true in
+    // include/ninfer/types.h, and only width > 1 refuses capture (caf91488), so turning graphs off
+    // for both widths made this test's single-device arm validate a configuration the product never
+    // runs and pay for it: measured on the RTX 5090, the plain width-1 lane takes 17,515 ms with
+    // graphs off against 14,495 ms with them on for the same 32 tokens and the same golden.
+    options.use_cuda_graph = width == 1;
     // The round this test validates is the plain text lane. Prefix reuse/context cache and every
     // speculative backend are refused at width > 1 by the option gate (2529e77c) because no
     // two-rank round has been compared for them, so the test states the configuration it exercises

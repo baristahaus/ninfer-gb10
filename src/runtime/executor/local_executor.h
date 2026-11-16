@@ -476,8 +476,20 @@ public:
                 // width says so explicitly, and keeps 'rounds advanced' apart from 'gathers run',
                 // which are different claims and were being conflated under one label.
                 static std::atomic<int> boundary{0};
+                static std::atomic<std::uint64_t> previous_ns{0};
                 const int n = ++boundary;
-                std::fprintf(stderr, "[round] boundary=%d width=%zu\n", n, workers_.size());
+                // THE ROUND'S OWN WALL TIME, so the cadence can be read without a profiler and
+                // compared with the round trace's submit.progress numbers. Without it the boundary
+                // count says how many rounds ran and nothing says how long each took, which is how
+                // a 440 ms round with 8 ms of kernels can read as a fast run.
+                std::uint64_t now_ns = 0;
+                if (round_trace_enabled()) { now_ns = round_trace_now_ns(); }
+                const std::uint64_t since = previous_ns.exchange(now_ns);
+                std::fprintf(stderr, "[round] boundary=%d width=%zu round_ms=%llu\n", n,
+                             workers_.size(),
+                             since != 0 && now_ns != 0
+                                 ? static_cast<unsigned long long>((now_ns - since) / 1000000ULL)
+                                 : 0ULL);
                 std::fflush(stderr);
             }
             if (round_trace_enabled()) {

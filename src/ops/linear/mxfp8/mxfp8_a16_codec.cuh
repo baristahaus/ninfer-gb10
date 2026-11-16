@@ -6,7 +6,8 @@
 // 32; the represented group scale is exactly 2^(word - 127), so folding it into
 // the exact E4M3-to-BF16 widening is a power-of-two rescale computed in FP32.
 
-#include "ops/linear/fp8/fp8_a16_codec.cuh"
+#include "ops/common/cuda/memory.cuh"
+#include "ops/common/quant/fp8.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
@@ -30,7 +31,7 @@ __device__ __forceinline__ float mxfp8_group_scale(std::uint8_t word) {
 // in-group column offsets.
 __device__ __forceinline__ __nv_bfloat162 mxfp8_widen_pair_scaled(std::uint16_t packed_codes,
                                                                   float group_scale) {
-    const unsigned widened = fp8_e4m3x2_to_bf16x2_bits(packed_codes);
+    const unsigned widened = common::fp8_e4m3x2_to_bf16x2_bits(packed_codes);
     const float2 values    = bf16x2_bits_to_float2(widened);
     __nv_bfloat162 result;
     result.x = __float2bfloat16_rn(values.x * group_scale);
@@ -39,7 +40,7 @@ __device__ __forceinline__ __nv_bfloat162 mxfp8_widen_pair_scaled(std::uint16_t 
 }
 
 __device__ __forceinline__ int mxfp8_shared_col_64(int row, int col) {
-    return fp8_a16_shared_col_64(row, col);
+    return common::swizzle_xor_64(row, col);
 }
 
 } // namespace ninfer::ops::detail

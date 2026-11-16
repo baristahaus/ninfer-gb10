@@ -255,4 +255,27 @@ struct Fp8IdentityRows {
 
     __device__ __forceinline__ int weight_row(int begin, int row, int) const { return begin + row; }
 };
+
+// A row policy whose sixteen CTA rows are four column positions of four equal row streams:
+// local row r is stream r / 4 at position begin / 4 + r % 4, with streams kStreamRows apart in
+// the weight. The sliced-K kernel then holds every stream of a position in one warp, and its
+// epilogue receives the four streams' outputs together (epilogue.mix_streams).
+//
+// MOVED HERE from ops/linear/fp8/fp8_schedule.cuh with the fp8 tree merge: the stream-quad
+// epilogue is the one thing the flat tree had that this one did not, and it is what the
+// HyperConnection up projection's gate mix needs.
+template <int StreamRows>
+struct Fp8StreamQuadRows {
+    static constexpr bool kPaired      = false;
+    static constexpr bool kStreamQuads = true;
+    static constexpr int kStreamRows   = StreamRows;
+
+    __device__ __forceinline__ int weight_row(int begin, int row, int) const {
+        return (row >> 2) * StreamRows + (begin >> 2) + (row & 3);
+    }
+};
+
+template <class RowPolicy>
+inline constexpr bool fp8_stream_quad_rows = requires { requires RowPolicy::kStreamQuads; };
+
 } // namespace ninfer::ops::detail

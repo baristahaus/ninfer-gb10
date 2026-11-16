@@ -18,8 +18,7 @@
 #include "ops/common/warp.cuh"
 #include "ops/linear/common/epilogue.cuh"
 #include "ops/linear/common/output.cuh"
-#include "ops/linear/fp8/fp8_a16_codec.cuh"
-#include "ops/linear/fp8/fp8_schedule.cuh"
+#include "ops/linear/kernels/fp8/fp8_schedule.cuh"
 #include "ops/linear/mxfp8/mxfp8_a16_codec.cuh"
 
 #include <cuda_bf16.h>

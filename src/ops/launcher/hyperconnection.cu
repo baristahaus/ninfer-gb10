@@ -11,7 +11,7 @@
 std::atomic<int> ninfer_mtp_phase{0};
 #include "ninfer/ops/linear.h"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
-#include "ops/linear/fp8/fp8_flash_next.h"
+#include "ops/linear/projection/fp8/fp8_flash_next.h"
 #include "ops/launcher/hyperconnection_math.cuh"
 
 #include <cuda_bf16.h>

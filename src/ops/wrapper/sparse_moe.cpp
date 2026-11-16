@@ -2,7 +2,8 @@
 #include "ninfer/ops/sparse_moe.h"
 
 #include "core/nvtx.h"
-#include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/common/weight_validation.h"
+#include "ops/linear/kernels/fp8/fp8_format.h"
 #include "ops/sparse_moe/decode/sparse_moe_decode.h"
 #include "ops/sparse_moe/prefill/sparse_moe_prefill.h"
 #include "ops/sparse_moe/small_t/sparse_moe_small_t.h"

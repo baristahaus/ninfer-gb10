@@ -14,7 +14,7 @@ extern std::atomic<int> ninfer_moe_parity_window;
 #include "ninfer/ops/rope.h"
 #include "ninfer/ops/sigmoid_mul.h"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
-#include "ops/linear/fp8/fp8_flash_next.h"
+#include "ops/linear/projection/fp8/fp8_flash_next.h"
 #include "ops/linear/common/weight_validation.h"
 #include "ops/linear/kernels/fp8/fp8_format.h"
 #include "ops/common/device_info.h"

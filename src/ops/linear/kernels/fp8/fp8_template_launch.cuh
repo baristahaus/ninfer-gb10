@@ -89,10 +89,17 @@ void launch_fp8_a16_sliced_k_mma(const Fp8A16Operands& p, Output output, Epilogu
     constexpr int capacity =
         Schedule::kTokenCapacity ? Schedule::kTokenCapacity : Schedule::kBlockTokens;
     static_assert(capacity > 0 && capacity <= Schedule::kBlockTokens);
-    if (p.rows % Schedule::kBlockRows || p.k % Schedule::kBlockK ||
+    // K NEEDS ONLY BE A MULTIPLE OF ONE WARP'S 64-COLUMN TILE, not of the whole block K tile.
+    // When K is not a whole number of K groups the last group stages and multiplies only the tiles
+    // inside K, and the warps past it keep their sums, because the kernel's group count is
+    // ceil(K / kBlockK) and its staging zero-fills the columns past K. The stricter
+    // `k % kBlockK` test this replaced rejected the HyperConnection up projection at K=320 with a
+    // two-warp schedule, which is a supported shape: the flat fp8 tree allowed it before the two
+    // trees were merged.
+    if (p.rows % Schedule::kBlockRows || p.k % Schedule::kTileKPerWarp ||
         (Schedule::kExactTokens && p.tokens != capacity))
         throw std::invalid_argument(
-            "FP8 sliced-K requires complete row/K tiles and matching tokens");
+            "FP8 sliced-K requires complete row tiles, whole warp K tiles and matching tokens");
     constexpr auto kernel = fp8_a16_sliced_k_mma_kernel<Schedule, Output, Epilogue, Rows>;
     const int bytes       = common::prepare_shared<Schedule::kSharedBytes, kernel>();
     common::for_each_token_slice(p.tokens, capacity, [&](int offset, int count) {

@@ -1,8 +1,8 @@
-#include "ops/linear/fp8/fp8_flash_next.h"
+#include "ops/linear/projection/fp8/fp8_flash_next.h"
 
 #include "core/device.h"
-#include "ops/linear/fp8/fp8_flash_next_route.cuh"
-#include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/kernels/fp8/fp8_flash_next_route.cuh"
+#include "ops/linear/kernels/fp8/fp8_format.h"
 #include "ops/launcher/hyperconnection_math.cuh"
 
 #include <cuda_bf16.h>

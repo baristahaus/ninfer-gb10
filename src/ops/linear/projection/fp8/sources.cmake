@@ -1,4 +1,7 @@
+# The Flash-Next dense FP8 projections' fused entries (HyperConnection down-SiLU and up-mix, and
+# the QSA query/gate split). Moved here from src/ops/linear/fp8 with the fp8 tree merge.
 target_sources(ninfer_ops PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/fp8_flash_next.cu"
   "${CMAKE_CURRENT_LIST_DIR}/fp8_dispatch.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/shapes/n14336_k5120.cu"
   "${CMAKE_CURRENT_LIST_DIR}/shapes/n7168_k5120.cu"

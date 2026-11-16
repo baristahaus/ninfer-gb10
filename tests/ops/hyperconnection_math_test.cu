@@ -20,7 +20,7 @@
 #include "cuda_fixture.h"
 #include "core/weight.h"
 #include "ops/launcher/hyperconnection_math.cuh"
-#include "ops/linear/fp8/fp8_flash_next.h"
+#include "ops/linear/projection/fp8/fp8_flash_next.h"
 #include "ops/op_tester.h"
 
 #include <cuda_bf16.h>

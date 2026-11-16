@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Duplicate-kernel guard: no `__global__` entry symbol may be registered by more than one object.
+"""Duplicate-kernel guard: no linked artifact may register the same kernel twice.
 
-CUDA registers every kernel in an object's fat binary by its entry symbol. When two translation
-units emit the same entry symbol, the module registers it twice and the device tools refuse the
-binary: compute-sanitizer reports "Duplicate entry kernels named ..." and cuda-gdb reports "No CUDA
+CUDA registers every kernel by its entry symbol when a module loads. When one artifact carries the
+same entry symbol twice, the module registers it twice and the device tools refuse the binary:
+compute-sanitizer reports "Duplicate entry kernels named ..." and cuda-gdb reports "No CUDA
 kernels. No CUDA devices." on a live process.
 
-The usual cause is a `__global__` template instantiated in more than one translation unit. Internal
-linkage and separable compilation hide that from the host linker, so a successful link proves
-nothing here.
+The check reads the linked artifacts, because that is the level the driver loads. A scan of
+individual objects overstates the defect: with separable compilation the device linker merges
+duplicate weak template instantiations, so an object-level duplicate may never reach a module. The
+kernels that do reach it are the ones in a non-RDC target, where each object's fat binary is carried
+into the final module unchanged.
 
-This guard reads the compiled objects instead of the source, so it needs no GPU. It parses the
-build graph for `.cu.o` targets, runs `cuobjdump -symbols` on each, and reports every entry symbol
-that more than one object defines.
+`--objects` runs the object-level scan as a diagnostic. Treat its count as an upper bound and the
+artifact count as the defect.
 
-Usage: check_duplicate_kernels.py [ROOT] [--build-dir DIR] [--demangle/--no-demangle] [--limit N]
+Usage: check_duplicate_kernels.py [ROOT] [--build-dir DIR] [--objects] [--limit N]
 Exit 1 and list every duplicated symbol, or 0 with a summary.
 
-The guard fails when it scans zero objects: a check that passes because it found nothing to read
+The guard fails when it scans zero artifacts: a check that passes because it found nothing to read
 checks nothing.
 """
 from __future__ import annotations
@@ -35,21 +36,29 @@ REPO = Path(__file__).resolve().parent.parent
 CUOBJDUMP = os.environ.get("CUOBJDUMP") or "cuobjdump"
 
 
+def artifact_paths(build_dir: Path) -> list[Path]:
+    """Every shared library and executable under the build directory."""
+    found = []
+    for pattern in ("lib/*.so", "lib/*.so.*", "apps/*", "tests/*", "bench/*"):
+        for path in sorted(build_dir.glob(pattern)):
+            if path.is_file() and os.access(path, os.X_OK):
+                found.append(path)
+    return found
+
+
 def cuda_objects(build_dir: Path) -> list[Path]:
-    """The `.cu.o` targets of the build graph, as absolute paths."""
     ninja = build_dir / "build.ninja"
     if not ninja.is_file():
         raise SystemExit(f"{ninja} is missing; configure the build first")
     text = ninja.read_text(errors="replace")
-    relative = sorted(set(re.findall(r"^build (\S+\.cu\.o):", text, re.M)))
-    return [build_dir / name for name in relative]
+    return [build_dir / name for name in sorted(set(re.findall(r"^build (\S+\.cu\.o):", text, re.M)))]
 
 
-def entry_symbols(object_path: Path) -> list[str]:
-    """The STO_ENTRY symbols of one object, or an empty list when it has no device code."""
+def entry_symbols(path: Path) -> list[str]:
+    """The STO_ENTRY symbols of one artifact, or an empty list when it has no device code."""
     try:
-        result = subprocess.run([CUOBJDUMP, "-symbols", str(object_path)],
-                                capture_output=True, text=True, timeout=300)
+        result = subprocess.run([CUOBJDUMP, "-symbols", str(path)],
+                                capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.SubprocessError):
         return []
     if result.returncode != 0:
@@ -69,49 +78,69 @@ def demangle(symbols: list[str]) -> list[str]:
     return lines if len(lines) == len(symbols) else symbols
 
 
-def run(root: Path, build_dir: Path, limit: int) -> int:
+def scan(paths: list[Path], root: Path, limit: int, label: str) -> tuple[int, int]:
+    """Return (duplicated symbol count, scanned artifact count) and print the duplicated symbols."""
+    owners: dict[str, list[Path]] = defaultdict(list)
+    scanned = 0
+    for path in paths:
+        symbols = entry_symbols(path)
+        if not symbols:
+            continue
+        scanned += 1
+        for symbol in symbols:
+            owners[symbol].append(path)
+    duplicated = {symbol: files for symbol, files in owners.items() if len(files) > 1}
+    print(f"{label}: scanned {scanned}, {len(owners)} distinct entry symbols, "
+          f"{len(duplicated)} registered more than once")
+    if not duplicated:
+        return 0, scanned
+    symbols = list(duplicated)
+    pretty = demangle(symbols)
+    for symbol, name in sorted(zip(symbols, pretty), key=lambda row: row[1])[:limit]:
+        print(f"  {len(duplicated[symbol])}x  {name[:180]}")
+        for path in duplicated[symbol]:
+            print(f"        {path.relative_to(root)}")
+    if len(symbols) > limit:
+        print(f"  ... and {len(symbols) - limit} more")
+    return len(duplicated), scanned
+
+
+def run(root: Path, build_dir: Path, objects: bool, limit: int) -> int:
     if shutil.which(CUOBJDUMP) is None and not Path(CUOBJDUMP).exists():
         print(f"error: `{CUOBJDUMP}` was not found. Install the CUDA toolkit, or set CUOBJDUMP.")
         return 1
-    objects = cuda_objects(build_dir)
-    if not objects:
-        print(f"error: no .cu.o targets in {build_dir}/build.ninja; the guard has nothing to read")
+
+    artifacts = artifact_paths(build_dir)
+    if not artifacts:
+        print(f"error: no shared libraries or executables under {build_dir}; build first")
         return 1
-    owners: dict[str, list[Path]] = defaultdict(list)
-    scanned = 0
-    for index, object_path in enumerate(objects):
-        if not object_path.is_file():
-            continue
-        scanned += 1
-        for symbol in entry_symbols(object_path):
-            owners[symbol].append(object_path)
-        if (index + 1) % 200 == 0:
-            print(f"  scanned {index + 1}/{len(objects)} objects")
+    duplicated, scanned = scan(artifacts, root, limit, "linked artifacts")
     if scanned == 0:
-        print(f"error: none of the {len(objects)} objects exists; build first")
+        print(f"error: none of the {len(artifacts)} artifacts carries device code; build the CUDA "
+              "targets first")
         return 1
 
-    duplicated = {symbol: files for symbol, files in owners.items() if len(files) > 1}
-    print(f"scanned {scanned} objects, {len(owners)} distinct entry symbols, "
-          f"{len(duplicated)} registered by more than one object")
-    if not duplicated:
-        return 0
+    if objects:
+        object_paths = [path for path in cuda_objects(build_dir) if path.is_file()]
+        if object_paths:
+            print()
+            object_duplicates, _ = scan(object_paths, root, limit, "objects (diagnostic only)")
+            if object_duplicates:
+                print()
+                print("Object-level duplicates are an upper bound, not the defect: the device linker")
+                print("merges weak template instantiations in an RDC target. Only a duplicate that")
+                print("survives into a linked artifact reaches the driver.")
 
-    symbols = list(duplicated)
-    pretty = demangle(symbols)
-    rows = sorted(zip(symbols, pretty), key=lambda row: row[1])
-    for symbol, name in rows[:limit]:
-        files = duplicated[symbol]
-        print(f"  {len(files)}x  {name[:180]}")
-        for object_path in files:
-            print(f"        {object_path.relative_to(root)}")
-    if len(rows) > limit:
-        print(f"  ... and {len(rows) - limit} more")
-    print()
-    print("A duplicate entry symbol means one __global__ template was instantiated in more than one")
-    print("translation unit. Give the instantiation one owner and declare it `extern template` in")
-    print("every other translation unit that selects it, as src/ops/linear/add/q5/launch.cuh does.")
-    return 1
+    if duplicated:
+        print()
+        print("A duplicate entry symbol in a linked artifact means the same __global__ function was")
+        print("emitted twice into it. For an RDC target the device linker did not merge it, which")
+        print("means the two copies are not weak instantiations of one template. For a non-RDC")
+        print("target nothing merges them, so the same template instantiated in two translation")
+        print("units is enough. Give the instantiation one owner, as")
+        print("src/ops/linear/kernels/nvfp4/nvfp4_a4_tma_shared.h does.")
+        return 1
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -120,14 +149,14 @@ def main(argv: list[str]) -> int:
                         help="repository root (default: this script's checkout)")
     parser.add_argument("--build-dir", default=None,
                         help="build directory (default: <root>/build)")
-    parser.add_argument("--no-demangle", dest="demangle", action="store_false",
-                        help="print mangled symbols")
+    parser.add_argument("--objects", action="store_true",
+                        help="also scan individual objects as a diagnostic")
     parser.add_argument("--limit", type=int, default=40,
                         help="maximum duplicated symbols to list (default: 40)")
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     build_dir = Path(args.build_dir).resolve() if args.build_dir else root / "build"
-    return run(root, build_dir, args.limit)
+    return run(root, build_dir, args.objects, args.limit)
 
 
 if __name__ == "__main__":

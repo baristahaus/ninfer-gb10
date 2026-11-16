@@ -73,6 +73,10 @@ jobs:
         run: cmake --preset rtx5090-dev
       - name: build
         run: cmake --build build/rtx5090-dev -j "$(nproc)"
+      - name: duplicate-kernel guard
+        # The linked artifacts must register no kernel twice; compute-sanitizer and cuda-gdb refuse
+        # a module that does. Runs after the build because it reads the built libraries.
+        run: python3 tools/check_duplicate_kernels.py . --build-dir build/rtx5090-dev
       - name: ctest
         run: |
           LD_LIBRARY_PATH="$PWD/build/rtx5090-dev/cuda-stub" \

@@ -5,9 +5,9 @@
 
 namespace ninfer::ops::detail::moe_cuda::block_scaled::nvfp4 {
 namespace {
-__global__ void quantize_input(const __nv_bfloat16* x, std::uint8_t* codes, std::uint8_t* scales,
-                               float divisor, int tokens, int* counts, float* routed_sum,
-                               bool clear_counts) {
+__global__ void nvfp4_quantize_input(const __nv_bfloat16* x, std::uint8_t* codes,
+                                     std::uint8_t* scales, float divisor, int tokens, int* counts,
+                                     float* routed_sum, bool clear_counts) {
     const int group = blockIdx.x * blockDim.x + threadIdx.x;
     if (routed_sum) {
         for (int i = group; i < tokens * kHidden; i += gridDim.x * blockDim.x) {
@@ -71,10 +71,11 @@ void with_columns(int columns, Function&& function) {
 void launch_input(const Tensor& x, const CudaSwiGLUExperts& experts, const Storage& s,
                   CudaExecutionView execution, bool clear_counts) {
     const auto stream = execution.stream();
-    quantize_input<<<(std::max(x.ne[1] * (kHidden / 16), kExperts) + 255) / 256, 256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(x.data), s.input_codes,
-        static_cast<std::uint8_t*>(s.input_scales), *experts.activation_divisors.gate_up, x.ne[1],
-        s.groups.counts, s.routed_sum, clear_counts);
+    nvfp4_quantize_input<<<(std::max(x.ne[1] * (kHidden / 16), kExperts) + 255) / 256, 256, 0,
+                           stream>>>(static_cast<const __nv_bfloat16*>(x.data), s.input_codes,
+                                     static_cast<std::uint8_t*>(s.input_scales),
+                                     *experts.activation_divisors.gate_up, x.ne[1], s.groups.counts,
+                                     s.routed_sum, clear_counts);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -99,12 +100,12 @@ void launch_vector(const Tensor& x, const CudaSwiGLUExperts& experts, const Expe
     const auto* ids          = static_cast<const int*>(routes.ids.data);
     const auto* mask         = static_cast<const int*>(subset.mask.data);
     const auto* coefficients = static_cast<const float*>(routes.coefficients.data);
-    vector_gate<<<dim3(kIntermediate / 4, x.ne[1] * kTopK), 128, 0, stream>>>(
+    nvfp4_vector_gate<<<dim3(kIntermediate / 4, x.ne[1] * kTopK), 128, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), experts.bank.gate_up, ids, subset.kind, mask,
         s.vector_activation);
     CUDA_CHECK(cudaGetLastError());
     const auto down = [&](auto output) {
-        vector_down<4><<<dim3(kHidden / 4, x.ne[1]), kTopK * 32, 0, stream>>>(
+        nvfp4_vector_down<4><<<dim3(kHidden / 4, x.ne[1]), kTopK * 32, 0, stream>>>(
             s.vector_activation, experts.bank.down, ids, coefficients, subset.kind, mask, output);
         CUDA_CHECK(cudaGetLastError());
     };

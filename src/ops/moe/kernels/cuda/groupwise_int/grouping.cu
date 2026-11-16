@@ -4,8 +4,8 @@ namespace ninfer::ops::detail::moe_cuda::groupwise_int {
 namespace {
 
 template <class Shape, bool Masked>
-__global__ void count_assignments(const int* ids, const int* mask, int member, int* ranks,
-                                  int* counts_out, int assignments) {
+__global__ void groupwise_int_count_assignments(const int* ids, const int* mask, int member,
+                                                int* ranks, int* counts_out, int assignments) {
     constexpr int Tile = 8 * Shape::top_k;
     __shared__ int counts[Shape::experts];
     const int tid = threadIdx.x;
@@ -27,7 +27,7 @@ __global__ void count_assignments(const int* ids, const int* mask, int member, i
 }
 
 template <class Shape>
-__global__ void scan_assignments(GroupedStorage out, int tiles, GroupedPlan plan) {
+__global__ void groupwise_int_scan_assignments(GroupedStorage out, int tiles, GroupedPlan plan) {
     __shared__ int scan[Shape::experts];
     const int e = threadIdx.x;
     int count   = 0;
@@ -80,7 +80,8 @@ __global__ void scan_assignments(GroupedStorage out, int tiles, GroupedPlan plan
 }
 
 template <class Shape>
-__global__ void index_assignments(const int* ids, GroupedStorage out, int assignments) {
+__global__ void groupwise_int_index_assignments(const int* ids, GroupedStorage out,
+                                                int assignments) {
     if (out.info->direct) { return; }
     const int assignment = blockIdx.x * blockDim.x + threadIdx.x;
     if (assignment >= assignments) { return; }
@@ -105,10 +106,10 @@ void launch_group_count(const ExpertRoutes& routes, ExpertSubset subset,
     const auto* ids  = static_cast<const int*>(routes.ids.data);
     const auto* mask = static_cast<const int*>(subset.mask.data);
     if (subset.kind == ExpertSubsetKind::All) {
-        count_assignments<S, false><<<tiles, S::experts, 0, execution.stream()>>>(
+        groupwise_int_count_assignments<S, false><<<tiles, S::experts, 0, execution.stream()>>>(
             ids, nullptr, 0, storage.local_ranks, storage.tile_counts, count);
     } else {
-        count_assignments<S, true><<<tiles, S::experts, 0, execution.stream()>>>(
+        groupwise_int_count_assignments<S, true><<<tiles, S::experts, 0, execution.stream()>>>(
             ids, mask, subset.kind == ExpertSubsetKind::MaskOnes ? 1 : 0, storage.local_ranks,
             storage.tile_counts, count);
     }
@@ -118,7 +119,7 @@ void launch_group_count(const ExpertRoutes& routes, ExpertSubset subset,
 void launch_group_scan(const ExpertRoutes& routes, const GroupedPlan& plan,
                        const GroupedStorage& storage, CudaExecutionView execution) {
     using S = SwiGLUH2048I512E256K8;
-    scan_assignments<S>
+    groupwise_int_scan_assignments<S>
         <<<1, S::experts, 0, execution.stream()>>>(storage, (routes.ids.ne[1] + 7) / 8, plan);
     CUDA_CHECK(cudaGetLastError());
 }
@@ -127,7 +128,7 @@ void launch_group_index(const ExpertRoutes& routes, const GroupedStorage& storag
                         CudaExecutionView execution) {
     using S         = SwiGLUH2048I512E256K8;
     const int count = S::top_k * routes.ids.ne[1];
-    index_assignments<S><<<(count + 255) / 256, 256, 0, execution.stream()>>>(
+    groupwise_int_index_assignments<S><<<(count + 255) / 256, 256, 0, execution.stream()>>>(
         static_cast<const int*>(routes.ids.data), storage, count);
     CUDA_CHECK(cudaGetLastError());
 }

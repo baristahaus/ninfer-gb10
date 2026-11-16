@@ -46,8 +46,8 @@ __device__ __forceinline__ bool selected(ExpertSubsetKind kind, const int* mask,
     return kind == ExpertSubsetKind::All || mask[e] == (kind == ExpertSubsetKind::MaskOnes);
 }
 
-__global__ void count_assignments(const int* ids, ExpertSubsetKind kind, const int* mask,
-                                  int* counts, int assignments) {
+__global__ void block_scaled_count_assignments(const int* ids, ExpertSubsetKind kind,
+                                               const int* mask, int* counts, int assignments) {
     __shared__ int histogram[kExperts];
     for (int e = threadIdx.x; e < kExperts; e += blockDim.x) { histogram[e] = 0; }
     __syncthreads();
@@ -62,7 +62,7 @@ __global__ void count_assignments(const int* ids, ExpertSubsetKind kind, const i
     }
 }
 
-__global__ void scan_assignments(Groups g, int columns) {
+__global__ void block_scaled_scan_assignments(Groups g, int columns) {
     __shared__ int scan[kExperts];
     const int e     = threadIdx.x;
     const int count = g.counts[e];
@@ -98,8 +98,8 @@ __global__ void scan_assignments(Groups g, int columns) {
     if (e == kExperts - 1) { *g.jobs = scan[e]; }
 }
 
-__global__ void index_assignments(const int* ids, ExpertSubsetKind kind, const int* mask, Groups g,
-                                  int assignments) {
+__global__ void block_scaled_index_assignments(const int* ids, ExpertSubsetKind kind,
+                                               const int* mask, Groups g, int assignments) {
     const int a = blockIdx.x * blockDim.x + threadIdx.x;
     if (a >= assignments) { return; }
     const int expert = ids[a];
@@ -278,14 +278,14 @@ void launch(const Tensor& x, const CudaSwiGLUExperts& experts, const ExpertRoute
             CUDA_CHECK(cudaGetLastError());
         } else {
             if (!prepared.route_counts) {
-                count_assignments<<<(assignments + 255) / 256, 256, 0, stream>>>(
+                block_scaled_count_assignments<<<(assignments + 255) / 256, 256, 0, stream>>>(
                     ids, subset.kind, mask, s.groups.counts, assignments);
                 CUDA_CHECK(cudaGetLastError());
             }
-            scan_assignments<<<1, kExperts, 0, stream>>>(s.groups, plan.job_columns());
+            block_scaled_scan_assignments<<<1, kExperts, 0, stream>>>(s.groups, plan.job_columns());
             CUDA_CHECK(cudaGetLastError());
-            index_assignments<<<(assignments + 255) / 256, 256, 0, stream>>>(ids, subset.kind, mask,
-                                                                             s.groups, assignments);
+            block_scaled_index_assignments<<<(assignments + 255) / 256, 256, 0, stream>>>(
+                ids, subset.kind, mask, s.groups, assignments);
             CUDA_CHECK(cudaGetLastError());
         }
         if (plan.format == QType::NVFP4) {

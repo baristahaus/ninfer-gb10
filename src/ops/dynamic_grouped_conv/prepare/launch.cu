@@ -20,9 +20,9 @@ struct Tile {
 
 template <int Rows, int Columns, int SplitK, int H>
 __launch_bounds__(Tile<Rows, Columns>::threads, 1) __global__
-    void partial_kernel(const __nv_bfloat16* __restrict__ input,
-                        const __nv_bfloat16* __restrict__ weight, float* __restrict__ partial,
-                        int tokens) {
+    void dgc_prepare_partial_kernel(const __nv_bfloat16* __restrict__ input,
+                                    const __nv_bfloat16* __restrict__ weight,
+                                    float* __restrict__ partial, int tokens) {
     constexpr int threads         = Tile<Rows, Columns>::threads;
     constexpr int mmas            = Tile<Rows, Columns>::mmas;
     constexpr int kGroupsLocal    = H / 16;
@@ -111,7 +111,7 @@ void launch_partial(const Tensor& input, const Weight& weight, float* partial,
     constexpr int kCoefficients = (H / 16) * kTaps * kSides;
     const int tokens            = input.ne[1] * input.ne[2];
     const dim3 grid(kCoefficients / R, (tokens + C - 1) / C, S);
-    partial_kernel<R, C, S, H><<<grid, Tile<R, C>::threads, 0, stream>>>(
+    dgc_prepare_partial_kernel<R, C, S, H><<<grid, Tile<R, C>::threads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weight.qdata), partial, tokens);
     CUDA_CHECK(cudaGetLastError());

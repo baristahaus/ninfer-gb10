@@ -45,10 +45,11 @@ __device__ float adjusted(float raw, int id, const SamplingConfig& cfg, const in
 }
 
 template <bool Greedy>
-__global__ void partial_kernel(const __nv_bfloat16* logits, int rows, int begin, int domain,
-                               const SamplingConfig* configs, const int* valid, const int* drafts,
-                               int tokens, std::int64_t column_offset, unsigned long long* output,
-                               int partials) {
+__global__ void vocab_select_partial_kernel(const __nv_bfloat16* logits, int rows, int begin,
+                                            int domain, const SamplingConfig* configs,
+                                            const int* valid, const int* drafts, int tokens,
+                                            std::int64_t column_offset, unsigned long long* output,
+                                            int partials) {
     const int column         = blockIdx.y;
     const auto global_column = column_offset + column;
     const int b = global_column / tokens, t = global_column % tokens;
@@ -211,7 +212,7 @@ void vocabulary_candidates(const Tensor& logits, int token_begin, int token_doma
         auto* partial   = selected.partials == 1 ? result : first;
         const dim3 grid(selected.partials, width);
         if (cap == 1) {
-            partial_kernel<true><<<grid, 128, 0, execution.stream()>>>(
+            vocab_select_partial_kernel<true><<<grid, 128, 0, execution.stream()>>>(
                 static_cast<const __nv_bfloat16*>(logits.data), rows, token_begin, token_domain,
                 configs, static_cast<const int*>(valid_columns.data),
                 static_cast<const int*>(drafts.data), tokens, offset, partial, selected.partials);
@@ -219,10 +220,12 @@ void vocabulary_candidates(const Tensor& logits, int token_begin, int token_doma
                 merge_greedy<<<width, 128, 0, execution.stream()>>>(partial, result,
                                                                     selected.partials);
         } else {
-            partial_kernel<false><<<grid, Schedule::kSamplerBlock, 0, execution.stream()>>>(
-                static_cast<const __nv_bfloat16*>(logits.data), rows, token_begin, token_domain,
-                configs, static_cast<const int*>(valid_columns.data),
-                static_cast<const int*>(drafts.data), tokens, offset, partial, selected.partials);
+            vocab_select_partial_kernel<false>
+                <<<grid, Schedule::kSamplerBlock, 0, execution.stream()>>>(
+                    static_cast<const __nv_bfloat16*>(logits.data), rows, token_begin, token_domain,
+                    configs, static_cast<const int*>(valid_columns.data),
+                    static_cast<const int*>(drafts.data), tokens, offset, partial,
+                    selected.partials);
             auto* next = second;
             for (int lists = selected.partials; lists > 1;) {
                 const int groups  = div_up(lists, 25);

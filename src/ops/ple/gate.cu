@@ -16,7 +16,7 @@ struct GateArguments {
 };
 
 template <int Block, int Width>
-__global__ void gate_kernel(const __grid_constant__ GateArguments a) {
+__global__ void ple_gate_kernel(const __grid_constant__ GateArguments a) {
     constexpr int items = (kFeatures + Block * Width - 1) / (Block * Width);
     constexpr int warps = Block / common::kWarpSize;
     __shared__ float sums[3][warps];
@@ -132,7 +132,7 @@ template <int Block, int Width>
 void launch_gate(const GateArguments& args, cudaStream_t stream) {
     const auto groups = std::int64_t(args.tokens) * kStreams;
     const auto grid   = static_cast<unsigned>(groups < 65535 ? groups : 65535);
-    gate_kernel<Block, Width><<<dim3(grid, args.batch), Block, 0, stream>>>(args);
+    ple_gate_kernel<Block, Width><<<dim3(grid, args.batch), Block, 0, stream>>>(args);
     CUDA_CHECK(cudaGetLastError());
 }
 

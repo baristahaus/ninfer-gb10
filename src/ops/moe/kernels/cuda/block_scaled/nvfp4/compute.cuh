@@ -363,8 +363,9 @@ __device__ __forceinline__ void expand_group(Matrix weight, int row, int group, 
     }
 }
 
-__global__ void vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank, const int* ids,
-                            ExpertSubsetKind kind, const int* mask, float* activation) {
+__global__ void nvfp4_vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank,
+                                  const int* ids, ExpertSubsetKind kind, const int* mask,
+                                  float* activation) {
     const int assignment = blockIdx.y, expert = ids[assignment];
     if (!includes(kind, mask, expert)) { return; }
     const auto weight = resolve(bank, expert);
@@ -394,9 +395,9 @@ __global__ void vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank,
 }
 
 template <int Rows, int Warps = kTopK, class Output>
-__global__ void vector_down(const float* activation, ExpertMatrixDeviceView bank, const int* ids,
-                            const float* coefficients, ExpertSubsetKind kind, const int* mask,
-                            Output output) {
+__global__ void nvfp4_vector_down(const float* activation, ExpertMatrixDeviceView bank,
+                                  const int* ids, const float* coefficients, ExpertSubsetKind kind,
+                                  const int* mask, Output output) {
     __shared__ float values[Warps][Rows];
     const int token = blockIdx.y, warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
     float total[Rows] = {};

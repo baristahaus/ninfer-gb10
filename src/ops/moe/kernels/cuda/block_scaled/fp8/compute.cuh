@@ -238,8 +238,8 @@ __device__ __forceinline__ float dot_four(unsigned codes, float4 x) {
     return fmaf(hi.y, x.w, fmaf(hi.x, x.z, fmaf(lo.y, x.y, lo.x * x.x)));
 }
 
-__global__ void vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank, const int* ids,
-                            ExpertSubsetKind kind, const int* mask, float* activation) {
+__global__ void fp8_vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank, const int* ids,
+                                ExpertSubsetKind kind, const int* mask, float* activation) {
     const int assignment = blockIdx.y, expert = ids[assignment];
     if (!includes(kind, mask, expert)) { return; }
     const auto weight = resolve(bank, expert);
@@ -266,9 +266,9 @@ __global__ void vector_gate(const __nv_bfloat16* x, ExpertMatrixDeviceView bank,
 }
 
 template <int Rows, class Output>
-__global__ void vector_down(const float* activation, ExpertMatrixDeviceView bank, const int* ids,
-                            const float* coefficients, ExpertSubsetKind kind, const int* mask,
-                            Output output) {
+__global__ void fp8_vector_down(const float* activation, ExpertMatrixDeviceView bank,
+                                const int* ids, const float* coefficients, ExpertSubsetKind kind,
+                                const int* mask, Output output) {
     __shared__ float values[kTopK][Rows];
     const int token = blockIdx.y, route = threadIdx.x >> 5, lane = threadIdx.x & 31;
     const int assignment = token * kTopK + route, expert = ids[assignment];

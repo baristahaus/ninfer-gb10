@@ -64,10 +64,12 @@ ninfer::EngineOptions one_device() {
 } // namespace
 
 int main() {
+    // --spec mtp is validated at width 2 (see the row's evidence in startup.cpp), so it is accepted
+    // here and no longer appears among the refusals below.
     {
         auto options                = two_devices();
         options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
-        expect_refusal(options, "--spec mtp");
+        expect_accepted(options, "--spec mtp");
     }
     {
         auto options                = two_devices();
@@ -100,7 +102,8 @@ int main() {
         expect_refusal(options, "--vision");
     }
 
-    // Width 1 keeps every one of those options: the gate lives inside the width>1 branch.
+    // Width 1 keeps every option, including the ones that refuse at width 2: the gate lives inside
+    // the width>1 branch and must not creep into the single-device lane.
     {
         auto options                = one_device();
         options.speculative.backend = ninfer::SpeculativeBackend::Mtp;

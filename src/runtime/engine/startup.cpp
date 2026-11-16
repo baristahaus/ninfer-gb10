@@ -125,20 +125,13 @@ struct WidthTwoOption {
 
 constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
-     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; }, false,
-     "",
-     "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno. "
-     "The proposal path's missing logits gather is fixed (the MTP and DFlash proposal heads gather "
-     "the rank's rows into the group's full-vocabulary pair and sample the tight view; the MTP "
-     "proposal buffer is reconciled to the frame's own extent), and the width-2 round now gets "
-     "PAST "
-     "that argmax: on hephaestus (arm 2, nvfp4.v3) it throws 'Qwen3.5 compute frame is occupied' "
-     "on "
-     "the second decode round -- rank 0's first round retires, rank 1's compute frame does not, so "
-     "the next round starts with rank 1's slot occupied. That is a frame/collective sequencing "
-     "defect behind the gather, not a missing gather: the gather is enqueued on both ranks and the "
-     "round's first compute frame completes on rank 0 only. The row is promoted only by a two-rank "
-     "round whose disagreements are adjudicated inside the 1.0-nat tie tolerance"},
+     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; }, true,
+     "hephaestus (2x RTX 5070 Ti, CUDA 13.3, nvfp4.v3) arm 2 at the 32-id acceptance prompt: "
+     "'ok: arm 2 reproduces the golden (32 tokens)', 33 rounds, no disagreement to adjudicate. The "
+     "frame/collective sequencing defect this row used to name -- rank 1's compute frame not "
+     "retiring, so the next round threw 'Qwen3.5 compute frame is occupied' -- no longer "
+     "reproduces on master 1206c4c1.",
+     ""},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "", "the DFlash drafter has no two-rank round compared against width 1"},

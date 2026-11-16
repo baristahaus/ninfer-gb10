@@ -29,8 +29,6 @@ endforeach()
 target_sources(ninfer_ops PRIVATE
   "${NINFER_OPS_DIR}/wrapper/mtp_round.cpp"
   "${NINFER_OPS_DIR}/launcher/mtp_round.cu"
-  "${NINFER_OPS_DIR}/wrapper/speculative_round.cpp"
-  "${NINFER_OPS_DIR}/launcher/speculative_round.cu"
   "${NINFER_OPS_DIR}/wrapper/mtp_pack.cpp"
   "${NINFER_OPS_DIR}/launcher/mtp_pack.cu"
   "${NINFER_OPS_DIR}/wrapper/argmax.cpp"

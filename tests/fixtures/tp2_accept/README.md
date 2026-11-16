@@ -24,6 +24,8 @@ neither tokenizes anything, so two hosts cannot disagree about what was prefille
 | `prompt.ids` | 32 token ids: the `reasoning-short` prompt of [`../prompts/corpus.json`](../prompts/corpus.json), tokenized once with the artifact's own tokenizer (`Engine::tokenize_text`) and checked in as ids |
 | `golden_plain.ids` | the width-1 greedy chain of the plain lane (no speculative backend) |
 | `golden_mtp.ids` | the width-1 greedy chain of the MTP lane (`NINFER_TP2_SPEC=mtp`) |
+| `golden_context_cache.ids` | the width-1 greedy chain of the prefix-reuse row (`NINFER_TP2_ROW=context-cache`). Equal to `golden_plain.ids`: one 32-token round has nothing to reuse, so enabling the cache must not change the chain |
+| `golden_kv_fp8.ids` | the width-1 greedy chain of the quantized-KV row (`NINFER_TP2_ROW=kv-fp8`). Equal to `golden_plain.ids`: an FP8 KV pool must not change a greedy chain that the plain lane also produces |
 
 The prompt text, for the record: *"A box has 3 red and 2 blue balls. One ball is drawn without
 looking. What is the probability it is red? Reply as a fraction."* It was chosen because its greedy
@@ -34,6 +36,10 @@ well as the decode path.
 ## Provenance of the goldens
 
 - Host: trueno, one RTX 5090 (32 GB), `sm_120a`.
+- The two option-row goldens were captured on the same host and artifact with
+  `NINFER_TP2_ROW=context-cache` and `NINFER_TP2_ROW=kv-fp8`, and both came out equal to the plain
+  chain. That equality is the point of the fixtures: the rows exist to prove an option does not
+  change the result, so a fixture that differed would be the defect.
 - Artifact: `/home/barista/ninfer/models/qwen3_8_27b_nvfp4.v3.ninfer`. The v2 sibling
   (`qwen3_8_27b_nvfp4.ninfer`) is rejected by the engine, which requires v3. **A comparison against
   a chain captured here needs this same artifact**: a different quantization or a different 27B

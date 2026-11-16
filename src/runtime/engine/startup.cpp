@@ -162,18 +162,24 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      "3, 43, 84, 85 and 128 columns"},
 
     {"prefix reuse / context cache", [](const EngineOptions& o) { return o.context_cache.enabled; },
-     false, "",
-     "the context cache's slot ownership and reuse accounting are per Program and no two-rank "
-     "round "
-     "has compared them"},
+     true,
+     "hephaestus (2x RTX 5070 Ti, CUDA 13.3, nvfp4.v3) arm 2 at the 32-id acceptance prompt: the "
+     "sharded chain disagrees with width 1 only at position 1, and the reference host scores the "
+     "two candidates 0.375 nats apart, inside the 1.0-nat tie tolerance. The chain equals the "
+     "plain "
+     "lane's sharded chain, which is what a cache with nothing to reuse must produce.",
+     ""},
     {"--kv-dtype (any quantized KV)",
      [](const EngineOptions& o) {
          return o.kv_cache != KvCacheStorage::BFloat16 &&
                 o.kv_cache != KvCacheStorage::BFloat16KeyValue;
      },
-     false, "",
-     "the sharded KV mirror has only been exercised with bf16; no two-rank round has compared a "
-     "quantized pool against width 1"},
+     true,
+     "hephaestus (2x RTX 5070 Ti, CUDA 13.3, nvfp4.v3) arm 2 with an FP8_E4M3FN row-scaled pool at "
+     "the 32-id acceptance prompt: the sharded chain disagrees with width 1 only at position 27, "
+     "and the reference host scores both candidates at the same log probability, margin 0 nats, "
+     "inside the 1.0-nat tie tolerance.",
+     ""},
     {"--vision", [](const EngineOptions& o) { return o.enable_vision; }, false, "",
      "the Vision tower is not sharded and no two-rank round has run a vision request"},
 };

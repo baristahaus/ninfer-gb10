@@ -86,15 +86,17 @@ int main() {
         options.purpose = ninfer::EnginePurpose::CausalScoring;
         expect_refusal(options, "--causal-scoring");
     }
+    // Prefix reuse and quantized KV are validated at width 2 too (see their rows' evidence in
+    // startup.cpp), so they are accepted here and no longer appear among the refusals.
     {
         auto options                  = two_devices();
         options.context_cache.enabled = true;
-        expect_refusal(options, "prefix reuse / context cache");
+        expect_accepted(options, "prefix reuse / context cache");
     }
     {
         auto options     = two_devices();
         options.kv_cache = ninfer::KvCacheStorage::Fp8E4M3Row256;
-        expect_refusal(options, "--kv-dtype (any quantized KV)");
+        expect_accepted(options, "--kv-dtype (any quantized KV)");
     }
     {
         auto options          = two_devices();

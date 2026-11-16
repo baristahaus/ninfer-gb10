@@ -160,19 +160,17 @@ std::string chain_text(const std::vector<ninfer::TokenId>& tokens) {
     return text;
 }
 
-// The chain a lane must reproduce, named after the speculative backend so every lane has its own.
-const char* golden_name(ninfer::SpeculativeBackend backend) {
-    switch (backend) {
-    case ninfer::SpeculativeBackend::Mtp:
-        return "golden_mtp.ids";
-    case ninfer::SpeculativeBackend::DFlash:
-        return "golden_dflash.ids";
-    case ninfer::SpeculativeBackend::DFlash2:
-        return "golden_dflash2.ids";
-    default:
-        return "golden_plain.ids";
-    }
-}
+// ONE ROW PER COMBINATION THE WIDTH-2 REGISTER CARRIES. The register in
+// runtime/engine/startup.cpp has one row per option that touches the sharded lane, and a row is
+// promoted only by a two-rank round compared against width 1. This test is where that comparison
+// happens, so it has to be able to run the row: a lane names the speculative backend and the option
+// under test together.
+struct Lane {
+    ninfer::SpeculativeBackend backend = ninfer::SpeculativeBackend::None;
+    bool context_cache                 = false;
+    bool quantized_kv                  = false;
+    const char* golden                 = "golden_plain.ids";
+};
 
 // The draft window each lane runs. The MTP lane proposes three drafts; the masked-draft lanes take
 // a wider window, and four keeps the round short enough to compare across two hosts while still
@@ -189,20 +187,50 @@ std::uint32_t lane_draft_tokens(ninfer::SpeculativeBackend backend) {
     }
 }
 
-// NINFER_TP2_SPEC names the lane. Unset is the plain lane.
-ninfer::SpeculativeBackend lane_from_env(const char* spec) {
-    if (spec == nullptr || *spec == '\0') return ninfer::SpeculativeBackend::None;
-    const std::string_view name(spec);
-    if (name == "mtp") return ninfer::SpeculativeBackend::Mtp;
-    if (name == "dflash") return ninfer::SpeculativeBackend::DFlash;
-    if (name == "dflash2") return ninfer::SpeculativeBackend::DFlash2;
-    throw std::invalid_argument(std::string("unknown NINFER_TP2_SPEC lane: ") + std::string(name) +
-                                " (expected mtp, dflash or dflash2)");
+// NINFER_TP2_ROW names the register row. NINFER_TP2_SPEC is kept as the spec-only spelling so the
+// lane scripts that pass it keep working. An unknown name fails with the list of accepted names
+// rather than falling back to the plain lane, because a fallback would compare the wrong thing and
+// pass.
+Lane lane_from_env() {
+    const char* row             = std::getenv("NINFER_TP2_ROW");
+    const char* spec            = std::getenv("NINFER_TP2_SPEC");
+    const std::string_view name = row != nullptr && *row != '\0'     ? std::string_view(row)
+                                  : spec != nullptr && *spec != '\0' ? std::string_view(spec)
+                                                                     : std::string_view();
+    Lane lane;
+    if (name.empty() || name == "plain") { return lane; }
+    if (name == "mtp") {
+        lane.backend = ninfer::SpeculativeBackend::Mtp;
+        lane.golden  = "golden_mtp.ids";
+        return lane;
+    }
+    if (name == "dflash") {
+        lane.backend = ninfer::SpeculativeBackend::DFlash;
+        lane.golden  = "golden_dflash.ids";
+        return lane;
+    }
+    if (name == "dflash2") {
+        lane.backend = ninfer::SpeculativeBackend::DFlash2;
+        lane.golden  = "golden_dflash2.ids";
+        return lane;
+    }
+    if (name == "context-cache") {
+        lane.context_cache = true;
+        lane.golden        = "golden_context_cache.ids";
+        return lane;
+    }
+    if (name == "kv-fp8") {
+        lane.quantized_kv = true;
+        lane.golden       = "golden_kv_fp8.ids";
+        return lane;
+    }
+    throw std::invalid_argument(std::string("unknown lane name: ") + std::string(name) +
+                                " (expected plain, mtp, dflash, dflash2, context-cache or kv-fp8)");
 }
 
 std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int device,
                                        const std::vector<ninfer::TokenId>& prompt_tokens,
-                                       ninfer::SpeculativeBackend backend) {
+                                       const Lane& lane) {
     ninfer::EngineOptions options;
     options.artifact_path  = artifact;
     options.use_cuda_graph = false; // width > 1 refuses capture (caf91488)
@@ -211,10 +239,11 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     // two-rank round has been compared for them, so the test states the configuration it exercises
     // instead of inheriting defaults that the gate would refuse. Each of those combinations gets
     // its own row in that table, and its own comparison, when it is validated.
-    options.context_cache.enabled    = false;
-    options.speculative.backend      = backend;
-    options.speculative.draft_tokens = lane_draft_tokens(backend);
-    options.max_context              = 2048;
+    options.context_cache.enabled    = lane.context_cache;
+    options.speculative.backend      = lane.backend;
+    options.speculative.draft_tokens = lane_draft_tokens(lane.backend);
+    if (lane.quantized_kv) { options.kv_cache = ninfer::KvCacheStorage::Fp8E4M3Row256; }
+    options.max_context = 2048;
     // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without
     // this the engine refuses at option validation before either round runs.
     options.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(2048);
@@ -281,9 +310,9 @@ int main() {
 
     // NINFER_TP2_SPEC selects a speculative backend so one binary can run each option-gate
     // comparison. Unset means the plain lane, which is the configuration this test validated first.
-    ninfer::SpeculativeBackend backend = ninfer::SpeculativeBackend::None;
+    Lane lane;
     try {
-        backend = lane_from_env(std::getenv("NINFER_TP2_SPEC"));
+        lane = lane_from_env();
     } catch (const std::exception& error) { return fail(error.what()); }
     const bool capture = std::getenv("NINFER_TP2_CAPTURE") != nullptr;
 
@@ -305,14 +334,14 @@ int main() {
         const int width = std::atoi(arm);
         std::vector<ninfer::TokenId> tokens;
         try {
-            tokens = run_round(artifact, width, 0, prompt, backend);
+            tokens = run_round(artifact, width, 0, prompt, lane);
         } catch (const std::exception& error) {
             return fail(std::string("width ") + arm + " round threw: " + error.what());
         }
         std::cout << "arm " << width << " tokens (" << tokens.size() << "): " << chain_text(tokens)
                   << '\n';
         if (capture) {
-            std::cout << "capture: write the chain above into " << golden_name(backend) << '\n';
+            std::cout << "capture: write the chain above into " << lane.golden << '\n';
             return 0;
         }
         // NINFER_TP2_COMPARE names the OTHER arm's chain: the reference host scores both candidates
@@ -321,8 +350,8 @@ int main() {
         const char* compare = std::getenv("NINFER_TP2_COMPARE");
         std::vector<ninfer::TokenId> expected;
         try {
-            expected = read_ids(compare != nullptr ? std::string(compare)
-                                                   : fixture_path(golden_name(backend)));
+            expected =
+                read_ids(compare != nullptr ? std::string(compare) : fixture_path(lane.golden));
         } catch (const std::exception& error) { return fail(error.what()); }
         if (tokens != expected) {
             if (tokens.size() != expected.size()) {
@@ -370,7 +399,7 @@ int main() {
 
     std::vector<ninfer::TokenId> single;
     try {
-        single = run_round(artifact, 1, 0, prompt, backend);
+        single = run_round(artifact, 1, 0, prompt, lane);
     } catch (const std::exception& error) {
         return fail(std::string("the single-device reference round threw: ") + error.what());
     }
@@ -378,7 +407,7 @@ int main() {
 
     std::vector<ninfer::TokenId> sharded;
     try {
-        sharded = run_round(artifact, 2, 0, prompt, backend);
+        sharded = run_round(artifact, 2, 0, prompt, lane);
     } catch (const std::exception& error) {
         // With the flag set, a refusal is exactly what this test exists to prevent shipping.
         return fail(std::string("the width-2 round did not run: ") + error.what());
@@ -416,7 +445,7 @@ int main() {
     if (!capture) {
         std::vector<ninfer::TokenId> golden;
         try {
-            golden = read_ids(fixture_path(golden_name(backend)));
+            golden = read_ids(fixture_path(lane.golden));
         } catch (const std::exception& error) { return fail(error.what()); }
         if (single != golden) {
             return fail("the reference lane does not reproduce the golden\n  golden: " +

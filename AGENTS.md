@@ -151,8 +151,9 @@ the card's 32 GB — through the multi-strata (GPU + RAM + disk) per the ratifie
 27B-class serves fully hot today; the MoE class is the tiering target. **GB10** (`sm_121a`) is
 the native unified-memory lane, where tiering needs far less work: models serve mostly in memory
 from the 121 GiB unified pool, with the 125B Flash-Next's file-mapped PLE table as the existing
-disk tier. GB10 native 125B bring-up validation is the strategy's SP-6; its test setup comes
-later.
+disk tier. The GB10 native 125B bring-up is the strategy's SP-6. It executed on 2026-11-04 and was
+revalidated at master `8d1703c6` on 2026-11-17. `twofour` (`apollo11@172.30.30.24`) is the native
+validation host; it holds a `dgx_spark` build tree and local artifact copies.
 
 The **27B class** (Qwen 3.5/3.6/3.8 27B only) is the fully-hot baseline: its in-memory
 capability on RTX 5090-class hardware — weights, KV, state slots, concurrency, CUDA Graph
@@ -160,7 +161,9 @@ decode, prefix reuse — must not regress, and it is the validation baseline for
 work. The **MoE class** (Qwen 3.6 35B-A3B fully hot today, Qwen 3.8 Flash-Next 125B-A6B, and
 future MoEs) is the tiering-aligned class. **Qwen 4.0/4.x** is the anticipated family:
 readiness is architectural (one shared core with family math modules, per the strategy's
-reframing); no speculative Qwen 4 code exists before the family is specified.
+reframing). An experimental `src/models/qwen4_exp` family exists at master; the registry selects
+it as `Qwen4ExpForCausalLM` / `qwen4_exp_text`, and it is an experiment rather than a declared
+product family.
 
 The ratified strategy is `docs/maintainer/2026-10-12-fork-strategy.md`. Its packages (tiering,
 the family convergence, EXL3/Trellis, telemetry, multi-GPU phase gates) execute with task-level
@@ -414,7 +417,9 @@ These are conventional project resources, not a checklist of resources every tas
 | conversion report | `out/qwen3_8_27b_exl3.ninfer.conversion.json` |
 | normal build | `build/` |
 | profiler output | `profiles/ncu/`, `profiles/nsys/`, `profiles/bench/` |
-| hardware/toolchain | RTX 5090 (32 GiB VRAM + 123 GiB host RAM — the local box, tiered lane), `sm_120a` (default); GB10 (Grace Blackwell), `sm_121a` (native lane); CUDA 13.4.92 |
+| hardware/toolchain | RTX 5090 (32 GiB VRAM + 123 GiB host RAM — the local box `grym0ss`, tiered lane), `sm_120a` (default); GB10 (Grace Blackwell), `sm_121a` (native lane) on `twofour`; CUDA 13.4.92 on the 5090 box, CUDA 13.0 and 13.4 on `twofour` |
+| GB10 native host | `apollo11@172.30.30.24` (`twofour`, hostname `aitopatom-0c82`); repo at `~/ninfer-gb10` with a `dgx_spark`/`sm_121a` Release build in `build/` |
+| GB10 artifacts | `~/models/qwen3_8_27b_v3-plain.ninfer`; `~/artifacts/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer` (multi-volume, 126,921,610,496 B); `~/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer` (multi-volume); test cache `~/.cache/ninfer/test-artifacts/` holds local copies, because the loader refuses NFS artifacts |
 
 Use the selected Python 3.11 interpreter explicitly. Do not install or upgrade dependencies unless
 the task requires it. Never select an artifact by glob, modification time, or an unqualified
@@ -423,7 +428,9 @@ do not download or regenerate them unless that work is in scope.
 - GPU work is single-instance. Never launch a second device-allocating run (real-artifact
   tests, serve batteries, sweeps) while one is in flight: the resident server fills the 32 GiB
   VRAM, and the box's full pool (VRAM + 123 GiB host RAM) fits one 73.7 GiB tiered 125B-class
-  load at a time. Wait for the running job to complete before starting the next.
+  load at a time. Wait for the running job to complete before starting the next. The same rule
+  applies on `twofour`: its 121 GiB unified pool holds one resident 125B-class load
+  (68–102 GiB GPU-side) at a time.
 
 ```bash
 PYTHON=python3

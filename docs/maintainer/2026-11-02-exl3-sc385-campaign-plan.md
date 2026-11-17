@@ -371,9 +371,10 @@ never a second device-allocating run while the pool holds the card.
 - **R5 — window availability.** Every long 5090 job has a GB10 fallback except P3
   (the battery defines the 5090 claim). If windows slip, P0→P1 ship first (the
   speculative route is the durable asset), P2/P3 follow.
-- **R6 — GB10 test setup maturity.** SP-6 bring-up is "test setup comes later"; if the
-  GB10 is not serving-ready for W2.3, the 5090 tiered lane is the flagged fallback
-  (experimental at 54 GB dense) or W2.3 waits.
+- **R6 — GB10 test setup maturity.** Resolved 2026-11-17: the GB10 (`twofour`) now holds a
+  native `dgx_spark` build at master `8d1703c6`, and the 125B artifact loads and serves locally
+  (the SP-6 revalidation in `docs/performance/qwen3.8-flash-next-125b-a6b.md`). GB10 windows for
+  W2.3 are available. The 5090 tiered lane stays the fallback.
 
 ## 8. Out of scope
 

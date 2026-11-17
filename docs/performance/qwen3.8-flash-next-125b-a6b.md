@@ -505,6 +505,73 @@ artifact does not promise identical timings. Raw reports for this run were not r
 `profiles/bench/` — the values above are transcribed from the run's JSONL, and that is a limitation
 of this record compared with the campaign points on this page.
 
+### Native master revalidation and the veloGB10 figures — 2026-11-17
+
+This record closes the two open questions of the 2026-11-10 smoke record. The node now holds a
+native `dgx_spark` build at current master, and the artifact is a local copy, so the engine's
+direct-I/O loader accepts it. The record also compares the engine's single-GB10 numbers with the
+published veloGB10 figures for the same model.
+
+#### Run record
+
+| item | value |
+|---|---|
+| date and node | 2026-11-17; `twofour` (`aitopatom-0c82`), GB10, `aarch64`, 20 Arm cores |
+| tested revision | master `8d1703c6` plus three local fixes required by the first native build: the two never-compiled `dgx_spark` launch files (`block_scaled/fp8` and `block_scaled/nvfp4`, stale kernel names) and a capture-safe device check in `src/models/qwen3_5/execution/gdn.cpp` (issue `ninfer-gb10-1k7`) |
+| build | `build/` configured `NINFER_TARGET=dgx_spark`, `CMAKE_CUDA_ARCHITECTURES=121a`, Release; CUDA 13.4; driver 580.178.04 |
+| artifact | `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer` and parts 1–3, local copies under `~/.cache/ninfer/test-artifacts/`, same 126,921,610,496 B set as the 2026-11-10 record |
+| CLI settings | `--max-context 4096 --max-tokens 512`; KV BF16 (default); CUDA Graphs on; one request at a time |
+| page faults | 40 major faults on a warm page cache; no cold-disk PLE page-ins |
+
+#### Measurements
+
+One prompt for each row. Prose prompt: "Summarize the difference between prefill and decode in one
+paragraph." Code prompt: "Write a C function that sorts an array of integers with insertion sort,
+then one that merges two sorted arrays. Include only code and short comments." Decode speed,
+acceptance rate and acceptance length are the CLI's own `summary` values. The 2026-11-10 record's
+traceability note about metric definitions applies here too.
+
+| Row | Prompt | Spec | Decode tok/s | Accepted tok/round | Rounds/s = decode ÷ accepted | ms/round = 1000 ÷ rounds/s |
+|---|---|---|---:|---:|---:|---:|
+| dense | prose | none | 34.8 | — | — | — |
+| MTP K=2 | prose | `--spec mtp --draft-tokens 2` | 49.0 | 2.19 (59.6%) | 22.4 | 44.7 |
+| MTP K=3 | code | `--spec mtp --draft-tokens 3` | 58.2 | 3.04 (67.9%) | 19.1 | 52.3 |
+| MTP K=3 | code | K=3 with `--proposal-head optimized` | 64.2 | 3.04 (67.9%) | 21.1 | 47.4 |
+
+Supporting facts: the dense run generated 403 tokens in 11.7 s of model time at 178.0 tok/s
+short-prompt prefill and held 68.6 GiB of GPU weights. The 27B `v3-plain` artifact on the same box
+decoded at 11.5 tok/s with 19.0 GiB of weights. The native test suite passed 233 of 237 tests on
+this build (issue `ninfer-gb10-iyp`).
+
+#### The veloGB10 figures, reconciled
+
+veloGB10 v0.7.9 (commit `778bf2b`) publishes 137 / 186 / 221 tok/s for Qwen3.8 Flash-Next 125B on
+one / two / four DGX Spark units (`QWEN_38_FLASH_NEXT_SETUP.md` §4). Three conditions sit behind
+those numbers:
+
+1. **The decode includes MTP with a pure-code workload.** The measurement is ANSI C sorting with
+   about 3.2K output tokens. The draft accepts 84% at an average of 5.7 tokens per round. The same
+   document reports about 73 tok/s for mixed code and prose at the same pack, so 137 is the
+   high-acceptance end of their range.
+2. **The pack is EXL3 at 3.05 bpw.** That stores about 47.7 GB of weights for this model
+   (125e9 × 3.05 ÷ 8). The NVFP4 artifact here holds 68.6 GiB (about 73.7 GB), roughly 1.5× more
+   bytes for the same weights. The per-token read ratio is close to this but not identical, because
+   MoE routing reads only the active experts.
+3. **TP=2 and TP=4 are two and four machines** joined over the network. This fork's contract is one
+   GPU, so only the TP=1 column compares.
+
+At one request per machine, the forward cadence is the same order on both engines. veloGB10 runs
+137 ÷ 5.7 = 24.0 rounds/s (its 7.5 ms per-token figure gives 5.7 ÷ 7.5 ms = 23.4 rounds/s). This
+engine runs 21.1 rounds/s at K=3 on code with the optimized proposal head, and 22.4 at K=2 on
+prose. The engines agree within about 10% on how fast one GB10 completes a decode round. The
+remaining difference in the headline number is the accepted tokens per round (5.7 against 3.04),
+which follows from draft depth, workload and the lighter pack, not from a faster round.
+
+A like-for-like claim needs the same pack format, the same prompt class and the same draft
+policy. This record does not make that claim. It establishes that the engine's per-round cadence
+on one GB10 is equivalent to veloGB10's, and it identifies acceptance depth and pack weight as the
+two levers behind the remaining gap.
+
 ### Results against DGPP, October 3
 
 Protocol: DGPP's `scripts/serve_load.py` with five prompt classes (prose, code, json, math, chat),

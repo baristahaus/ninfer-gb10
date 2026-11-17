@@ -115,7 +115,7 @@ void launch_vector(const Tensor& x, const CudaSwiGLUExperts& experts, const Expe
             static_cast<const __nv_bfloat16*>(x.data), experts.bank.gate_up, ids, subset.kind, mask,
             s.vector_activation);
     } else {
-        vector_gate<<<dim3(kIntermediate / 4, x.ne[1] * kTopK), 128, 0, stream>>>(
+        fp8_vector_gate<<<dim3(kIntermediate / 4, x.ne[1] * kTopK), 128, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data), experts.bank.gate_up, ids, subset.kind, mask,
             s.vector_activation);
     }
@@ -126,7 +126,7 @@ void launch_vector(const Tensor& x, const CudaSwiGLUExperts& experts, const Expe
                 s.vector_activation, experts.bank.down, ids, coefficients, subset.kind, mask,
                 output);
         } else {
-            vector_down<4><<<dim3(kHidden / 4, x.ne[1]), kTopK * 32, 0, stream>>>(
+            fp8_vector_down<4><<<dim3(kHidden / 4, x.ne[1]), kTopK * 32, 0, stream>>>(
                 s.vector_activation, experts.bank.down, ids, coefficients, subset.kind, mask,
                 output);
         }

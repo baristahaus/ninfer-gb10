@@ -201,12 +201,12 @@ void launch_vector(const Tensor& x, const CudaSwiGLUExperts& experts, const Expe
     const auto* ids          = static_cast<const int*>(routes.ids.data);
     const auto* mask         = static_cast<const int*>(subset.mask.data);
     const auto* coefficients = static_cast<const float*>(routes.coefficients.data);
-    vector_gate<<<dim3(kIntermediate / 4, x.ne[1] * kTopK), 128, 0, stream>>>(
+    nvfp4_vector_gate<<<dim3(kIntermediate / 4, x.ne[1] * kTopK), 128, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), experts.bank.gate_up, ids, subset.kind, mask,
         s.vector_activation);
     CUDA_CHECK(cudaGetLastError());
     const auto down = [&](auto output) {
-        vector_down<8, 2><<<dim3(kHidden / 8, x.ne[1]), 2 * 32, 0, stream>>>(
+        nvfp4_vector_down<8, 2><<<dim3(kHidden / 8, x.ne[1]), 2 * 32, 0, stream>>>(
             s.vector_activation, experts.bank.down, ids, coefficients, subset.kind, mask, output);
         CUDA_CHECK(cudaGetLastError());
     };

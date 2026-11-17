@@ -107,6 +107,14 @@ Run run_alone(const char* artifact, const std::string& prompt, unsigned outputs)
 std::pair<Run, Run> run_paired(const char* artifact, const std::string& short_prompt,
                                const std::string& long_text, const Options& shape) {
     ninfer::Engine engine(engine_options(artifact));
+    {
+        const auto& description = engine.description();
+        std::cerr << "resolved: max_concurrency=" << description.max_concurrency
+                  << " device_state_capacity=" << description.device_state_capacity
+                  << " kv_capacity=" << description.kv_capacity
+                  << " host_context_capacity_bytes=" << description.host_context_capacity_bytes
+                  << "\n";
+    }
     std::vector<ninfer::GenerationHandle> handles;
     handles.push_back(engine.submit(engine.prepare_tokens(engine.tokenize_text(short_prompt)),
                                     request_options(shape.long_outputs)));
@@ -172,8 +180,12 @@ int main() {
 
         // And the two requests really did share decode steps, so the comparison above was not
         // vacuous. decode_row_rounds counts the sum of the batch sizes of the decode rounds.
-        require(long_paired.decode_row_rounds > long_paired.decode_rounds,
+        if (long_paired.decode_row_rounds <= long_paired.decode_rounds) {
+            std::cerr << "paired decode_rounds=" << long_paired.decode_rounds
+                      << " decode_row_rounds=" << long_paired.decode_row_rounds << "\n";
+            throw std::runtime_error(
                 "the two requests never shared a decode step; the invariance claim is untested");
+        }
 
         std::cout << "ok: greedy text is independent of the decode-step neighbour ("
                   << long_paired.decode_rounds << " decode rounds, "

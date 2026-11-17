@@ -8,7 +8,6 @@ namespace {
 using Grouped = Q8A16GroupedSlicedKMmaSchedule<32, 4, 2, 1, 1, 6144, Cache::cg, Cache::ca, true>;
 using Mma     = Q8A16MmaSchedule<32, 32, 128, 16, 16, 2, 3>;
 
-
 void grouped(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     launch_q8_a16_grouped_sliced_k_mma<Grouped>(
         q8_linear_operands(x, weight),

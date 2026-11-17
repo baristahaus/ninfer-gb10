@@ -12,9 +12,9 @@
 
 namespace ninfer::ops::detail {
 namespace {
-constexpr int kRows          = 1024;
-constexpr int kHidden        = 2048;
-using PairOutput             = LinearBf16SegmentedOutput<kRows, kRows>;
+constexpr int kRows   = 1024;
+constexpr int kHidden = 2048;
+using PairOutput      = LinearBf16SegmentedOutput<kRows, kRows>;
 
 template <int TileCols, int KSplits, int NGroups, int MinBlocks>
 void launch_medium(const Tensor& x, const Weight& first_weight, const Weight&, Tensor& first_out,

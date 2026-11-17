@@ -122,15 +122,15 @@ std::pair<Run, Run> run_paired(const char* artifact, const std::string& short_pr
                                     request_options(shape.short_outputs)));
     Run first;
     Run second;
-    first.tokens            = handles[0].wait().generated_token_ids;
-    second.tokens           = handles[1].wait().generated_token_ids;
-    const auto stats        = engine.runtime_stats();
+    first.tokens     = handles[0].wait().generated_token_ids;
+    second.tokens    = handles[1].wait().generated_token_ids;
+    const auto stats = engine.runtime_stats();
     // The counters are engine-wide: both runs of this engine decoded into the same step schedule,
     // so the non-vacuity check below reads the same numbers from either run. They must be assigned
     // to BOTH — the check reads the long prompt's run, and a default-constructed Run reports zeros
     // that would fail the check on a healthy engine (the misdiagnosis behind ninfer-gb10-e2f).
-    first.decode_rounds     = stats.decode_rounds;
-    first.decode_row_rounds = stats.decode_row_rounds;
+    first.decode_rounds      = stats.decode_rounds;
+    first.decode_row_rounds  = stats.decode_row_rounds;
     second.decode_rounds     = stats.decode_rounds;
     second.decode_row_rounds = stats.decode_row_rounds;
     require(first.tokens.size() == shape.long_outputs,

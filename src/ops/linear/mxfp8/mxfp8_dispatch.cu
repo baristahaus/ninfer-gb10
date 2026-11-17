@@ -12,7 +12,7 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Mxfp8MmaSchedule  = Mxfp8A16MmaSchedule<64, 64, 64, 16, 16, 2, 1, Cache::ca, Cache::ca>;
+using Mxfp8MmaSchedule = Mxfp8A16MmaSchedule<64, 64, 64, 16, 16, 2, 1, Cache::ca, Cache::ca>;
 
 void validate_mxfp8_weight(const Weight& weight, const char* label) {
     if (weight.qtype != QType::MXFP8 || weight.layout != QuantLayout::DenseBlockScaleK32Mxfp8) {

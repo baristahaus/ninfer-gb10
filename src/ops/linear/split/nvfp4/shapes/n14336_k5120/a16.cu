@@ -8,13 +8,11 @@
 #include "ops/linear/kernels/nvfp4/nvfp4_instances.cuh"
 
 namespace ninfer::ops::detail::linear_split::nvfp4_n14336_k5120 {
-namespace {
-
-} // namespace
+namespace {} // namespace
 
 void launch_a16(const Tensor& x, const Weight& weight, std::span<const Tensor> outputs,
                 cudaStream_t stream) {
-    const int tokens = x.ne[1];
+    const int tokens  = x.ne[1];
     const auto p      = nvfp4_a16_operands(x, weight);
     const auto output = LinearBf16SegmentedOutput<6144, 1024, 6144, 1024>{
         static_cast<__nv_bfloat16*>(outputs[0].data), static_cast<__nv_bfloat16*>(outputs[1].data),

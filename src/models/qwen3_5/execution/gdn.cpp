@@ -59,7 +59,17 @@ void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tenso
         int current           = -1;
         CUDA_CHECK(cudaGetDevice(&current));
         int stream_device = -1;
-        CUDA_CHECK(cudaStreamGetDevice(execution.stream(), &stream_device));
+        cudaStreamCaptureStatus capture_status{};
+        CUDA_CHECK(cudaStreamIsCapturing(execution.stream(), &capture_status));
+        if (capture_status == cudaStreamCaptureStatusNone) {
+            CUDA_CHECK(cudaStreamGetDevice(execution.stream(), &stream_device));
+        } else {
+            // cudaStreamGetDevice is not permitted while the stream is capturing on the GB10
+            // driver (cudaErrorStreamCaptureUnsupported) and the probe itself invalidated the
+            // capture. A recorded launch replays on the capture device, so during capture the
+            // thread-device check above is the guard that applies; skip the stream probe.
+            stream_device = expected.index();
+        }
         if (expected.type() == DeviceType::CUDA &&
             (current != expected.index() || stream_device != expected.index())) {
             throw std::runtime_error(

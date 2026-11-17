@@ -13,9 +13,6 @@ using C4   = Bf16A16SimtSchedule<4, 1, 2, 8, 1, 4, Bf16SimtActivationAccess::War
 } // namespace
 
 Bf16Launch select_bf16_n5120_k6144(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Bf16ScheduleInstance<Gemv, 6144>>;
-    if (tokens <= 2) return launch_bf16_simt<Bf16ScheduleInstance<C2, 6144, 2>>;
-    if (tokens <= 4) return launch_bf16_simt<Bf16ScheduleInstance<C4, 6144, 4>>;
     if (tokens <= 32)
         return launch_bf16_sliced_k_mma<Bf16ScheduleInstance<Bf16A16SlicedR32T16W4, 6144>>;
     if (tokens <= 64) return launch_bf16_mma<Bf16ScheduleInstance<Bf16A16MmaR32T32K192S2, 6144>>;

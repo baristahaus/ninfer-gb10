@@ -26,7 +26,6 @@ using S7 = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3>, 
 
 template <class Routes>
 auto select_route(int tokens, const Routes& routes) {
-    if (tokens <= 1) return routes.template gemv<S0>();
     if (tokens <= 16) return routes.template sliced<S1>();
     if (tokens <= 64) return routes.template mma<S2>();
     if (tokens <= 128) return routes.template mma<S3>();

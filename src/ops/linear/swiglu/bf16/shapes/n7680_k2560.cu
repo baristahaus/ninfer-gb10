@@ -21,11 +21,7 @@ template <class Product>
 void launch(const Tensor& x, const Weight& w, Tensor& y, Product product, cudaStream_t stream) {
     const auto p = bf16_a16_operands(x, w);
     const LinearBf16Output out{static_cast<__nv_bfloat16*>(y.data), kRows};
-    if (p.tokens == 1) {
-        swiglu_bf16_paired_gemv<kK, kRows>
-            <<<kRows / 4, 128, 0, stream>>>(p.x, p.weight, out, product);
-        CUDA_CHECK(cudaGetLastError());
-    } else if (p.tokens <= 8) {
+    if (p.tokens <= 8) {
         using S = SwiGluBf16SlicedSchedule<
             Bf16ScheduleInstance<Bf16A16SlicedKMmaSchedule<16, 8, 8, 64, 2>, kK>, kRows>;
         launch_bf16_a16_sliced_k_mma<S>(p, out, SwiGluBf16FragmentEpilogue<Product>{product},

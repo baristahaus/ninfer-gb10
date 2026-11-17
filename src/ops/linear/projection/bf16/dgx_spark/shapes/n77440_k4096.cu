@@ -53,7 +53,6 @@ void streaming(const Tensor& x, const Weight& w, Tensor& y, cudaStream_t stream)
 } // namespace
 
 Bf16Launch select_bf16_n77440_k4096(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Gemv>;
     if (tokens <= 8) return launch_bf16_simt<Small>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Sliced>;
     if (tokens <= 128) return launch_bf16_mma<Hot256>;

@@ -18,7 +18,6 @@ using Bulk  = Static<Bf16A16TmaMmaSchedule<128, 128, 64, 32, 32, 3, 1>>;
 } // namespace
 
 Bf16Launch select_bf16_n4096_k1024(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Gemv>;
     if (tokens <= 8) return launch_bf16_sliced_k_mma<Short>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Small>;
     if (tokens <= 128) return launch_bf16_mma<Medium>;

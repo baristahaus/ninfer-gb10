@@ -3,10 +3,6 @@
 namespace ninfer::ops::detail {
 Q5Launch select_q5_n5120_k6144(std::int32_t tokens) {
     // Selected with complete-Op cold CUDA Graph measurements on RTX 5090.
-    if (tokens <= 1) return launch_q5_a16_direct_r1_t1_w4_k6144;
-    if (tokens <= 2) return launch_q5_a16_direct_r1_t2_w2_k6144;
-    if (tokens <= 3) return launch_q5_a16_direct_r1_t3_w2_k6144;
-    if (tokens <= 4) return launch_q5_a16_sliced_r16_t8_capacity4;
     if (tokens <= 8) return launch_q5_a16_sliced_r16_t8_w4_s2;
     if (tokens <= 16) return launch_q5_a16_sliced_r16_t16_w4_s2;
     if (tokens <= 32) return launch_q5_a16_sliced_r32_t32_w4_s2;

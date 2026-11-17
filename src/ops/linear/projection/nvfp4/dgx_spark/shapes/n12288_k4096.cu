@@ -16,8 +16,6 @@ using T64R128 = Nvfp4A4MmaSchedule<64, 128, 256, 4, 2, 2, 1>;
 using T128R128Resident = Nvfp4A4MmaSchedule<128, 128, 256, 4, 2, 1, 2>;
 
 Nvfp4Launch select_a16(int tokens) {
-    if (tokens == 1) return nvfp4_linear_a16_gemv<Geometry, Gemv>;
-    if (tokens <= 2) return nvfp4_linear_a16_simt<Geometry, 2, C2, true>;
     if (tokens <= 16) return nvfp4_linear_a16_sliced_k<Geometry, Nvfp4SlicedInstance<16, 8, 2>>;
     if (tokens <= 24) return nvfp4_linear_a16_sliced_k<Geometry, Nvfp4SlicedInstance<32, 4, 1>>;
     if (tokens <= 32)

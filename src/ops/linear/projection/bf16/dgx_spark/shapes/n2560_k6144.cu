@@ -37,7 +37,6 @@ void launch_vector_projection(const Tensor& x, const Weight& w, Tensor& out, cud
 } // namespace
 
 Bf16Launch select_bf16_n2560_k6144(std::int32_t tokens) {
-    if (tokens <= 1) return launch_bf16_gemv<Gemv>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Sliced>;
     if (tokens <= 96) return launch_bf16_mma<HotMma>;
     if (tokens <= 128) return launch_bf16_tma_mma<HotTma>;

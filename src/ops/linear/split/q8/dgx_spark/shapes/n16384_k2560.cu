@@ -30,7 +30,6 @@ struct Routes : Q8SplitRoutes<Output> {
 
 template <class Routes>
 auto select_route(int tokens, const Routes& routes) {
-    if (tokens <= 1) return routes.template gemv<Gemv>();
     if (tokens <= 8) return routes.template sliced<Sliced8>();
     if (tokens <= 16) return routes.template grouped<Grouped16>();
     if (tokens <= 24) return routes.template sliced<Sliced24>();

@@ -38,7 +38,6 @@ void launch_split(const Tensor& x, Weights weights, std::span<const Tensor> out,
                          static_cast<__nv_bfloat16*>(out[2].data)}};
     const Routes routes{{{q8_linear_operands(x, weights.first), output, stream}}};
     const int tokens = x.ne[1];
-    if (tokens <= 4) return routes.simt<Simt4>();
     if (tokens <= 8) return routes.simt<Simt8>();
     if (tokens <= 32) return routes.sliced<SplitN12288K4096<Small32>>();
     if (tokens <= 40) return routes.sliced<SplitN12288K4096<Small40>>();

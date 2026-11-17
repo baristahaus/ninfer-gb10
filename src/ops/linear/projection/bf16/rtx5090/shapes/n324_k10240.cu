@@ -24,7 +24,6 @@ using S6 = Bf16RowTailSchedule<
 } // namespace
 
 Bf16Launch select_bf16_n324_k10240(std::int32_t tokens) {
-    if (tokens <= 1) return launch_bf16_gemv<S0>;
     if (tokens <= 8) return launch_bf16_simt<S1>;
     if (tokens <= 48) return launch_bf16_sliced_k_mma<S2>;
     if (tokens <= 96) return launch_bf16_sliced_k_mma<S3>;

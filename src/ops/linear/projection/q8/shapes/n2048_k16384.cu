@@ -33,7 +33,6 @@ void launch_grouped(const Tensor& x, const Weight& weight, Tensor& out, cudaStre
 } // namespace
 
 Q8Launch select_q8_n2048_k16384(std::int32_t tokens) {
-    if (tokens == 1) return launch_q8_a16_gemv_r4_w1_k16384;
     if (tokens <= 8) return launch_q8_a16_sliced<Geometry, 8, C8>;
     if (tokens <= 16) return launch_q8_a16_sliced<Geometry, 16, C16>;
     if (tokens <= 24) return launch_q8_a16_sliced<Geometry, 24, C24>;

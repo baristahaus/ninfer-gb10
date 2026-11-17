@@ -59,7 +59,6 @@ void sliced(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t str
 } // namespace
 
 Q8Launch select_q8_n6144_k2560(std::int32_t tokens) {
-    if (tokens <= 1) return gemv<S0>;
     if (tokens <= 16) return sliced<S1>;
     if (tokens <= 24) return sliced<S2>;
     if (tokens <= 32) return grouped<S3>;

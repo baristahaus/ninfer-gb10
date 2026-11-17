@@ -31,9 +31,6 @@ using Rows128Two =
 } // namespace
 
 Bf16Launch select_bf16_n324_k10240(std::int32_t tokens) {
-    if (tokens <= 1) return launch_bf16_gemv<Gemv>;
-    if (tokens <= 2) return launch_bf16_simt<SimtTwo>;
-    if (tokens <= 4) return launch_bf16_simt<Simt>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Hot8>;
     if (tokens <= 32) return launch_bf16_sliced_k_mma<Hot16>;
     if (tokens <= 64) return launch_bf16_sliced_k_mma<Hot32>;

@@ -9,44 +9,11 @@
 namespace ninfer::ops::detail::linear_split::nvfp4_n16384_k5120 {
 namespace {
 
-void launch_decode(const Tensor& x, const Weight& weight, std::span<const Tensor> outputs,
-                   cudaStream_t stream) {
-    using Geometry = Nvfp4N16384K5120;
-    using Schedule =
-        Nvfp4A16GemvSchedule<8, 2, 16, 4, Nvfp4ScaleAccess::StagedRaw, Nvfp4CodeCache::Default, 2>;
-
-    launch_nvfp4_a16_gemv<Nvfp4ScheduleInstance<Schedule, Geometry::kInputRows>>(
-        nvfp4_a16_operands(x, weight),
-        LinearBf16SegmentedOutput<10240, 6144>{static_cast<__nv_bfloat16*>(outputs[0].data),
-                                               static_cast<__nv_bfloat16*>(outputs[1].data)},
-        LinearIdentityEpilogue{}, stream);
-}
-
-void launch_small(const Tensor& x, const Weight& weight, std::span<const Tensor> outputs,
-                  cudaStream_t stream) {
-    using Schedule = Nvfp4A16SimtSchedule<4, 1, 2, 16, 2, 1, Nvfp4SimtActivationAccess::SharedPhase,
-                                          Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                          Nvfp4SimtBlockOrder::RowsContiguous, 1>;
-    launch_nvfp4_a16_simt<Nvfp4ScheduleInstance<Schedule, 5120, 2, true>>(
-        nvfp4_a16_operands(x, weight),
-        LinearBf16SegmentedOutput<10240, 6144>{static_cast<__nv_bfloat16*>(outputs[0].data),
-                                               static_cast<__nv_bfloat16*>(outputs[1].data)},
-        LinearIdentityEpilogue{}, stream);
-}
-
 } // namespace
 
 void launch_a16(const Tensor& x, const Weight& weight, std::span<const Tensor> outputs,
                 cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens == 1) {
-        launch_decode(x, weight, outputs, stream);
-        return;
-    }
-    if (tokens <= 2) {
-        launch_small(x, weight, outputs, stream);
-        return;
-    }
     const auto p      = nvfp4_a16_operands(x, weight);
     const auto output = LinearBf16SegmentedOutput<10240, 6144>{
         static_cast<__nv_bfloat16*>(outputs[0].data), static_cast<__nv_bfloat16*>(outputs[1].data)};

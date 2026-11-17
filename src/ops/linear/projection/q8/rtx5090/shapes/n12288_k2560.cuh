@@ -28,7 +28,6 @@ template <class Routes>
 auto select(int tokens, const Routes& routes) {
     // Full token tiles select different kernels from tails; retain their measured winners.
     // The 34-column single-stage sliced schedule also has a repeatable advantage.
-    if (tokens == 1) return routes.template gemv<Gemv>();
     if (tokens <= 16) return routes.template sliced<Small>();
     if (tokens == 32) return routes.template grouped<Group32>();
     if (tokens < 32) return routes.template mma<Medium>();

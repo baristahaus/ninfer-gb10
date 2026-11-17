@@ -31,7 +31,6 @@ void launch_split(const Tensor& x, Weights weights, std::span<const Tensor> out,
                          static_cast<__nv_bfloat16*>(out[2].data)}};
     const Bf16SplitRoutes<Output> routes{bf16_a16_operands(x, weights.first), output, stream};
     const int tokens = x.ne[1];
-    if (tokens == 1) return routes.gemv<Gemv>();
     if (tokens <= 16) return routes.sliced<Short>();
     if (tokens <= 32) return routes.sliced<Hot>();
     if (tokens <= 64) return routes.sliced<Medium>();

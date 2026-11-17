@@ -28,7 +28,6 @@ using MidBulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 128, 128, 2, 4, 
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens == 1) return fp8_linear_a16_gemv<Geometry, Gemv>(x, weight, out, stream);
     // 1024/16 = 64 CTAs at the 16-row sliced-K tile; eight K-warps each, so the narrow shape still
     // reaches three warps per SM across the hot interval instead of one and a half.
     if (tokens <= 16)

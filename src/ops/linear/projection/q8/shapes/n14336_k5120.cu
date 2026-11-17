@@ -27,7 +27,6 @@ using C56 = Q8A16SlicedKMmaSchedule<56, 4, 1, 3, Access::Shared, Cache::ca, Cach
 } // namespace
 
 Q8Launch select_q8_n14336_k5120(std::int32_t tokens) {
-    if (tokens <= 4) return launch_q8_a16_sliced<Geometry, 4, C4>;
     if (tokens <= 8) return launch_q8_a16_sliced<Geometry, 8, C8>;
     if (tokens <= 16) return launch_q8_a16_sliced<Geometry, 16, C16>;
     if (tokens <= 24) return launch_q8_a16_sliced<Geometry, 24, C24>;

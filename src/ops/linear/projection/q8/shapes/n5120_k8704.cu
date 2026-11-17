@@ -37,7 +37,6 @@ using C64 =
 } // namespace
 
 Q8Launch select_q8_n5120_k8704(std::int32_t tokens) {
-    if (tokens <= 4) return launch_q8_a16_sliced<Geometry, 4, C4>;
     if (tokens <= 8) return launch_q8_a16_sliced<Geometry, 8, C8>;
     if (tokens <= 16) return launch_q8_a16_sliced<Geometry, 16, C16>;
     if (tokens <= 24) return launch_q8_a16_sliced<Geometry, 24, C24>;

@@ -27,7 +27,6 @@ void warp_store(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stre
 } // namespace
 
 Bf16Launch select_bf16_n640_k2560(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Vector>;
     if (tokens <= 8) return launch_bf16_sliced_k_mma<Sliced<8>>;
     if (tokens <= 32) return launch_bf16_sliced_k_mma<Sliced<16>>;
     if (tokens <= 64) return launch_bf16_sliced_k_mma<Sliced<32>>;

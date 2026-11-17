@@ -18,7 +18,7 @@ using Tiny8 = Bf16VisionFc2Schedule<
     Bf16KTailSchedule<Bf16ScheduleInstance<
         Bf16A16SimtSchedule<4, 1, 2, 8, 4, 2, Bf16SimtActivationAccess::WarpPacked,
                             Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 1, 2, 8>,
-        4304, 8, true>>,
+        4304, 8>>,
     21>;
 using Slice = Fc2<Bf16A16SlicedKMmaSchedule<16, 8, 4, 64, 2>, 22>;
 using Small = Fc2<Bf16A16MmaSchedule<32, 16, 128, 16, 8, 2, 2, Cache::cg, Cache::cg,
@@ -56,7 +56,6 @@ void launch_warp_projection(const Tensor& x, const Weight& w, Tensor& out, cudaS
 Bf16Launch select_bf16_n1152_k4304(std::int32_t tokens) {
     if (tokens > 131072 || tokens % 4 != 0)
         throw std::invalid_argument("bf16 linear: P must be a multiple of 4 in [4,131072]");
-    if (tokens <= 4) return launch_bf16_simt<Tiny4>;
     if (tokens <= 8) return launch_bf16_simt<Tiny8>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Slice>;
     if (tokens <= 80) return launch_bf16_mma<Small>;

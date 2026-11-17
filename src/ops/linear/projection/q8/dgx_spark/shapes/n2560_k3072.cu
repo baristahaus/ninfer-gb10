@@ -54,7 +54,6 @@ void grouped(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t st
 } // namespace
 
 Q8Launch select_q8_n2560_k3072(std::int32_t tokens) {
-    if (tokens == 1) return gemv<Gemv>;
     if (tokens <= 8) return sliced<Small8>;
     if (tokens <= 16) return sliced<Small16>;
     if (tokens <= 24) return sliced<Small24>;

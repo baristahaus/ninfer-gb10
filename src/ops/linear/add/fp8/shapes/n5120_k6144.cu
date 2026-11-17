@@ -6,24 +6,6 @@ template <class S, int T = 0, bool Exact = false>
 using Instance = Fp8ScheduleInstance<S, 6144, T, Exact>;
 
 LinearAddLaunch select_a16(int tokens) {
-    if (tokens == 1)
-        return launch_fp8_add_gemv<
-            Instance<Fp8A16GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>>>;
-    if (tokens == 2)
-        return launch_fp8_add_simt<Instance<
-            Fp8A16SimtSchedule<8, 1, 16, 2, 1, Fp8SimtActivationAccess::TokenPacked,
-                               Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>,
-            2, true>>;
-    if (tokens == 3)
-        return launch_fp8_add_simt<Instance<
-            Fp8A16SimtSchedule<8, 1, 16, 3, 1, Fp8SimtActivationAccess::TokenPacked,
-                               Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>,
-            3, true>>;
-    if (tokens == 4)
-        return launch_fp8_add_simt<Instance<
-            Fp8A16SimtSchedule<8, 1, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
-                               Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>,
-            4, true>>;
     if (tokens <= 16) return launch_fp8_add_sliced_k_mma<Instance<Fp8SlicedInstance<16, 8, 2>>>;
     if (tokens <= 32) return launch_fp8_add_sliced_k_mma<Instance<Fp8SlicedInstance<16, 4, 2>>>;
     if (tokens <= 64) return launch_fp8_add_sliced_k_mma<Instance<Fp8SlicedInstance<32, 4, 1>>>;

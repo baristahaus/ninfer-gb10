@@ -34,12 +34,6 @@ void launch_dense_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaSt
     const auto operands        = fp8_a16_operands(x, weight);
     const LinearBf16Output output{static_cast<__nv_bfloat16*>(out.data), weight.n};
     const int tokens = x.ne[1];
-    if (tokens == 1) {
-        // Master gemv semantics: the predicated tail phase covers K extents that are whole lane
-        // packs but not whole warp phases (K=320); for phase-aligned K the tail is a no-op.
-        return launch_fp8_a16_gemv_tail<Fp8ScheduleInstance<GemvSchedule, K>>(
-            operands, output, LinearIdentityEpilogue{}, stream);
-    }
     if (tokens <= 8) {
         return launch_fp8_a16_sliced_k_mma<
             Fp8ScheduleInstance<Fp8SlicedInstance<8, kWideWarps, 2>, K>>(
@@ -111,12 +105,6 @@ struct Fp8FlashNextVocabularyRoute {
 
     static void launch(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
         const int tokens = x.ne[1];
-        if (tokens == 1) {
-            return launch_fp8_a16_gemv<Fp8ScheduleInstance<GemvSchedule, K>>(
-                fp8_a16_operands(x, weight),
-                LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), weight.n},
-                LinearIdentityEpilogue{}, stream);
-        }
         if (tokens < 42) return sliced(x, weight, out, stream);
         if (tokens <= Tail64::kBlockTokens) return gemm<Tail64>(x, weight, out, stream);
         if (tokens <= Tail96::kBlockTokens) return gemm<Tail96>(x, weight, out, stream);

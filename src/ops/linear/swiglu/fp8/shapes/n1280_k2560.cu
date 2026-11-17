@@ -52,11 +52,6 @@ void fp8_linear_swiglu_flash_next_launch(const Tensor& x, const Weight& weight, 
     const auto p      = fp8_a16_operands(x, weight);
     const auto output = LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), kIntermediate};
     const int tokens  = x.ne[1];
-    if (tokens == 1) {
-        static_assert(Gemv::kRowsPerWarp == 2);
-        return launch_fp8_a16_gemv_tail<Fp8ScheduleInstance<Gemv, kInputRows>>(
-            p, output, Fp8SwiGluEpilogue{}, stream, Fp8SwiGluRows<1, kIntermediate>{});
-    }
     const auto sliced = [&]<int T, int W, int Stages>() {
         using S = Fp8ScheduleInstance<Fp8SlicedInstance<T, W, Stages>, kInputRows>;
         launch_fp8_a16_sliced_k_mma<S>(p, output, Fp8SwiGluEpilogue{}, stream,

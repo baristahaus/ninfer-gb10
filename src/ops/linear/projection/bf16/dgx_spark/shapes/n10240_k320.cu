@@ -46,7 +46,6 @@ void launch_hot_warp(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t
 } // namespace
 
 Bf16Launch select_bf16_n10240_k320(std::int32_t tokens) {
-    if (tokens <= 1) return launch_bf16_gemv<S0>;
     if (tokens <= 16) return launch_bf16_mma<S1>;
     if (tokens <= 48) return launch_bf16_mma<S2>;
     if (tokens <= 64) return launch_hot_warp<S3>;

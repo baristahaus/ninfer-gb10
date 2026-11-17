@@ -26,7 +26,6 @@ using Tall = Schedule<Bf16A16TmaMmaSchedule<192, 128, 64, 64, 32, 2>>;
 
 template <class Output>
 void select_route(int tokens, const Bf16SplitRoutes<Output>& routes) {
-    if (tokens == 1) return routes.template gemv<Vector>();
     if (tokens <= 8) return routes.template sliced<Sliced>();
     if (tokens <= 64) return routes.template mma<Small<3>>();
     if (tokens <= 128) return routes.template mma<Small<2>>();

@@ -6,9 +6,6 @@ template <class S, int T = 0, bool Exact = false>
 using Instance = Fp8ScheduleInstance<S, 17408, T, Exact>;
 
 LinearAddLaunch select_a16(int tokens) {
-    if (tokens == 1)
-        return launch_fp8_add_gemv<
-            Instance<Fp8A16GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>>>;
     if (tokens <= 8) return launch_fp8_add_sliced_k_mma<Instance<Fp8SlicedInstance<8, 8, 2>>>;
     if (tokens <= 16) return launch_fp8_add_sliced_k_mma<Instance<Fp8SlicedInstance<16, 8, 2>>>;
     if (tokens <= 32) return launch_fp8_add_sliced_k_mma<Instance<Fp8SlicedInstance<32, 8, 1>>>;

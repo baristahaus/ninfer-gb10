@@ -25,7 +25,6 @@ using Large = Bf16ScheduleInstance<Bf16A16SlicedKMmaSchedule<16, 32, 8, 64, 2>, 
 } // namespace
 
 Bf16Launch select_bf16_n48_k2560(std::int32_t tokens) {
-    if (tokens <= 1) return launch_bf16_gemv<S0>;
     if (tokens <= 8) return launch_bf16_simt<S1>;
     if (tokens <= 12) return launch_bf16_simt<S2>;
     if (tokens <= 16) return launch_bf16_simt<S3>;

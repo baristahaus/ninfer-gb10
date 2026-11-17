@@ -52,8 +52,6 @@ LinearAddLaunch select_q4_linear_add(std::int32_t rows, std::int32_t k, std::int
     if (rows != 5120 || k != 6144 || tokens <= 0) {
         throw std::invalid_argument("q4 linear_add: unsupported shape or token extent");
     }
-    if (tokens == 1) return launch_gemv<GemvR1W8>;
-    if (tokens <= 4) return launch_sliced<4>;
     if (tokens <= 8) return launch_sliced<8>;
     if (tokens <= 16) return launch_sliced<16>;
     if (tokens <= 24) return launch_sliced<24>;

@@ -19,14 +19,6 @@ void launch_wide_tail(const Tensor& x, const Weight& w, Tensor& residual, cudaSt
 } // namespace
 
 LinearAddLaunch select_q5_linear_add_n5120_k17408(std::int32_t tokens) {
-    if (tokens == 1)
-        return launch_q5_add_simt<Q5A16DirectSimtSchedule<1, 1, 2, 8, 16, 17408, true>>;
-    if (tokens == 2)
-        return launch_q5_add_simt<Q5A16DirectSimtSchedule<1, 2, 2, 8, 16, 17408, true>>;
-    if (tokens == 3)
-        return launch_q5_add_simt<Q5A16DirectSimtSchedule<1, 3, 2, 8, 16, 17408, true>>;
-    if (tokens == 4)
-        return launch_q5_add_simt<Q5A16DirectSimtSchedule<1, 4, 2, 8, 16, 17408, true>>;
     if (tokens <= 8) return launch_q5_add_sliced<q5_instances::SlicedR16T8W4S2>;
     if (tokens <= 16) return launch_q5_add_sliced<q5_instances::SlicedR16T16W4S2>;
     if (tokens <= 24) return launch_q5_add_sliced<q5_instances::SlicedR16T24W4S2>;

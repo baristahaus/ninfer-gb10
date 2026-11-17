@@ -59,10 +59,6 @@ void launch_vector_projection(const Tensor& x, const Weight& w, Tensor& out, cud
 
 Bf16Launch select_bf16_n4608_k4608(std::int32_t tokens) {
     if (tokens > 32768) throw std::invalid_argument("bf16 linear: V must be in [1,32768]");
-    if (tokens <= 1) return launch_bf16_gemv<S0>;
-    if (tokens <= 2) return launch_bf16_simt<S1>;
-    if (tokens <= 3) return launch_bf16_sliced_k_mma<S2>;
-    if (tokens <= 4) return launch_bf16_sliced_k_mma<S3>;
     if (tokens <= 8) return launch_bf16_sliced_k_mma<S4>;
     if (tokens <= 16) return launch_bf16_mma<Small>;
     if (tokens <= 32) return launch_bf16_mma<S5>;

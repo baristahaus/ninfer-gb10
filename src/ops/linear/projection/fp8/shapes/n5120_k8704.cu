@@ -25,7 +25,6 @@ using Bulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens == 1) return fp8_linear_a16_gemv<Geometry, Gemv>(x, weight, out, stream);
     if (tokens <= 8)
         return fp8_linear_a16_sliced_k<Geometry, Fp8SlicedInstance<8, 8, 2>>(x, weight, out,
                                                                              stream);

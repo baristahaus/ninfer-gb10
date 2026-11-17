@@ -26,7 +26,6 @@ using Tma64 = Static<Bf16A16TmaMmaSchedule<48, 64, 64, 16, 32, 2, 2, Bf16MmaRast
 } // namespace
 
 Bf16Launch select_bf16_n288_k4096(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Gemv>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Short>;
     if (tokens <= 32) return launch_bf16_sliced_k_mma<Hot>;
     if (tokens <= 40) return launch_bf16_sliced_k_mma<Transition>;

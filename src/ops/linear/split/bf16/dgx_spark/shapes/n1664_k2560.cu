@@ -35,7 +35,6 @@ using Bulk192 = Bf16KvIndexSplitSchedule<Bf16ScheduleInstance<
 
 template <class Routes>
 auto select_route(std::int32_t tokens, const Routes& routes) {
-    if (tokens == 1) return routes.template gemv<Gemv>();
     if (tokens <= 32) return routes.template mma<Hot32<3>>();
     if (tokens <= 64) return routes.template mma<Hot32<2>>();
     if (tokens <= 96) return routes.template mma<Hot32<3>>();

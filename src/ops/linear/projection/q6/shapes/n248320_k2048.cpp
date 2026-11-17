@@ -4,7 +4,6 @@ namespace ninfer::ops::detail {
 
 Q6Launch select_q6_n248320_k2048(std::int32_t tokens) {
     // Capacity routes come from complete-Op cold Graph comparisons on RTX 5090.
-    if (tokens <= 1) return launch_q6_a16_gemv_r4_w2_g16;
     if (tokens <= 16) return launch_q6_a16_sliced_r32_t16_w4_s2;
     if (tokens <= 32) return launch_q6_a16_sliced_r32_t32_w4_s1;
     if (tokens <= 40) return launch_q6_a16_mma_r64_t40_k128;

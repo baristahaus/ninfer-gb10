@@ -22,7 +22,6 @@ using Streaming = Static<Bf16A16TmaMmaSchedule<128, 128, 64, 32, 32, 2, 1, Bf16M
 } // namespace
 
 Bf16Launch select_bf16_n2048_k4096(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Gemv>;
     if (tokens <= 8) return launch_bf16_sliced_k_mma<Short>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Small>;
     if (tokens <= 32) return launch_bf16_mma<Narrow>;

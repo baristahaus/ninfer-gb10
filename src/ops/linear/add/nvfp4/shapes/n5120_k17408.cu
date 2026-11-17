@@ -6,33 +6,6 @@ template <class S, int T = 0, bool Exact = false>
 using Instance = Nvfp4ScheduleInstance<S, 17408, T, Exact>;
 
 LinearAddLaunch select_a16(int tokens) {
-    if (tokens == 1)
-        return launch_nvfp4_add_gemv<Instance<Nvfp4A16GemvSchedule<
-            8, 2, 16, 4, Nvfp4ScaleAccess::StagedRaw, Nvfp4CodeCache::Default, 2>>>;
-    if (tokens == 2)
-        return launch_nvfp4_add_simt<
-            Instance<Nvfp4A16SimtSchedule<4, 1, 2, 16, 2, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                          Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                          Nvfp4SimtBlockOrder::RowsContiguous, 1>,
-                     2, true>>;
-    if (tokens == 3)
-        return launch_nvfp4_add_simt<
-            Instance<Nvfp4A16SimtSchedule<4, 1, 2, 16, 3, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                          Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                          Nvfp4SimtBlockOrder::RowsContiguous, 1>,
-                     3, true>>;
-    if (tokens == 4)
-        return launch_nvfp4_add_simt<
-            Instance<Nvfp4A16SimtSchedule<4, 1, 2, 16, 4, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                          Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                          Nvfp4SimtBlockOrder::RowsContiguous, 1>,
-                     4, true>>;
-    if (tokens == 5)
-        return launch_nvfp4_add_simt<
-            Instance<Nvfp4A16SimtSchedule<4, 1, 2, 16, 5, 1, Nvfp4SimtActivationAccess::TokenPacked,
-                                          Nvfp4ScaleAccess::Direct, Nvfp4CodeCache::Default, 1,
-                                          Nvfp4SimtBlockOrder::RowsContiguous, 1>,
-                     5, true>>;
     if (tokens <= 8) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<8, 4, 2>>>;
     if (tokens <= 16) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<16, 4, 2>>>;
     if (tokens <= 24) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<32, 4, 2>>>;

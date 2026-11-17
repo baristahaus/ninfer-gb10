@@ -70,7 +70,6 @@ void mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream
 } // namespace
 
 Q8Launch select_q8_n12288_k2560(std::int32_t tokens) {
-    if (tokens == 1) return gemv<Gemv>;
     if (tokens <= 16) return sliced<Small>;
     if (tokens == 32) return grouped<Group32>;
     if (tokens < 32) return mma<Medium>;

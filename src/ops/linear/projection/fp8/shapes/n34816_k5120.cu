@@ -13,7 +13,6 @@ using Bulk       = Fp8A8TmaSplitKSchedule<Tma128x256, 170, 4, 8>;
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens <= 4) return fp8_linear_a16_simt<Geometry, 4, C4>(x, weight, out, stream);
     if (tokens <= 8)
         return fp8_linear_a16_sliced_k<Geometry, Fp8SlicedInstance<8, 4, 1>>(x, weight, out,
                                                                              stream);

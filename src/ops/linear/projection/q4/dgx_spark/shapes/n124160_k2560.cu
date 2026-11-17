@@ -8,7 +8,6 @@ using Batch16 = Q4A16SlicedKMmaSchedule<16, 16, 8, 1, Cache::cg, Cache::ca, 2, 2
 } // namespace
 
 Q4Launch select_q4_n124160_k2560(std::int32_t tokens) {
-    if (tokens == 1) return launch_q4_a16_gemv_r4_w1_direct;
     if (tokens <= 8) return launch_q4_a16_sliced_instance<Batch8>;
     if (tokens <= 16) return launch_q4_a16_sliced_instance<Batch16>;
     if (tokens <= 32) return launch_q4_a16_sliced_r32_t32_w4_s1;

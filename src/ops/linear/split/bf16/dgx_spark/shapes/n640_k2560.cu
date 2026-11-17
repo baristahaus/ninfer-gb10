@@ -24,7 +24,6 @@ using Bulk =
 
 template <class Output>
 void select_route(int tokens, const Bf16SplitRoutes<Output>& routes) {
-    if (tokens == 1) return routes.template gemv<Vector>();
     if (tokens <= 8) return routes.template sliced<Sliced<8>>();
     if (tokens <= 32) return routes.template sliced<Sliced<16>>();
     if (tokens <= 64) return routes.template sliced<Sliced<32>>();

@@ -26,12 +26,10 @@ Nvfp4LinearSwiGluRoute select_route(LinearPolicy policy, std::int32_t tokens) {
         throw std::invalid_argument("nvfp4 linear_swiglu: invalid compute policy");
     }
     if (policy == LinearPolicy::A16Only || policy == LinearPolicy::AllowA8) {
-        if (tokens == 1) { return Nvfp4LinearSwiGluRoute::DecodeFusedA16; }
         if (tokens <= 16) { return Nvfp4LinearSwiGluRoute::SmallTFusedA16; }
         throw std::invalid_argument("nvfp4 linear_swiglu A16 is registered only through T=16");
     }
-    if (tokens == 1) { return Nvfp4LinearSwiGluRoute::DecodeFusedA16; }
-    if (tokens <= 4) { return Nvfp4LinearSwiGluRoute::SmallTFusedA16; }
+    if (tokens <= 16) { return Nvfp4LinearSwiGluRoute::SmallTFusedA16; }
     // This route dispatches its own fused kernel rather than a Linear shape's, so it carries its
     // own condition; the call site below forces the matching scale layout.
     if (tokens >= 256) { return Nvfp4LinearSwiGluRoute::TmaFusedA4; }
@@ -59,7 +57,8 @@ std::size_t nvfp4_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy,
     }
     (void)select_route(policy, min_tokens);
     (void)select_route(policy, max_tokens);
-    if ((policy == LinearPolicy::A16Only || policy == LinearPolicy::AllowA8) || max_tokens <= 4) {
+    if ((policy == LinearPolicy::A16Only || policy == LinearPolicy::AllowA8) ||
+        max_tokens <= 16) {
         return 0;
     }
 

@@ -41,7 +41,6 @@ void launch_warp_projection(const Tensor& x, const Weight& w, Tensor& out, cudaS
 } // namespace
 
 Bf16Launch select_bf16_n1664_k2560(std::int32_t tokens) {
-    if (tokens == 1) return launch_bf16_gemv<Gemv>;
     if (tokens <= 32) return launch_bf16_mma<Hot32<3>>;
     if (tokens <= 64) return launch_bf16_mma<Hot32<2>>;
     if (tokens <= 96) return launch_bf16_mma<Hot32<3>>;

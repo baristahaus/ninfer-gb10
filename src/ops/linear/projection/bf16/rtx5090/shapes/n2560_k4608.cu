@@ -29,8 +29,6 @@ using S9 = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1
 
 Bf16Launch select_bf16_n2560_k4608(std::int32_t tokens) {
     if (tokens > 32768) throw std::invalid_argument("bf16 linear: V must be in [1,32768]");
-    if (tokens <= 1) return launch_bf16_gemv<S0>;
-    if (tokens <= 2) return launch_bf16_simt<S1>;
     if (tokens <= 8) return launch_bf16_sliced_k_mma<S2>;
     if (tokens <= 24) return launch_bf16_sliced_k_mma<S3>;
     if (tokens <= 64) return launch_bf16_tma_mma<S4>;

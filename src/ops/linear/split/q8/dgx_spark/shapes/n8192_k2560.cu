@@ -26,7 +26,6 @@ struct Routes : Q8SplitRoutes<Output> {
 };
 
 void select_route(int tokens, const Routes& routes) {
-    if (tokens == 1) return routes.gemv<Gemv>();
     if (tokens <= 8) return routes.sliced<Small8>();
     if (tokens <= 16) return routes.sliced<Small16>();
     if (tokens <= 32) return routes.sliced<Small32>();

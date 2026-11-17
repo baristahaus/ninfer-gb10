@@ -12,7 +12,6 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Mxfp8GemvSchedule = Mxfp8A16GemvSchedule<8, 4, 16, 4, 2, 1>;
 using Mxfp8MmaSchedule  = Mxfp8A16MmaSchedule<64, 64, 64, 16, 16, 2, 1, Cache::ca, Cache::ca>;
 
 void validate_mxfp8_weight(const Weight& weight, const char* label) {
@@ -59,16 +58,6 @@ void mxfp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPo
     const auto* x_data = static_cast<const __nv_bfloat16*>(x.data);
     const auto* codes  = static_cast<const std::uint8_t*>(weight.qdata);
     const auto* scales = static_cast<const std::uint8_t*>(weight.scales);
-
-    if (tokens == 1 && weight.k % (32 * Mxfp8GemvSchedule::kValuesPerLane) == 0) {
-        const int blocks =
-            (weight.n + Mxfp8GemvSchedule::kBlockRows - 1) / Mxfp8GemvSchedule::kBlockRows;
-        mxfp8_a16_gemv_kernel<Mxfp8GemvSchedule>
-            <<<blocks, Mxfp8GemvSchedule::kThreads, 0, stream>>>(x_data, codes, scales, out_data,
-                                                                 weight.n, weight.k);
-        CUDA_CHECK(cudaGetLastError());
-        return;
-    }
 
     if (weight.k % Mxfp8MmaSchedule::kBlockK != 0) {
         throw std::invalid_argument(

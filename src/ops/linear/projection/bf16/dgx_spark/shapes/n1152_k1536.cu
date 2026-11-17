@@ -44,7 +44,6 @@ void launch_warp_projection(const Tensor& x, const Weight& w, Tensor& out, cudaS
 Bf16Launch select_bf16_n1152_k1536(std::int32_t tokens) {
     if (tokens > 131072 || tokens % 4 != 0)
         throw std::invalid_argument("bf16 linear: P must be a multiple of 4 in [4,131072]");
-    if (tokens == 4) return launch_bf16_simt<Tiny>;
     if (tokens <= 8) return launch_bf16_sliced_k_mma<Small8>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<Small16>;
     if (tokens <= 64) return launch_bf16_mma<Middle>;

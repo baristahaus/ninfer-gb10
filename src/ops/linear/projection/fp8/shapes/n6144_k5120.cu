@@ -32,7 +32,6 @@ using Bulk = Fp8A8TmaSplitKSchedule<Fp8A8TmaMmaSchedule<128, 256, 128, 2, 4, 2, 
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const int tokens = x.ne[1];
-    if (tokens == 1) return fp8_linear_a16_gemv<Geometry, Gemv>(x, weight, out, stream);
     // 6144/16 = 384 CTAs at the 16-row sliced-K tile: the hot interval is covered without a split.
     if (tokens <= 16)
         return fp8_linear_a16_sliced_k<Geometry, Fp8SlicedInstance<16, 8, 2>>(x, weight, out,

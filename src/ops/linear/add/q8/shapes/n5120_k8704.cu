@@ -45,7 +45,6 @@ LinearAddLaunch select_q8_linear_add_n5120_k8704(std::int32_t tokens) {
                                         Stage::ActiveOnly>;
     using C64 = Q8A16SlicedKMmaSchedule<64, 4, 1, 3, Access::Shared, Cache::ca, Cache::cg,
                                         Stage::ActiveOnly>;
-    if (tokens <= 4) return launch_sliced<4, C4>;
     if (tokens <= 8) return launch_sliced<8, C8>;
     if (tokens <= 16) return launch_sliced<16, C16>;
     if (tokens <= 24) return launch_sliced<24, C24>;

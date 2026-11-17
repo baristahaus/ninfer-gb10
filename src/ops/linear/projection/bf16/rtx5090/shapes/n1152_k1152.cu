@@ -26,7 +26,6 @@ using S9 = Bf16ScheduleInstance<Bf16A16TmaMmaSchedule<128, 128, 64, 64, 32, 3, 1
 Bf16Launch select_bf16_n1152_k1152(std::int32_t tokens) {
     if (tokens > 131072 || tokens % 4 != 0)
         throw std::invalid_argument("bf16 linear: P must be a multiple of 4 in [4,131072]");
-    if (tokens <= 4) return launch_bf16_simt<S0>;
     if (tokens <= 16) return launch_bf16_sliced_k_mma<S1>;
     if (tokens <= 32) return launch_bf16_sliced_k_mma<S2>;
     if (tokens <= 40) return launch_bf16_sliced_k_mma<S3>;

@@ -55,7 +55,6 @@ void tma(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream
 } // namespace
 
 Q8Launch select_q8_n12288_k4096(std::int32_t tokens) {
-    if (tokens <= 4) return simt<Simt4>;
     if (tokens <= 8) return simt<Simt8>;
     if (tokens <= 32) return sliced<Small32>;
     if (tokens <= 40) return sliced<Small40>;

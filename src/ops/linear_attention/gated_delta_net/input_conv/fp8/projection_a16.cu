@@ -4,7 +4,6 @@
 #include "core/device.h"
 #include "ops/linear/common/output.cuh"
 #include "ops/linear/kernels/fp8/fp8_schedule.cuh"
-#include "ops/linear/kernels/fp8/fp8_a16_simt.cuh"
 #include "ops/linear/kernels/fp8/fp8_a16_sliced_k_mma.cuh"
 #include "ops/linear/kernels/fp8/fp8_a16_mma.cuh"
 
@@ -36,17 +35,6 @@ void launch_gemm(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
         fp8_a16_operands(x, weight), output, LinearIdentityEpilogue{}, stream);
 }
 
-void launch_simt4(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
-                  cudaStream_t stream) {
-    using Schedule =
-        Fp8A16SimtSchedule<8, 2, 16, 4, 1, Fp8SimtActivationAccess::SharedPhase,
-                           Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
-    const LinearBf16SegmentedOutput<10240, 6144> output{static_cast<__nv_bfloat16*>(qkv.data),
-                                                        static_cast<__nv_bfloat16*>(z.data)};
-    launch_fp8_a16_simt<Fp8ScheduleInstance<Schedule, 5120, 4>>(fp8_a16_operands(x, weight), output,
-                                                                LinearIdentityEpilogue{}, stream);
-}
-
 void launch_sliced16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                      cudaStream_t stream) {
     using Schedule =
@@ -60,7 +48,6 @@ void launch_sliced16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor&
 using Launcher = void (*)(const Tensor&, const Weight&, Tensor&, Tensor&, cudaStream_t);
 
 Launcher select_projection(int columns) {
-    if (columns <= 4) return launch_simt4;
     if (columns <= 16) return launch_sliced16;
     if (columns <= 24) return launch_small_mma<24>;
     if (columns <= 32) return launch_small_mma<32>;

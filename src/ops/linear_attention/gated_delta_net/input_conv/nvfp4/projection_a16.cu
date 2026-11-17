@@ -28,8 +28,6 @@ void launch_matrix(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z
 using Launcher = void (*)(const Tensor&, const Weight&, Tensor&, Tensor&, cudaStream_t);
 
 Launcher select_projection(int tokens) {
-    if (tokens == 1) return launch_nvfp4_gdn_input_decode;
-    if (tokens <= 2) return launch_nvfp4_gdn_input_small_t;
     if (tokens <= 8) return launch_sliced<Nvfp4SlicedInstance<8, 8, 2>>;
     if (tokens <= 16) return launch_sliced<Nvfp4SlicedInstance<16, 8, 2>>;
     if (tokens <= 24) return launch_sliced<Nvfp4SlicedInstance<32, 8, 1>>;

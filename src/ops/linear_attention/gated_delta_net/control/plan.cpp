@@ -16,7 +16,10 @@ constexpr Plan mma(int tile, int split, RowMode rows = RowMode::Paired) {
 }
 
 constexpr std::array kN96K5120{
-    Route{1, 1, {Kernel::Gemv}},    Route{2, 8, {Kernel::SmallSplit, 8, 10}},
+    // Decode regime T=1..8 rides one capacity-based instance: the small-split token tile is fixed
+    // at 8 and masks partial tiles (`ncols = min(TokenTile, t - token0)`), so a row's bits do not
+    // depend on T. The single-token Gemv route it replaces had a different reduction order.
+    Route{1, 8, {Kernel::SmallSplit, 8, 10}},
     Route{9, 1024, mma(128, 8)},    Route{1025, 2048, mma(128, 4)},
     Route{2049, 4096, mma(128, 2)}, Route{4097, kLast, mma(128, 1)},
 };
@@ -27,7 +30,7 @@ constexpr std::array kN64K2048{
 
 // Materialized norm+control owns its tuning independently of control projection.
 constexpr std::array kNormN96K5120{
-    Route{1, 1, {Kernel::Gemv}},    Route{2, 8, {Kernel::SmallSplit, 8, 10}},
+    Route{1, 8, {Kernel::SmallSplit, 8, 10}},
     Route{9, 1024, mma(128, 8)},    Route{1025, 2048, mma(128, 4)},
     Route{2049, 4096, mma(128, 2)}, Route{4097, kLast, mma(128, 1)},
 };
@@ -81,7 +84,9 @@ NormPlan select_norm_plan(Geometry geometry, std::int32_t columns) {
     // single-device geometry. A 24-head rank falls through to the materialized fallback below,
     // which normalizes with ops::rmsnorm and then runs the projection plan.
     if (geometry.input_rows == 5120 && geometry.heads == 48 && columns <= 42) {
-        if (columns <= 2) return {NormKernel::Simt, {}, {}, 1, 512};
+        // One split factor for the whole decode regime: the kernel's per-token reduction order
+        // depends only on the thread count (the token tile is a masked capacity), so 1x512 vs
+        // 2x512 at T=1/2 would make a row's bits depend on T. 2x512 keeps 512 threads.
         if (columns <= 14) return {NormKernel::Simt, {}, {}, 2, 512};
         if (columns <= 28) return {NormKernel::Simt, {}, {}, 2, 256};
         return {NormKernel::Simt, {}, {}, 4, 256};

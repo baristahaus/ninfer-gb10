@@ -6,12 +6,12 @@
 
 namespace ninfer::ops::detail::gdn_control {
 
-enum class Kernel { Gemv, TiledGemv, SmallSplit, Mma };
+enum class Kernel { TiledGemv, SmallSplit, Mma };
 enum class RowMode { Paired, Merged };
 enum class NormKernel { Simt, Mma, Materialized };
 
 struct Plan {
-    Kernel kernel          = Kernel::Gemv;
+    Kernel kernel          = Kernel::TiledGemv;
     std::int32_t tile_cols = 1, split_k = 1;
     RowMode rows = RowMode::Paired;
 };

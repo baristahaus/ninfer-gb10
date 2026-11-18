@@ -1,21 +1,11 @@
 #include "ops/linear_attention/gated_delta_net/control/kernels/small_split.cuh"
 #include "ops/linear_attention/gated_delta_net/control/kernels/norm.cuh"
 #include "ops/linear_attention/gated_delta_net/control/kernels/mma_launch.cuh"
-#include "ops/linear_attention/gated_delta_net/control/kernels/gemv.cuh"
 
 namespace ninfer::ops::detail::gdn_control {
 void launch_n96_k5120(const Inputs& in, GdnControlOutputs out, Plan plan, Scratch scratch,
                       CudaExecutionView e) {
     using Geometry = MmaGeometry<48, 5120, 128>;
-    if (plan.kernel == Kernel::Gemv) {
-        gemv_kernel<48, 5120><<<96, 256, 0, e.stream()>>>(
-            static_cast<const __nv_bfloat16*>(in.x.data), static_cast<const __nv_bfloat16*>(in.a),
-            static_cast<const __nv_bfloat16*>(in.b), static_cast<const float*>(in.a_log.data),
-            static_cast<const float*>(in.dt_bias.data), static_cast<float*>(out.g.data),
-            static_cast<float*>(out.beta.data));
-        CUDA_CHECK(cudaGetLastError());
-        return;
-    }
     if (plan.kernel == Kernel::SmallSplit) {
         small_partial_kernel<8, 512, 4><<<dim3(24, 10, 1), 128, 0, e.stream()>>>(
             static_cast<const __nv_bfloat16*>(in.x.data), static_cast<const __nv_bfloat16*>(in.a),
@@ -62,9 +52,7 @@ void launch_norm_n96_k5120(const Inputs& in, const Norm& norm, GdnControlOutputs
                 static_cast<__nv_bfloat16*>(norm.normalized.data), static_cast<float*>(out.g.data),
                 static_cast<float*>(out.beta.data), in.x.ne[1], norm.eps);
     };
-    if (plan.tile_cols == 1)
-        launch.template operator()<1, 512>();
-    else if (plan.tile_cols == 2 && plan.threads == 512)
+    if (plan.tile_cols == 2 && plan.threads == 512)
         launch.template operator()<2, 512>();
     else if (plan.tile_cols == 2)
         launch.template operator()<2, 256>();

@@ -33,8 +33,6 @@ void grouped_instance(const CausalAttentionOperands& p, Bf16KvCacheView<Writable
                       Input input, const Bf16KvCausalPlan& plan, CausalPartialView partial,
                       cudaStream_t stream) {
     switch (plan.instance) {
-    case Bf16KvInstance::GroupedDecode:
-        return grouped<G, Bf16KvInstance::GroupedDecode>(p, cache, input, plan, partial, stream);
     case Bf16KvInstance::Grouped32:
         return grouped<G, Bf16KvInstance::Grouped32>(p, cache, input, plan, partial, stream);
     case Bf16KvInstance::Grouped64:

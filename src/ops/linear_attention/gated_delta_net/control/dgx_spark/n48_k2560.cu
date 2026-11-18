@@ -30,19 +30,15 @@ struct Bf16ControlEpilogue {
 };
 
 constexpr std::array kRoutes{
-    Route{1, 1, {Kernel::Gemv}},
-    Route{2, 16, {Kernel::TiledGemv, 2}},
+    // Decode regime T=1..16 rides one capacity-based SIMT instance (its token tile already masks
+    // partial tiles for the odd counts in 2..16), so a row's bits do not depend on T within it.
+    Route{1, 16, {Kernel::TiledGemv, 2}},
     Route{17, 128, {Kernel::Mma, 8, 1, RowMode::Merged}},
     Route{129, 512, {Kernel::Mma, 16, 1, RowMode::Merged}},
     Route{513, std::numeric_limits<std::int32_t>::max(), {Kernel::Mma, 32, 1, RowMode::Merged}},
 };
 static_assert(closed(kRoutes));
 
-using Gemv =
-    Bf16ScheduleInstance<Bf16KTailSchedule<Bf16A16GemvSchedule<
-                             16, 16, 1, 8, 4, Bf16ActivationAccess::Direct,
-                             Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 1, 4, 2>>,
-                         2560>;
 using Small = Bf16ScheduleInstance<
     Bf16A16SimtSchedule<4, 2, 1, 8, 4, 2, Bf16SimtActivationAccess::WarpPacked,
                         Bf16WeightCache::Default, Bf16PhaseOrder::Sequential, 1, 4, 1, 2, 2>,
@@ -67,10 +63,6 @@ void launch_n48_k2560(const Inputs& in, GdnControlOutputs out, Plan plan, Scratc
                                        static_cast<float*>(out.beta.data)};
     const Bf16ControlEpilogue<24> epilogue{static_cast<const float*>(in.a_log.data),
                                            static_cast<const float*>(in.dt_bias.data)};
-    if (plan.kernel == Kernel::Gemv) {
-        launch_bf16_a16_gemv<Gemv>(operands, output, epilogue, execution.stream());
-        return;
-    }
     if (plan.kernel == Kernel::TiledGemv) {
         launch_bf16_a16_simt<Small>(operands, output, epilogue, execution.stream());
         return;

@@ -7,41 +7,6 @@
 #include <cuda_bf16.h>
 
 namespace ninfer::ops::detail::gdn_control {
-template <int Heads, int Hidden>
-__global__ void gemv_kernel(const __nv_bfloat16* x, const __nv_bfloat16* a_weight,
-                            const __nv_bfloat16* b_weight, const float* A_log, const float* dt_bias,
-                            float* g, float* beta) {
-    constexpr int kHeads = Heads, kHidden = Hidden, kThreads = 256;
-    const int global_row = static_cast<int>(blockIdx.x);
-    const bool is_b      = global_row >= kHeads;
-    const int row        = is_b ? global_row - kHeads : global_row;
-    const auto* weight   = is_b ? b_weight : a_weight;
-    __shared__ float warp_sums[kThreads / common::kWarpSize];
-
-    float acc                   = 0.0f;
-    constexpr int kPairs        = kHidden / 2;
-    const std::int64_t row_base = static_cast<std::int64_t>(row) * kHidden;
-    const auto* x2              = reinterpret_cast<const __nv_bfloat162*>(x);
-    const auto* w2 =
-        reinterpret_cast<const __nv_bfloat162*>(weight + static_cast<std::int64_t>(row_base));
-    for (int p = static_cast<int>(threadIdx.x); p < kPairs; p += static_cast<int>(blockDim.x)) {
-        const float2 wf = common::bf16x2_to_float2(w2[p]);
-        const float2 xf = common::bf16x2_to_float2(x2[p]);
-        acc             = fmaf(wf.x, xf.x, acc);
-        acc             = fmaf(wf.y, xf.y, acc);
-    }
-
-    acc = common::block_reduce_sum<kThreads>(acc, warp_sums);
-    if (threadIdx.x == 0) {
-        if (is_b) {
-            beta[row] = common::sigmoid(acc);
-        } else {
-            const float sp = common::softplus(acc + dt_bias[row]);
-            g[row]         = -expf(A_log[row]) * sp;
-        }
-    }
-}
-
 template <int Cols, int Threads>
 __global__ void
 tiled_gemv_kernel(const __nv_bfloat16* __restrict__ x, const __nv_bfloat16* __restrict__ a_weight,

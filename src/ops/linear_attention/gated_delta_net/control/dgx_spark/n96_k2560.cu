@@ -12,8 +12,9 @@ constexpr Plan mma(int tile, int split, RowMode rows = RowMode::Paired) {
 }
 
 constexpr std::array kN96K2560{
-    Route{1, 1, {Kernel::Gemv}},
-    Route{2, 8, {Kernel::TiledGemv, 4}},
+    // Decode regime T=1..8 rides one capacity-based instance: the tiled GEMV's 4-token tile
+    // masks partial tiles (`ncols = min(Cols, t - token0)`), so a row's bits do not depend on T.
+    Route{1, 8, {Kernel::TiledGemv, 4}},
     Route{9, 192, mma(64, 8, RowMode::Merged)},
     Route{193, 448, mma(64, 8)},
     Route{449, 512, mma(128, 8)},
@@ -63,15 +64,6 @@ std::span<const Route> routes_n96_k2560() { return kN96K2560; }
 
 void launch_n96_k2560(const Inputs& in, GdnControlOutputs out, Plan plan, Scratch scratch,
                       CudaExecutionView e) {
-    if (plan.kernel == Kernel::Gemv) {
-        gemv_kernel<48, 2560><<<96, 256, 0, e.stream()>>>(
-            static_cast<const __nv_bfloat16*>(in.x.data), static_cast<const __nv_bfloat16*>(in.a),
-            static_cast<const __nv_bfloat16*>(in.b), static_cast<const float*>(in.a_log.data),
-            static_cast<const float*>(in.dt_bias.data), static_cast<float*>(out.g.data),
-            static_cast<float*>(out.beta.data));
-        CUDA_CHECK(cudaGetLastError());
-        return;
-    }
     if (plan.kernel == Kernel::TiledGemv) {
         tiled_gemv_kernel<4, 256><<<dim3(96, (in.x.ne[1] + 3) / 4), 256, 0, e.stream()>>>(
             static_cast<const __nv_bfloat16*>(in.x.data), static_cast<const __nv_bfloat16*>(in.a),

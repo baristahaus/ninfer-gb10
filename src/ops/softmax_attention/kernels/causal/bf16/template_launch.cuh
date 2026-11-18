@@ -33,7 +33,7 @@ void launch_bf16_kv_grouped_mma(const CausalAttentionOperands& p, Bf16KvCacheVie
                                 cudaStream_t stream) {
     static_assert(Writable == Input::writes_cache);
     validate_bf16_kv_operands<G>(p, cache);
-    if ((S::kFixedWidth && p.width != S::kFixedWidth) || partition.capacity < 1 ||
+    if (partition.capacity < 1 ||
         partition.capacity > 256 || partition.normal_target < 1 || partition.long_target < 1 ||
         partition.key_rows != S::kKeyRows ||
         partition.live(p.visible_capacity).splits > partition.capacity || !partials.acc ||

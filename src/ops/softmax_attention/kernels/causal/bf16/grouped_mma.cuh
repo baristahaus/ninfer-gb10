@@ -51,7 +51,7 @@ __launch_bounds__(S::kLaunchBoundThreads, S::kMinBlocks) __global__
                                     const int* tables, const int* validity, const int* table_rows,
                                     int table_stride, int runtime_width, float scale,
                                     Bf16KvPartition partition, CausalPartialView partial) {
-    const int width = S::kFixedWidth ? S::kFixedWidth : runtime_width;
+    const int width = runtime_width;
     constexpr int D = G::kHeadDim, M = S::kQueryRows, N = S::kKeyRows;
     constexpr int NK = N / S::kWarpsKV, QKNt = NK / 8, QKKs = D / 16;
     constexpr int PVNt = D / 8, PVKs = NK / 16;
@@ -69,8 +69,8 @@ __launch_bounds__(S::kLaunchBoundThreads, S::kMinBlocks) __global__
     auto* v_s     = reinterpret_cast<__half*>(storage->qkv + N * D);
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
     const int warp_q = warp % S::kWarpsQ, warp_kv = warp / S::kWarpsQ;
-    const int head  = S::kFixedWidth ? blockIdx.x : blockIdx.x % G::KVHeads;
-    const int tile  = S::kFixedWidth ? 0 : blockIdx.x / G::KVHeads;
+    const int head = blockIdx.x % G::KVHeads;
+    const int tile = blockIdx.x / G::KVHeads;
     const int split = blockIdx.y, batch = MultiBatch ? blockIdx.z : 0;
     const int row_begin = tile * M, packed_rows = width * G::GroupSize;
     const int live = Masked ? validity[batch] : width;

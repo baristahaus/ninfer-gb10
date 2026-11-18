@@ -6,15 +6,13 @@
 namespace ninfer::ops::detail {
 
 // Query rows pack token/head pairs. KV warps cooperate on disjoint key columns.
-template <int QueryRows, int KeyRows = 32, int KVWarps = 1, int MinBlocks = 2, int FixedWidth = 0>
+template <int QueryRows, int KeyRows = 32, int KVWarps = 1, int MinBlocks = 2>
 struct Bf16KvGroupedMmaSchedule {
     static_assert(QueryRows == 16 || QueryRows == 32 || QueryRows == 64);
     static_assert(KeyRows == 32 || KeyRows == 64);
     static_assert(KVWarps == 1 || KVWarps == 2 || KVWarps == 4);
     static_assert(KeyRows % (16 * KVWarps) == 0);
     static_assert(QueryRows <= 2 * KeyRows);
-    static_assert(FixedWidth == 0 || FixedWidth == 1);
-    static constexpr int kFixedWidth = FixedWidth;
     static constexpr int kQueryRows  = QueryRows;
     static constexpr int kKeyRows    = KeyRows;
     static constexpr int kWarpsQ     = QueryRows / 16;

@@ -103,16 +103,19 @@ void check_routes() {
     }
     check(single_ok, "every token count still routes on the single-device geometry");
     check(rank_ok, "every token count now routes on the 24-head geometry");
-    check(select_projection_plan(rank, 1).kernel == Kernel::Gemv, "the rank's T=1 takes GEMV");
+    check(select_projection_plan(rank, 1).kernel == Kernel::Mma &&
+              select_projection_plan(rank, 1).split_k == 8,
+          "the rank's decode regime T=1..8 takes the split-8 MMA instance");
 
-    // The 48-row route table must not have moved: same kernel and split at every boundary.
+    // The 48-row route table must not have moved: one capacity-based instance across the decode
+    // regime (T=1..8 small-split), MMA above it, at every boundary.
     bool same = true;
-    for (std::int32_t columns : {1, 2, 9, 1024, 1025, 2048, 4097, 8192}) {
+    for (std::int32_t columns : {1, 2, 8, 9, 1024, 1025, 2048, 4097, 8192}) {
         const auto a = select_projection_plan(single, columns);
-        if (columns == 1 && a.kernel != Kernel::Gemv) { same = false; }
-        if (columns == 9 && a.kernel != Kernel::Mma) { same = false; }
+        if (columns <= 8 && a.kernel != Kernel::SmallSplit) { same = false; }
+        if (columns > 8 && a.kernel != Kernel::Mma) { same = false; }
     }
-    check(same, "the 48-row route table still selects GEMV at T=1 and MMA above it");
+    check(same, "the 48-row route table selects small-split through T=8 and MMA above it");
     std::printf("  single T=9: kernel=%d tile=%d split=%d | rank T=9: kernel=%d tile=%d split=%d\n",
                 static_cast<int>(select_projection_plan(single, 9).kernel),
                 select_projection_plan(single, 9).tile_cols,

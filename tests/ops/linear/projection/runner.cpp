@@ -40,7 +40,12 @@ constexpr std::size_t kOutputScanWords    = 1U << 20;
 constexpr int kOracleTBlock               = 8;
 constexpr double kBf16UnitRoundoff        = 1.0 / 256.0;
 constexpr double kA8QuantizationAllowance = 0.04;
-constexpr double kA4QuantizationAllowance = 0.16;
+// The A4 relative-L2 distribution over activation seeds at the worst sampled geometry
+// (t=1, 32 sampled outputs, n17408_k5120) spans 0.034-0.230 and about a quarter of seeds
+// exceed 0.16; a broken A4 route produces rel_l2 near 1, so 0.25 keeps the oracle's
+// discriminating power while accepting the format's true error envelope
+// (ninfer-gb10-izs diagnosis, 2026-11-17, 61-seed host-FP64 sweep).
+constexpr double kA4QuantizationAllowance = 0.25;
 
 // Precision follows the public policy, including when a more accurate route is selected.
 constexpr ReductionCriterion tolerance_for(ops::LinearPolicy policy) {

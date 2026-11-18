@@ -35,7 +35,10 @@ constexpr std::size_t kOutputScanWords    = 1U << 20;
 constexpr int kOracleTBlock               = 8;
 constexpr double kBf16UnitRoundoff        = 1.0 / 256.0;
 constexpr double kA8QuantizationAllowance = 0.04;
-constexpr double kA4QuantizationAllowance = 0.16;
+// See the projection runner: the A4 relative-L2 envelope over activation seeds at the worst
+// sampled geometry reaches 0.230, and a broken A4 route reads near 1 (ninfer-gb10-izs,
+// 2026-11-17). 0.25 accepts the format's true error distribution without losing discrimination.
+constexpr double kA4QuantizationAllowance = 0.25;
 
 // The criterion belongs to the activation compute path, not to a private kernel, schedule, or
 // launcher selected inside that path. The relative-L2 allowance is one BF16 unit roundoff; the

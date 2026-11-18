@@ -38,15 +38,29 @@ Weight bf16(const artifact::MaterializedArtifact& artifact,
 }
 
 Weight row_view(const Weight& parent, int begin, int rows) {
-    if (parent.qtype != QType::BF16 || parent.layout != QuantLayout::Contiguous || begin < 0 ||
-        rows <= 0 || begin + rows > parent.n) {
-        throw std::logic_error("invalid Flash-Next BF16 row view");
+    if (rows <= 0 || begin < 0 || begin + rows > parent.n) {
+        throw std::logic_error("invalid Flash-Next row view");
     }
-    Weight out = parent;
-    out.qdata  = static_cast<const std::byte*>(parent.qdata) +
-                 static_cast<std::size_t>(begin) * parent.k * sizeof(std::uint16_t);
-    out.n = out.shape[0] = out.padded_shape[0] = rows;
-    return out;
+    if (parent.qtype == QType::BF16 && parent.layout == QuantLayout::Contiguous) {
+        Weight out = parent;
+        out.qdata  = static_cast<const std::byte*>(parent.qdata) +
+                     static_cast<std::size_t>(begin) * parent.k * sizeof(std::uint16_t);
+        out.n = out.shape[0] = out.padded_shape[0] = rows;
+        return out;
+    }
+    if (parent.qtype == QType::MXFP8 && parent.layout == QuantLayout::DenseBlockScaleK32Mxfp8) {
+        Weight out      = parent;
+        out.qdata       = static_cast<const std::byte*>(parent.qdata) +
+                          static_cast<std::size_t>(begin) * parent.k;
+        out.scales      = static_cast<const std::uint8_t*>(parent.scales) +
+                          static_cast<std::size_t>(begin) * (parent.k / 32);
+        out.scale_ne[1] = rows;
+        out.scale_nb[2] = out.scale_nb[1] * rows;
+        out.scale_nb[3] = out.scale_nb[2];
+        out.n = out.shape[0] = out.padded_shape[0] = rows;
+        return out;
+    }
+    throw std::logic_error("invalid Flash-Next row view");
 }
 
 ops::HyperConnectionWeights hc(const HyperConnectionPlan& plan,
@@ -225,13 +239,22 @@ MoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifa
     };
 }
 
-ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedArtifact& artifact) {
+ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedArtifact& artifact,
+                             std::optional<DeviceBuffer>& nvfp4_scale) {
+    // Decode-in-gather (E2d): the host gather decodes the NVFP4 group-16 rows to FP8 with the
+    // table's scale_2 folded into the staged values, so the consumer's embedding scale is one.
+    Tensor embedding_scale;
     if (plan.nvfp4_table) {
-        // The NVFP4 table (block_scale_k16_v1) binds; its staged gather consumer
-        // route (E2d) is not implemented yet, so the recipe cannot serve.
-        throw std::runtime_error(
-            "PLE table is NVFP4 (block_scale_k16_v1); its gather consumer route "
-            "(E2d) is not implemented yet");
+        if (!nvfp4_scale) {
+            const Device device =
+                artifact::bind_view(plan.key_projection, artifact).parts.front().parent->device;
+            nvfp4_scale.emplace(device, sizeof(std::uint16_t));
+            const std::uint16_t one = 0x3f80; // BF16 1.0
+            nvfp4_scale->copy_from_host(&one, sizeof one);
+        }
+        embedding_scale = Tensor(nvfp4_scale->data(), nvfp4_scale->device(), DType::BF16, {1});
+    } else {
+        embedding_scale = tensor(artifact, plan.embedding_scale, {1});
     }
     return {
         .key_projection   = bf16(artifact, plan.key_projection, 10240, 2560),
@@ -240,7 +263,7 @@ ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedAr
         .query_norm       = tensor(artifact, plan.query_norm, {10240}),
         .convolution_norm = tensor(artifact, plan.convolution_norm, {10240}),
         .convolution      = tensor(artifact, plan.convolution, {10240, 4}),
-        .embedding_scale  = tensor(artifact, plan.embedding_scale, {1}),
+        .embedding_scale  = embedding_scale,
     };
 }
 
@@ -312,7 +335,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             out.key_norm          = out.projection.key_norm;
             out.output            = out.projection.output;
             out.has_ple           = source.has_ple;
-            if (source.has_ple) { out.ple = ple(source.ple, backing); }
+            if (source.has_ple) { out.ple = ple(source.ple, backing, ple_nvfp4_scale); }
             out.mlp_hc     = hc(source.mlp_hc, backing);
             out.post_mixer = moe(source.moe, backing);
         } else {
@@ -323,7 +346,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             out.norm             = out.projection.norm;
             out.output           = out.projection.output;
             out.has_ple          = source.has_ple;
-            if (source.has_ple) { out.ple = ple(source.ple, backing); }
+            if (source.has_ple) { out.ple = ple(source.ple, backing, ple_nvfp4_scale); }
             out.mlp_hc     = hc(source.mlp_hc, backing);
             out.post_mixer = moe(source.moe, backing);
         }

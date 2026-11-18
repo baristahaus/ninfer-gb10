@@ -118,6 +118,9 @@ public:
 
     artifact::MaterializedArtifact backing;
     artifact::MappedRange ple_mapping;
+    // Decode-in-gather NVFP4 PLE route: the device BF16 one the consumer applies to the
+    // rows whose scale_2 the host gather already folded in.
+    std::optional<DeviceBuffer> ple_nvfp4_scale;
     qwen3_8_flash_next::FrontendResources frontend;
     RuntimeModelView runtime;
 };

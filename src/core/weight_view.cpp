@@ -190,12 +190,36 @@ WeightGeometry weight_geometry(QType format, QuantLayout layout,
         out.scale_row_bytes    = k / 16;
         out.code_bytes         = out.elements / 2;
         out.scale_offset       = aligned(out.code_bytes, 256);
+    } else if (layout == QuantLayout::DenseBlockScaleK32Mxfp8) {
+        if (format != QType::MXFP8 || k % 64) {
+            throw std::invalid_argument("MXFP8 block-scale requires K%64=0");
+        }
+        out.group_size         = 32;
+        out.code_bytes_per_row = k;
+        out.scale_row_bytes    = k / 32;
+        out.code_bytes         = out.elements;
+        out.scale_offset       = aligned(out.code_bytes, 256);
+    } else if (layout == QuantLayout::BlockScaleK16) {
+        if (format != QType::NVFP4 || k % 16) {
+            throw std::invalid_argument("BlockScaleK16 requires NVFP4 with K%16=0");
+        }
+        out.group_size         = 16;
+        out.code_bytes_per_row = k / 2;
+        out.scale_row_bytes    = k / 16;
+        out.code_bytes         = out.elements / 2;
+        out.scale_offset       = aligned(out.code_bytes, 256);
+        // The layout carries one trailing FP32 per-tensor scale_2 word (the NVFP4 PLE
+        // table's global scale); the gather consumer folds it into the staged values.
+        out.trailing_bytes = 4;
     } else {
         throw std::invalid_argument("unknown quantized weight layout");
     }
     out.scale_bytes = mul(mul(matrices, n / out.scale_block_rows), out.scale_row_bytes);
     out.bytes       = add(out.scale_offset, out.scale_bytes);
-    if (format == QType::NVFP4) {
+    out.bytes       = add(out.bytes, out.trailing_bytes);
+    if (format == QType::NVFP4 && layout != QuantLayout::BlockScaleK16) {
+        // BlockScaleK16 carries its per-tensor scale as the trailing word counted in
+        // trailing_bytes; every other NVFP4 layout appends the FP32 divisor region here.
         out.divisor_offset = out.bytes;
         out.divisor_count  = matrices;
         out.bytes          = add(out.bytes, mul(matrices, 4));
@@ -432,6 +456,13 @@ Weight native_weight(const WeightView& view, float input_divisor) {
         out.scale_nb[0] = 2;
         out.scale_nb[1] = static_cast<std::int64_t>(g.scale_row_bytes);
         out.scale_nb[2] = out.scale_nb[3] = out.scale_nb[1] * out.scale_ne[1];
+    } else if (g.layout == QuantLayout::DenseBlockScaleK32Mxfp8) {
+        out.scale_dtype = DType::U8;
+        out.scale_ne[0] = dimension(g.padded_columns / g.group_size);
+        out.scale_ne[1] = out.n;
+        out.scale_nb[0] = 1;
+        out.scale_nb[1] = static_cast<std::int64_t>(g.scale_row_bytes);
+        out.scale_nb[2] = out.scale_nb[3] = out.scale_nb[1] * out.n;
     } else if (planes.swizzled_scales) {
         out.layout      = QuantLayout::BlockScaleK16M128x4;
         out.scale_dtype = DType::FP8_E4M3FN;

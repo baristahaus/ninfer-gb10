@@ -24,6 +24,7 @@ The stored-scale CUDA quantization extension uses PyTorch's visible-device archi
 | Measure external Serve TTFT | [`bench/ttft/`](bench/ttft/README.md) |
 | Exercise a resident HTTP server | [`smoke/serve_contract.py`](smoke/serve_contract.py) |
 | Exercise thinking preservation through a managed server | [`smoke/serve_thinking_preservation.py`](smoke/serve_thinking_preservation.py) |
+| Detect stale kernel objects after source syncs | [`check_kernel_staleness.py`](check_kernel_staleness.py); run after any build (`--self-test` needs no build dir) |
 | Measure sustained device-memory bandwidth | [`hbm_bandwidth_probe.cu`](hbm_bandwidth_probe.cu); [build command](#memory-bandwidth-probe) |
 
 ## Memory bandwidth probe

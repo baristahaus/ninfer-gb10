@@ -67,3 +67,11 @@ jobs:
         run: python3 tools/check_test_skips.py .
       - name: formatting guard
         run: python3 tools/check_format.py .
+      - name: kernel-staleness guard self-test
+        # CPU-only: the runner has no CUDA toolchain and no build directory, so
+        # the live audit (tools/check_kernel_staleness.py against build/) is a
+        # local-gate step, run after builds on the GPU lanes. What CI verifies
+        # here is the guard itself: the synthetic self-test reproduces the tar
+        # trap (content changed, mtime old, recompile skipped) and asserts it
+        # is caught where an mtime check alone would pass.
+        run: python3 tools/check_kernel_staleness.py --self-test

@@ -46,9 +46,10 @@ Reference projection(artifact::Binder& binder, std::string_view name,
         throw artifact::ArtifactError("missing logical parameter " + std::string(name));
     }
     const QType format = binder.reader().geometry(found->second.parts.front().object).format;
-    if (format != QType::BF16 && format != QType::FP8_E4M3FN_ROW_BF16) {
-        throw artifact::ArtifactError(std::string(name) +
-                                      ": projection must be BF16 or row-scaled FP8");
+    if (format != QType::BF16 && format != QType::FP8_E4M3FN_ROW_BF16 && format != QType::MXFP8) {
+        throw artifact::ArtifactError(
+            std::string(name) +
+            ": projection must be BF16, row-scaled FP8, or dense block-scale MXFP8");
     }
     return device(binder, name, format, shape, placement);
 }
@@ -58,11 +59,15 @@ Reference expert_bank(artifact::Binder& binder, std::string_view name,
                       Placement placement = Placement::Device) {
     if (placement == Placement::Disabled) { return {}; }
     const auto& use = binder.use(name, std::string(name) + "/input");
-    if (use.activation_policy != artifact::ActivationPolicy::AllowA4 ||
-        use.auxiliaries.size() != 1 || !use.auxiliaries.contains("activation_divisor")) {
+    const bool w4a4 = use.activation_policy == artifact::ActivationPolicy::AllowA4 &&
+                      use.auxiliaries.size() == 1 && use.auxiliaries.contains("activation_divisor");
+    const bool w4a16 = use.activation_policy == artifact::ActivationPolicy::AllowA16 &&
+                       use.auxiliaries.size() == 1 && use.auxiliaries.contains("weight_divisor");
+    if (!w4a4 && !w4a16) {
         throw artifact::ArtifactError(
             std::string(name) +
-            ": NVFP4 experts require AllowA4 and per-expert activation divisors");
+            ": NVFP4 experts require AllowA4 with activation divisors or AllowA16 "
+            "with weight divisors");
     }
     auto reference = device(binder, name, QType::NVFP4, shape, placement);
     if (!reference.binding.whole_object || reference.binding.parts.size() != 1 ||
@@ -88,8 +93,9 @@ Reference exl3_bank(artifact::Binder& binder, std::string_view name,
 
 Reference expert_input_divisors(artifact::Binder& binder, const std::string& parameter) {
     const auto& use = binder.use(parameter, parameter + "/input");
-    return binder.binding(parameter + "/activation_divisor",
-                          use.auxiliaries.at("activation_divisor"), {512},
+    const std::string auxiliary =
+        use.auxiliaries.contains("activation_divisor") ? "activation_divisor" : "weight_divisor";
+    return binder.binding(parameter + "/" + auxiliary, use.auxiliaries.at(auxiliary), {512},
                           artifact::Residency::Device, QType::FP32);
 }
 
@@ -279,13 +285,13 @@ FullAttentionPlan bind_attention(artifact::Binder& binder, const std::string& pr
                                  Placement placement = Placement::Device) {
     return {
         .query_gate = projection(binder, prefix + "q_proj.weight", {12288, 2560}, placement),
-        .key        = device(binder, prefix + "k_proj.weight", QType::BF16, {512, 2560}, placement),
-        .value      = device(binder, prefix + "v_proj.weight", QType::BF16, {512, 2560}, placement),
+        .key        = projection(binder, prefix + "k_proj.weight", {512, 2560}, placement),
+        .value      = projection(binder, prefix + "v_proj.weight", {512, 2560}, placement),
         .output     = projection(binder, prefix + "o_proj.weight", {2560, 6144}, placement),
         .query_norm = device(binder, prefix + "q_norm.weight", QType::BF16, {256}, placement),
         .key_norm   = device(binder, prefix + "k_norm.weight", QType::BF16, {256}, placement),
-        .index_query_key = device(binder, prefix + "indexer.index_qk_proj.weight", QType::BF16,
-                                  {640, 2560}, placement),
+        .index_query_key =
+            projection(binder, prefix + "indexer.index_qk_proj.weight", {640, 2560}, placement),
         .index_query_norm =
             device(binder, prefix + "indexer.q_layernorm.weight", QType::BF16, {128}, placement),
         .index_key_norm =
@@ -298,8 +304,8 @@ GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix) {
         .a_log           = device(binder, prefix + "A_log", QType::FP32, {48}),
         .dt_bias         = device(binder, prefix + "dt_bias", QType::FP32, {48}),
         .convolution     = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
-        .a_projection    = device(binder, prefix + "in_proj_a.weight", QType::BF16, {48, 2560}),
-        .b_projection    = device(binder, prefix + "in_proj_b.weight", QType::BF16, {48, 2560}),
+        .a_projection    = projection(binder, prefix + "in_proj_a.weight", {48, 2560}),
+        .b_projection    = projection(binder, prefix + "in_proj_b.weight", {48, 2560}),
         .query_key_value = projection(binder, prefix + "in_proj_qkv.weight", {10240, 2560}),
         .output_gate     = projection(binder, prefix + "in_proj_z.weight", {6144, 2560}),
         .norm            = device(binder, prefix + "norm.weight", QType::BF16, {128}),

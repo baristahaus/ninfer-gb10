@@ -52,9 +52,12 @@ struct WeightGeometry {
     QType format       = QType::BF16;
     QuantLayout layout = QuantLayout::Contiguous;
     std::vector<std::uint64_t> shape;
-    std::uint64_t elements           = 0;
-    std::uint64_t bytes              = 0;
-    std::uint64_t alignment          = 256;
+    std::uint64_t elements  = 0;
+    std::uint64_t bytes     = 0;
+    std::uint64_t alignment = 256;
+    // Byte count of a trailing constant region after the scales (e.g. a per-tensor
+    // scale_2 word stored in the same payload); folded into bytes by weight_geometry.
+    std::uint64_t trailing_bytes     = 0;
     std::uint64_t padded_columns     = 0;
     std::uint64_t group_size         = 0;
     std::uint64_t code_bytes_per_row = 0;

@@ -1162,7 +1162,8 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
     if (shared_packed != nullptr) {
         linear_swiglu(input, *shared_packed, shared_activation, workspace, execution);
-    } else if (tokens == 1) {
+    } else if (tokens == 1 && shared_pair->gate.qtype == QType::BF16 &&
+               shared_pair->up.qtype == QType::BF16) {
         detail::flash_next::launch_bf16_shared_swiglu_decode(
             input, shared_pair->gate, shared_pair->up, shared_activation, stream);
     } else {

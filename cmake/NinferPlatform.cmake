@@ -49,3 +49,22 @@ function(ninfer_validate_platform)
     ${PROJECT_BINARY_DIR}/generated/core/platform.h @ONLY)
   message(STATUS "NInfer target: ${NINFER_TARGET} (${CMAKE_SYSTEM_PROCESSOR}, sm_${NINFER_CUDA_ARCHITECTURE})")
 endfunction()
+
+# --- Kernel-source content tracking ------------------------------------------
+# Tar-based source syncs with preserved timestamps set source mtimes OLD while
+# the content is NEW, so ninja sees objects as up to date and silently skips
+# recompiles of changed dispatch-table sources (how pre-pin kernels shipped in
+# ninfer-gb10-1r0). With NINFER_TRACK_KERNEL_SOURCES ON, every CUDA compile of
+# a kernel-shape source leaves an <object>.srcsha sidecar recording the SHA-256
+# of the source as compiled. tools/check_kernel_staleness.py compares those
+# records against the current sources and fails on an object that is stale
+# even when every mtime lies. A skipped recompile leaves the old record in
+# place, which is exactly what makes the mismatch visible.
+option(NINFER_TRACK_KERNEL_SOURCES
+  "Record per-object source hashes (.srcsha) for tools/check_kernel_staleness.py" ON)
+if(NINFER_TRACK_KERNEL_SOURCES)
+  set(NINFER_STALENESS_LAUNCHER "${CMAKE_CURRENT_LIST_DIR}/../tools/kernel_source_hash_launcher.py")
+  if(EXISTS "${NINFER_STALENESS_LAUNCHER}")
+    set(CMAKE_CUDA_COMPILER_LAUNCHER "${NINFER_STALENESS_LAUNCHER}")
+  endif()
+endif()

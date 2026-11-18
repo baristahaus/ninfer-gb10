@@ -50,6 +50,9 @@ set_tests_properties(ninfer_kv_operations_test PROPERTIES SKIP_RETURN_CODE 77)
 
 ninfer_add_test(ninfer_qwen3_8_flash_next_ple_table_test
   SOURCES models/qwen3_8_flash_next/test_ple_table.cpp LIBRARIES ninfer_model_loading ninfer_model_control ninfer_model_execution)
+
+ninfer_add_test(ninfer_qwen3_8_flash_next_ple_nvfp4_test
+  SOURCES models/qwen3_8_flash_next/test_ple_nvfp4.cpp LIBRARIES ninfer_model_execution)
 # The load-path qualification test reads the master MaterializationPlan surface; it registers
 # with the engine-port item that adopts that plan.
 

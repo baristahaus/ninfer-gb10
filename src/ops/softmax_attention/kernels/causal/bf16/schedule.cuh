@@ -13,11 +13,11 @@ struct Bf16KvGroupedMmaSchedule {
     static_assert(KVWarps == 1 || KVWarps == 2 || KVWarps == 4);
     static_assert(KeyRows % (16 * KVWarps) == 0);
     static_assert(QueryRows <= 2 * KeyRows);
-    static constexpr int kQueryRows  = QueryRows;
-    static constexpr int kKeyRows    = KeyRows;
-    static constexpr int kWarpsQ     = QueryRows / 16;
-    static constexpr int kWarpsKV    = KVWarps;
-    static constexpr int kWarps      = kWarpsQ * kWarpsKV;
+    static constexpr int kQueryRows = QueryRows;
+    static constexpr int kKeyRows   = KeyRows;
+    static constexpr int kWarpsQ    = QueryRows / 16;
+    static constexpr int kWarpsKV   = KVWarps;
+    static constexpr int kWarps     = kWarpsQ * kWarpsKV;
     static_assert(kWarps <= 8);
     static constexpr int kThreads            = 32 * kWarps;
     static constexpr int kLaunchBoundThreads = kThreads < 128 ? 128 : kThreads;

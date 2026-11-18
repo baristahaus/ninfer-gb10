@@ -69,8 +69,8 @@ __launch_bounds__(S::kLaunchBoundThreads, S::kMinBlocks) __global__
     auto* v_s     = reinterpret_cast<__half*>(storage->qkv + N * D);
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
     const int warp_q = warp % S::kWarpsQ, warp_kv = warp / S::kWarpsQ;
-    const int head = blockIdx.x % G::KVHeads;
-    const int tile = blockIdx.x / G::KVHeads;
+    const int head  = blockIdx.x % G::KVHeads;
+    const int tile  = blockIdx.x / G::KVHeads;
     const int split = blockIdx.y, batch = MultiBatch ? blockIdx.z : 0;
     const int row_begin = tile * M, packed_rows = width * G::GroupSize;
     const int live = Masked ? validity[batch] : width;

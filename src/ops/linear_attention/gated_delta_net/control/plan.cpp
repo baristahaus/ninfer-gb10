@@ -19,9 +19,9 @@ constexpr std::array kN96K5120{
     // Decode regime T=1..8 rides one capacity-based instance: the small-split token tile is fixed
     // at 8 and masks partial tiles (`ncols = min(TokenTile, t - token0)`), so a row's bits do not
     // depend on T. The single-token Gemv route it replaces had a different reduction order.
-    Route{1, 8, {Kernel::SmallSplit, 8, 10}},
-    Route{9, 1024, mma(128, 8)},    Route{1025, 2048, mma(128, 4)},
-    Route{2049, 4096, mma(128, 2)}, Route{4097, kLast, mma(128, 1)},
+    Route{1, 8, {Kernel::SmallSplit, 8, 10}}, Route{9, 1024, mma(128, 8)},
+    Route{1025, 2048, mma(128, 4)},           Route{2049, 4096, mma(128, 2)},
+    Route{4097, kLast, mma(128, 1)},
 };
 constexpr std::array kN64K2048{
     Route{1, 127, mma(64, 16)},    Route{128, 1024, mma(64, 8)},   Route{1025, 2048, mma(64, 4)},
@@ -30,9 +30,9 @@ constexpr std::array kN64K2048{
 
 // Materialized norm+control owns its tuning independently of control projection.
 constexpr std::array kNormN96K5120{
-    Route{1, 8, {Kernel::SmallSplit, 8, 10}},
-    Route{9, 1024, mma(128, 8)},    Route{1025, 2048, mma(128, 4)},
-    Route{2049, 4096, mma(128, 2)}, Route{4097, kLast, mma(128, 1)},
+    Route{1, 8, {Kernel::SmallSplit, 8, 10}}, Route{9, 1024, mma(128, 8)},
+    Route{1025, 2048, mma(128, 4)},           Route{2049, 4096, mma(128, 2)},
+    Route{4097, kLast, mma(128, 1)},
 };
 constexpr std::array kNormN64K2048{
     Route{1, 127, mma(64, 16)},    Route{128, 1024, mma(64, 8)},   Route{1025, 2048, mma(64, 4)},

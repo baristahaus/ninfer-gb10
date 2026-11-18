@@ -14,16 +14,11 @@ constexpr Plan mma(int tile, int split, RowMode rows = RowMode::Paired) {
 constexpr std::array kN96K2560{
     // Decode regime T=1..8 rides one capacity-based instance: the tiled GEMV's 4-token tile
     // masks partial tiles (`ncols = min(Cols, t - token0)`), so a row's bits do not depend on T.
-    Route{1, 8, {Kernel::TiledGemv, 4}},
-    Route{9, 192, mma(64, 8, RowMode::Merged)},
-    Route{193, 448, mma(64, 8)},
-    Route{449, 512, mma(128, 8)},
-    Route{513, 896, mma(128, 4)},
-    Route{897, 1024, mma(64, 4)},
-    Route{1025, 2048, mma(64, 2)},
-    Route{2049, 5120, mma(64, 1)},
-    Route{5121, 7168, mma(128, 1)},
-    Route{7169, 8192, mma(64, 1)},
+    Route{1, 8, {Kernel::TiledGemv, 4}}, Route{9, 192, mma(64, 8, RowMode::Merged)},
+    Route{193, 448, mma(64, 8)},         Route{449, 512, mma(128, 8)},
+    Route{513, 896, mma(128, 4)},        Route{897, 1024, mma(64, 4)},
+    Route{1025, 2048, mma(64, 2)},       Route{2049, 5120, mma(64, 1)},
+    Route{5121, 7168, mma(128, 1)},      Route{7169, 8192, mma(64, 1)},
     Route{8193, kLast, mma(128, 1)},
 };
 static_assert(closed(kN96K2560));

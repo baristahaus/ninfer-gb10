@@ -37,9 +37,9 @@ Bf16KvCausalPlan select_bf16_kv_causal_plan(int heads, int width, int batch,
     // group <= 64 for every registered geometry) and its FixedWidth=0 schedule is capacity
     // based: partial rows are masked on load and stores are guarded by tokens < width. The
     // former width==1 GroupedDecode instance was exact-by-design (FixedWidth=1) and is gone.
-    const auto instance = width <= 8   ? Bf16KvInstance::Grouped64
-                          : rows <= 32 ? Bf16KvInstance::Grouped32
-                                       : Bf16KvInstance::Grouped64;
+    const auto instance             = width <= 8   ? Bf16KvInstance::Grouped64
+                                      : rows <= 32 ? Bf16KvInstance::Grouped32
+                                                   : Bf16KvInstance::Grouped64;
     const auto description          = bf16_kv_instance_description(instance);
     const int tiles                 = ceil_div(rows, description.query_rows);
     const int independent_tiles     = batch * kv_heads * tiles;

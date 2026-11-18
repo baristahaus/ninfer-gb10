@@ -11,9 +11,13 @@ struct ShapeEntry {
 };
 
 constexpr std::array kShapes{
-    ShapeEntry{1024, 5120, select_q5_n1024_k5120},   ShapeEntry{6144, 5120, select_q5_n6144_k5120},
-    ShapeEntry{7168, 5120, select_q5_n7168_k5120},   ShapeEntry{5120, 6144, select_q5_n5120_k6144},
-    ShapeEntry{5120, 17408, select_q5_n5120_k17408}, ShapeEntry{1152, 1152, select_q5_n1152_k1152},
+    ShapeEntry{1024, 5120, select_q5_n1024_k5120},
+    ShapeEntry{6144, 5120, select_q5_n6144_k5120},
+    ShapeEntry{17408, 5120, select_q5_n17408_k5120},
+    ShapeEntry{7168, 5120, select_q5_n7168_k5120},
+    ShapeEntry{5120, 6144, select_q5_n5120_k6144},
+    ShapeEntry{5120, 17408, select_q5_n5120_k17408},
+    ShapeEntry{1152, 1152, select_q5_n1152_k1152},
     ShapeEntry{1152, 4304, select_q5_n1152_k4304},
 };
 } // namespace

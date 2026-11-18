@@ -13,11 +13,13 @@ struct ShapeEntry {
 constexpr std::array kShapes{
     ShapeEntry{1024, 5120, select_q4_n1024_k5120},
     ShapeEntry{4096, 5120, select_q4_n4096_k5120},
+    ShapeEntry{10240, 5120, select_q4_n10240_k5120},
     ShapeEntry{5120, 6144, select_q4_n5120_k6144},
     ShapeEntry{6144, 5120, select_q4_n6144_k5120},
     ShapeEntry{7168, 5120, select_q4_n7168_k5120},
     ShapeEntry{34816, 5120, select_q4_n34816_k5120},
     ShapeEntry{131072, 5120, select_q4_n131072_k5120},
+    ShapeEntry{17408, 5120, select_q4_n17408_k5120},
     ShapeEntry{131072, 2048, select_q4_n131072_k2048},
     ShapeEntry{248320, 2560, select_q4_n248320_k2560},
     ShapeEntry{124160, 2560, select_q4_n124160_k2560},

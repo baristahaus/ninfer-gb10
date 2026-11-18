@@ -32,7 +32,8 @@ Q4Launch select_q4_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
     for (const auto& entry : kShapes) {
         if (entry.n == n && entry.k == k) return entry.select(t);
     }
-    throw std::invalid_argument("q4 linear: unsupported shape");
+    throw std::invalid_argument("q4 linear: unsupported shape (n=" + std::to_string(n) +
+                                " k=" + std::to_string(k) + " t=" + std::to_string(t) + ")");
 }
 
 Q4Launch select_q4_launch(std::int32_t n, std::int32_t k, std::int32_t t, LinearPolicy policy) {

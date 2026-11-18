@@ -572,6 +572,37 @@ policy. This record does not make that claim. It establishes that the engine's p
 on one GB10 is equivalent to veloGB10's, and it identifies acceptance depth and pack weight as the
 two levers behind the remaining gap.
 
+### GB10 measurement battery — 2026-11-18 (current master)
+
+The full battery on `twofour` at master `cbba7e46` (native `dgx_spark`, the 126.9 GB
+`nvfp4_fp8_mtp` multi-volume set, GPU exclusive, raw JSONL under `~/battery-results/` on the
+node). This is the SP-6 record's refresh at current master; every value comes from the JSONL
+`request_done` records with the published metric definition.
+
+| Configuration | This battery | SP-6 record | Δ |
+|---|---|---|---|
+| Decode saturation mtp0 dense, C=1 | 34.0 / 34.1 | 34.0 | +0.2% |
+| C=2 | 54.5 / 54.8 | 52.8 | +3.5% |
+| C=4 | 82.6 / 82.3 | 79.4 | +3.8% |
+| C=8 | 125.6 / 127.1 | 117.0 | +8.0% |
+| MTP K=3 optimized, C=1 | 53.2 / 53.8 (51–53% acceptance) | draft-2 46.3 | +5% to +16% |
+| MTP K=3 optimized, C=4 | 120.6 / 126.6 aggregate | not recorded | — |
+| Prefill, 418-token prompt | 1,050 tok/s | ~1,032 | ✓ |
+| Prefill, 3,266-token prompt | 2,123 tok/s | 919 at 3,810 | the 4,096-token chunk default |
+| 8,192-token context | 33.3 tok/s decode, 36 GB free | ~13 GB slack at 4,096 | no pressure |
+| 27B control (`v3-plain`, dense) | 10.98 tok/s | 11.0–11.5 | no pin regression |
+
+Scaling improved at every concurrency (1.56×/2.43×/3.71× at C=2/4/8 versus the record's
+1.56×/2.34×/3.44×): the decode-regime capacity schedules beat the old exact-per-token-count
+tables at higher batch sizes, which is their intended effect. MTP acceptance on the prose prompt
+ran 45–53 percent; the 64.2 tok/s single-lane figure in the revalidation record above was a
+high-acceptance code prompt and is not comparable.
+
+Two serving facts recorded for future batteries: the default `--kv-capacity` (context-sized)
+admits only 7 lanes at C=8 — set `--kv-capacity auto` or the eighth request 503s with a queue
+timeout; and the OpenAI `timings`-block zeros defect from the 2026-11-10 record is fixed on
+current master (`predicted_ms` and `prompt_ms` are populated).
+
 ### Results against DGPP, October 3
 
 Protocol: DGPP's `scripts/serve_load.py` with five prompt classes (prose, code, json, math, chat),

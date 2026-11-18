@@ -207,7 +207,10 @@ void RepackedWeights::gather(std::vector<BoundWeight>& weights,
         for (const auto id : group.members) {
             auto& weight                = weights.at(id.index);
             const std::uint64_t written = gather_view_into(weight, target, destination, first_row);
-            const std::uint64_t begin   = first_row * target.code_bytes_per_row;
+            // Region offsets are element coordinates (`bind_view`, `weight_row_planes`), so the
+            // begin advances by whole logical rows, not code bytes — a bytes-based begin made every
+            // member after the first overlap its predecessor in the fused parent.
+            const std::uint64_t begin = first_row * target.shape.back();
             weight.view.parts = {WeightRegion{&owned->parent, begin,
                                               begin + weight_element_count(weight.view.shape)}};
             first_row += written;

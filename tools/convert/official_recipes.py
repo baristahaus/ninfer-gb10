@@ -84,12 +84,18 @@ def _dense_groupwise(model, recipe, vocabulary):
         if name.endswith(("/gdn/a_projection", "/gdn/b_projection")):
             recipe.separate(name)
             continue
+        # The GDN value rows join the query/key parent: the role-rows arm
+        # (separate (qkv, z) parents) describes the three qkv roles through ONE
+        # parent, so a (query, key) | (value, z) split would make that describe
+        # span two parents. Attention keeps its (query, key) | (gate, value)
+        # Q4/Q5 pairing — the native paired form is correct there.
         if name.endswith(
             (
                 "/attention/query",
                 "/attention/key",
                 "/gdn/query",
                 "/gdn/key",
+                "/gdn/value",
                 "/mlp/gate",
                 "/mlp/up",
             )
@@ -98,6 +104,13 @@ def _dense_groupwise(model, recipe, vocabulary):
         else:
             format = Q5
         _assign(recipe, name, format)
+    for name, parameter in model.parameters.items():
+        if not name.endswith("/gdn/value"):
+            continue
+        layer = name.rsplit("/", 1)[0]
+        names = [layer + "/" + role for role in ("query", "key", "value")]
+        if all(n in model.parameters for n in names):
+            recipe.group(names)
 
 
 def qwen3_6_27b(model, recipe, sources):

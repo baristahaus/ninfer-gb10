@@ -188,9 +188,7 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
     // draft's context_key and context_value sharing their key's and value's packed qkv rows -- is
     // one such request repeated. A binding recorded its request position, which is not its slot
     // once anything folded, so remap before the positions are mistaken for storage.
-    for (auto& binding : bindings) {
-        binding.request = storage.requests[binding.request.index];
-    }
+    for (auto& binding : bindings) { binding.request = storage.requests[binding.request.index]; }
     return {reader,
             std::move(definition),
             std::move(storage),

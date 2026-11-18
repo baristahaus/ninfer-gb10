@@ -250,10 +250,10 @@ void shared_binding_storage() {
     ModelFixture fixture;
     fixture.file.write();
     artifact::Reader reader(fixture.file.entry);
-    auto              plan     = q35::read_definition(reader);
-    const auto        resolved = q35::resolve_load(reader, plan, Device::cuda(0));
-    const auto&       plan_storage = resolved.materialization();
-    const auto        bindings     = resolved.bindings();
+    auto plan                = q35::read_definition(reader);
+    const auto resolved      = q35::resolve_load(reader, plan, Device::cuda(0));
+    const auto& plan_storage = resolved.materialization();
+    const auto bindings      = resolved.bindings();
     require(bindings.size() == plan->weight_data().size(),
             "the resolved bindings do not match the declared weights");
     for (const auto& binding : bindings) {

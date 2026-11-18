@@ -241,6 +241,28 @@ void logical_data_and_instances() {
             "cross-layer sharing duplicated parent storage");
 }
 
+// Two names over one binding region (tied embedding and output head here; the DFlash2 draft's
+// context_key and context_value sharing their key's and value's packed qkv rows in the field)
+// produce identical requests, and `plan_materialization` folds identical requests into one
+// storage slot. Each binding must therefore name the slot that covers its region -- the same
+// coverage `resolve_weights` refuses to violate when the load materializes.
+void shared_binding_storage() {
+    ModelFixture fixture;
+    fixture.file.write();
+    artifact::Reader reader(fixture.file.entry);
+    auto              plan     = q35::read_definition(reader);
+    const auto        resolved = q35::resolve_load(reader, plan, Device::cuda(0));
+    const auto&       plan_storage = resolved.materialization();
+    const auto        bindings     = resolved.bindings();
+    require(bindings.size() == plan->weight_data().size(),
+            "the resolved bindings do not match the declared weights");
+    for (const auto& binding : bindings) {
+        require(binding.request.index < plan_storage.tensors.size() &&
+                    plan_storage.tensors[binding.request.index].geometry.elements >= binding.end,
+                "a binding names a storage slot that does not cover its region");
+    }
+}
+
 void native_uses() {
     const std::array<std::uint64_t, 2> shape{128, 64};
     const auto geometry = weight_geometry(QType::NVFP4, QuantLayout::BlockScaleK16M128x4, shape);
@@ -346,6 +368,7 @@ void cold_matrix_profile() {
 int main() {
     try {
         logical_data_and_instances();
+        shared_binding_storage();
         native_uses();
         cold_matrix_profile();
         invalid_model_data();

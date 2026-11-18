@@ -22,6 +22,9 @@ public:
         return materialization_;
     }
 
+    // One WeightStorage per weight_data entry, in weight_data order.
+    [[nodiscard]] std::span<const WeightBinding> bindings() const { return bindings_; }
+
 private:
     friend ResolvedLoadPlan resolve_load(const artifact::Reader&,
                                          std::shared_ptr<const ModelDefinition>, Device,

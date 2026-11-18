@@ -1,249 +1,231 @@
-#!/ usr / bin / env python3
-""
-    "Fail when a kernel-shape source no longer matches its compiled object.
+#!/usr/bin/env python3
+"""Fail when a kernel-shape source no longer matches its compiled object.
 
-    Background(ninfer - gb10 - 1r0)
-    : tar - based source syncs with preserved mtimes set source mtimes OLD
-                while the content is NEW.make
-                / ninja then see the object as up to date,
-silently skip the recompile, and the engine runs pre - pin kernels producing bit
-                                 - subtly wrong numerics.The failure is invisible in results; only
-a hardware diff or a determinism test catches it. A plain mtime comparison
-cannot work -- it is exactly the mtime that lies.
+Background (ninfer-gb10-1r0): tar-based source syncs with preserved mtimes set source
+mtimes OLD while the content is NEW. make/ninja then see the object as up to date,
+silently skip the recompile, and the engine runs pre-pin kernels producing bit-subtly
+wrong numerics. The failure is invisible in results; only a content diff or a
+determinism test catches it. A plain mtime comparison cannot work -- the mtime is
+exactly what lies.
 
-This guard is therefore content-based. During the build, the CUDA launcher
-(tools/kernel_source_hash_launcher.py, wired in cmake/NinferPlatform.cmake)
-writes an `<object>.srcsha` sidecar next to every kernel-shape object, holding
-the SHA-256 of the source as compiled. Because a skipped recompile leaves the
-old sidecar in place, a content mismatch proves the object is stale even when
-every mtime says it is fresh.
+The authoritative signal is content: cmake/NinferPlatform.cmake (when
+NINFER_TRACK_KERNEL_SOURCES=ON, the default) wraps every nvcc invocation with
+tools/kernel_source_hash_launcher.py, which writes SHA256(source) into a
+<object>.srcsha sidecar at compile time. This guard compares each sidecar against the
+current source and fails on mismatch. A skipped recompile leaves the old sidecar in
+place, which is exactly what makes the staleness visible.
 
-Guarded sources -- the dispatch tables that pin kernel regimes:
+For objects built before tracking was enabled (no sidecar), the guard falls back to
+the best mtime evidence and reports the pair as "unverified" rather than failed; a
+source provably newer than its object is still a failure.
 
-    src/ops/**/shapes/*.cu
-    src/ops/linear_attention/**/*.cu
-    src/ops/softmax_attention/**/*.cu
-    src/ops/normalization/**/*.cu
+Guarded set: src/ops/**/shapes/*.cu plus every .cu under the
+linear_attention/softmax_attention/normalization op families (306 files). Objects are
+located through build/compile_commands.json.
 
-Checks, for every guarded source that has a compiled object in the build
-directory (located via compile_commands.json):
+Usage:
+    python3 tools/check_kernel_staleness.py [ROOT] [--build-dir DIR] [--self-test]
 
-  1. `.srcsha` sidecar: the recorded digest must equal the current source
-     digest. Mismatch = stale object, hard failure.
-  2. No sidecar (the object predates the launcher): best-effort mtime
-     fallback -- a source newer than its object is provably stale (the edit
-     happened after the object was written) and fails. When mtimes look fine
-     nothing can be proven either way, because mtimes lie, so it stays
-     silent;
-the object is only counted as unverified.3. A guarded source with no object at all is only counted
-    : CPU -
-    only hosts and unconfigured targets legitimately compile nothing.
-
-    A source that was changed and honestly rebuilt leaves a fresh sidecar and passes; only an object compiled from different content than the current
-source fails.
-
-Usage: check_kernel_staleness.py [REPOSITORY_ROOT] [--build-dir DIR] [--self-test]
-
-Exit codes: 0 clean (or nothing to audit), 1 stale object found, 2 usage error.
+Exit 0 with a summary, or exit 1 listing every stale or failed pair. --self-test
+runs the synthetic tar-trap cases with no build directory and no CUDA.
 """
-
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
-import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
-            else Path(__file__).resolve().parents[1])
+REPO = Path(__file__).resolve().parent.parent
 
-DISPATCH_DIRS = ("linear_attention", "softmax_attention", "normalization")
-
-
-def fail(problems: list[str], message: str) -> None:
-    problems.append(message)
+GUARDED_SUFFIXES = (".cu",)
+GUARDED_DIR_PARTS = ("shapes", "linear_attention", "softmax_attention", "normalization")
 
 
-def is_guarded(rel: Path) -> bool:
-    """rel is a path relative to src/ops."""
-    parts = rel.parts
-    if "shapes" in parts:
-        return True
-    return parts[0] in DISPATCH_DIRS
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def guarded_sources(root: Path) -> dict[str, Path]:
-    sources: dict[str, Path] = {}
+def is_guarded(source: Path) -> bool:
+    if source.suffix not in GUARDED_SUFFIXES:
+        return False
+    return any(part in GUARDED_DIR_PARTS for part in source.parts)
+
+
+def sidecar_for(object_path: Path) -> Path:
+    return object_path.with_name(object_path.name + ".srcsha")
+
+
+def verify_pair(source: Path, object_path: Path) -> tuple[str, str]:
+    """Classify one source/object pair.
+
+    Returns (verdict, detail) where verdict is "ok", "stale", or "unverified".
+    """
+    sidecar = sidecar_for(object_path)
+    if not sidecar.exists():
+        if source.stat().st_mtime > object_path.stat().st_mtime:
+            return "stale", "no sidecar and the source is newer than the object"
+        return "unverified", "object was built before source tracking was enabled"
+    recorded = sidecar.read_text().strip()
+    current = sha256_of(source)
+    if recorded == current:
+        return "ok", ""
+    return (
+        "stale",
+        f"object was compiled from different source content "
+        f"(recorded {recorded[:12]}, current {current[:12]})",
+    )
+
+
+def write_sidecar(object_path: Path, source: Path) -> None:
+    sidecar_for(object_path).write_text(sha256_of(source) + "\n")
+
+
+def guarded_sources(root: Path) -> list[Path]:
     ops = root / "src" / "ops"
     if not ops.is_dir():
-        return sources
-    for path in ops.rglob("*.cu"):
-        rel = path.relative_to(root).as_posix()
-        if is_guarded(path.relative_to(ops)):
-            sources[rel] = path
-    return sources
+        return []
+    out = []
+    for path in sorted(ops.rglob("*.cu")):
+        if is_guarded(path):
+            out.append(path)
+    return out
 
 
-def objects_for_sources(build_dir: Path) -> dict[str, list[Path]]:
-    """Map absolute source path -> object paths, from compile_commands.json."""
-    database = build_dir / "compile_commands.json"
-    entries = json.loads(database.read_text(encoding="utf-8"))
-    result: dict[str, list[Path]] = {}
+def objects_from_compile_commands(build_dir: Path) -> dict[Path, Path]:
+    """Map absolute source path -> object path from compile_commands.json."""
+    manifest = build_dir / "compile_commands.json"
+    if not manifest.is_file():
+        return {}
+    entries = json.loads(manifest.read_text())
+    out: dict[Path, Path] = {}
     for entry in entries:
-        source = Path(entry["file"])
-        if not source.is_absolute():
-            source = build_dir / source
-        output = entry.get("output")
-        if not output:
+        command = entry.get("command", "")
+        if "-c" not in command:
             continue
-        obj = Path(output)
-        if not obj.is_absolute():
-            obj = build_dir / obj
-        result.setdefault(str(source), []).append(obj)
-    return result
+        pieces = command.split()
+        try:
+            index = pieces.index("-c")
+        except ValueError:
+            continue
+        if index + 1 >= len(pieces) or "-o" not in pieces:
+            continue
+        try:
+            output = pieces[pieces.index("-o") + 1]
+        except IndexError:
+            continue
+        source = Path(entry.get("directory", ".")) / pieces[index + 1]
+        out[source.resolve()] = Path(entry.get("directory", ".")) / output
+    return out
 
 
-def sidecar_digest(sidecar: Path) -> str | None:
-    try:
-    return sidecar.read_text(encoding = "utf-8")
-               .split("  ", 1)[0]
-               .strip() except OSError : return None
-
-
-                                             def
-                                             audit(root : Path, build_dir : Path)
-                                                 -> tuple[list[str], int, int]
-        : ""
-          "Returns (problems, objects_checked, sources_without_object)."
-          "" problems : list[str] = [] sources = guarded_sources(root) if not sources
-        : fail(problems, f "no guarded kernel-shape sources found under {root / 'src' / "
-                           "'ops'}") return problems,
-                        0, 0 try : objects = objects_for_sources(build_dir)
-    except (OSError, json.JSONDecodeError) as error:
-        print(f"kernel-staleness: no compilable build database at "
-              f"{build_dir / 'compile_commands.json'} ({error}); nothing to audit.")
-        return problems, 0, 0
-
-    checked = 0
+def run_guard(root: Path, build_dir: Path) -> int:
+    sources = [s for s in guarded_sources(root) if is_guarded(s)]
+    if not sources:
+        print("kernel staleness: no guarded sources found")
+        return 0
+    mapping = objects_from_compile_commands(build_dir)
+    if not mapping:
+        print(
+            "kernel staleness: no compile_commands.json under "
+            f"{build_dir}; configure the build with -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+        )
+        return 0
+    failures = []
     unverified = 0
-    without_object = 0
-    for rel, path in sorted(sources.items()):
-        entries = objects.get(str(path.resolve())) or objects.get(str(path))
-        if not entries:
-            without_object += 1
+    checked = 0
+    for source in sources:
+        resolved = source.resolve()
+        if resolved not in mapping:
             continue
-        current = hashlib.sha256(path.read_bytes()).hexdigest()
-        for obj in entries:
-            if not obj.exists():
-                continue
-            checked += 1
-            sidecar = obj.with_name(obj.name + ".srcsha")
-            recorded = sidecar_digest(sidecar)
-            if recorded is not None:
-                if recorded != current:
-                    fail(problems,
-                         f"{rel}: object {obj.relative_to(build_dir) if obj.is_relative_to(build_dir) else obj} "
-                         f"was compiled from different source content "
-                         f"(recorded {recorded[:12]}, current {current[:12]}). The object is stale; "
-                         f"rebuild before trusting results. If mtimes look current, a source sync "
-                         f"preserved stale timestamps -- ninja skipped the recompile.")
-                continue
+        checked += 1
+        verdict, detail = verify_pair(resolved, mapping[resolved])
+        if verdict == "stale":
+            failures.append(f"  [stale] {source}: {detail}")
+        elif verdict == "unverified":
             unverified += 1
-            if os.path.getmtime(path) > os.path.getmtime(obj):
-                fail(problems,
-                     f"{rel}: source is newer than object {obj.name}, which has no compile-time "
-                     f"hash record (predates NINFER_TRACK_KERNEL_SOURCES); the build is unverified. "
-                     f"Reconfigure and rebuild to enable content tracking.")
-    if unverified and not problems:
-        print(f"kernel-staleness: {checked} objects checked; {unverified} predate content "
-              f"tracking (mtime fallback only, no mismatch); {without_object} guarded sources "
-              f"have no object in this build directory.")
-    return problems, checked, without_object
+    print(
+        f"kernel staleness: {checked} guarded objects checked, "
+        f"{len(failures)} stale, {unverified} unverified (pre-tracking builds)"
+    )
+    for failure in failures:
+        print(failure)
+    return 1 if failures else 0
 
 
 def self_test() -> int:
-    """Synthetic end-to-end check of the audit logic; no CUDA toolchain needed."""
+    """Synthetic tar-trap cases; no build directory and no CUDA required."""
+    cases = [
+        # (name, source_content, object_content_built_from, source_mtime_delta,
+        #  sidecar_present, expected)
+        (
+            "honest build passes",
+            "kernel v1", "kernel v1", 0, True, "ok",
+        ),
+        (
+            "tar trap: content changed under an old mtime with a skipped recompile",
+            "kernel v2", "kernel v1", -6 * 365 * 24 * 3600, True, "stale",
+        ),
+        (
+            "mtime-only change with identical content passes",
+            "kernel v1", "kernel v1", 3600, True, "ok",
+        ),
+        (
+            "pre-tracking: source newer than the object with no sidecar is caught",
+            "kernel v2", "kernel v1", 3600, False, "stale",
+        ),
+        (
+            "pre-tracking: source older than the object is unverified, not failed",
+            "kernel v1", "kernel v1", -3600, False, "unverified",
+        ),
+    ]
+    failures = 0
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "repo"
-        build = Path(tmp) / "build"
-        guarded = root / "src" / "ops" / "normalization" / "k1.cu"
-        guarded_dispatch = root / "src" / "ops" / "linear_attention" / "sub" / "k2.cu"
-        unguarded = root / "src" / "ops" / "linear" / "plain.cu"
-        for path in (guarded, guarded_dispatch, unguarded):
-            path.parent.mkdir(parents=True)
-            path.write_text("// kernel\n")
-        compile_db = [
-            {"file": str(guarded), "output": str(build / "k1.cu.o")},
-            {"file": str(guarded_dispatch), "output": str(build / "k2.cu.o")},
-            {"file": str(unguarded), "output": str(build / "plain.cu.o")},
-        ]
-        build.mkdir()
-        (build / "compile_commands.json").write_text(json.dumps(compile_db))
-        for name in ("k1.cu.o", "k2.cu.o", "plain.cu.o"):
-            (build / name).write_bytes(b"fake object")
-        old = 946684800.0  # 2000-01-01, before any object
-        os.utime(guarded, (old, old))
-        os.utime(guarded_dispatch, (old, old))
+        base = Path(tmp)
+        for name, source_text, built_text, mtime_delta, sidecar, expected in cases:
+            source = base / f"source_{abs(hash(name)) % 10000}.cu"
+            object_path = base / f"object_{abs(hash(name)) % 10000}.o"
+            source.write_text(source_text)
+            object_path.write_text(built_text)
+            stamp = object_path.stat().st_mtime + mtime_delta
+            import os
 
-        def digest(path: Path) -> str:
-            return hashlib.sha256(path.read_bytes()).hexdigest()
-
-# 1. Clean build with sidecars : passes even though source mtimes are ancient.
-        (build / "k1.cu.o.srcsha").write_text(f"{digest(guarded)}  src/ops/normalization/k1.cu\n")
-        (build / "k2.cu.o.srcsha").write_text(f"{digest(guarded_dispatch)}  src/ops/linear_attention/sub/k2.cu\n")
-        problems, _, _ = audit(root, build)
-        assert not problems, problems
-
-# 2. The tar trap : source content changes, mtime stays OLD, ninja skips the
-#recompile, so the sidecar still holds the pre - sync digest.Must fail
-#despite the object being mtime - newer than the source.
-        guarded.write_text("// kernel, changed\n")
-        os.utime(guarded, (old, old))
-        problems, _, _ = audit(root, build)
-        assert any("k1.cu" in p and "stale" in p for p in problems), problems
-
-# 3. Post - build source revert with a FRESH mtime is caught by the same check.
-        os.utime(guarded)
-        problems, _, _ = audit(root, build)
-        assert any("k1.cu" in p for p in problems), problems
-
-# 4. Pre - tracking objects with no sidecar : fresh - mtime edit is flagged.
-        (build / "k1.cu.o.srcsha").unlink()
-        os.utime(guarded_dispatch, (old, old))  # k2: old mtime, no sidecar -> silent
-        problems, _, _ = audit(root, build)
-        assert any("unverified" in p for p in problems), problems
-        assert not any("k2.cu" in p for p in problems), problems
-
-# 5. An unguarded source never carries a record and is never audited.
-        assert not any("plain.cu" in p for p in problems), problems
-    print("self-test: 5/5 cases passed (clean, tar trap, post-build revert, "
-          "pre-tracking fallback, unguarded exclusion).")
+            os.utime(source, (stamp, stamp))
+            if sidecar:
+                # The launcher records the hash of the content AS COMPILED; the
+                # later content change is what the guard must catch.
+                object_path.with_name(object_path.name + ".srcsha").write_text(
+                    hashlib.sha256(built_text.encode()).hexdigest() + "\n"
+                )
+            verdict, _ = verify_pair(source, object_path)
+            if verdict != expected:
+                print(f"self-test FAIL: {name}: expected {expected}, got {verdict}")
+                failures += 1
+            else:
+                print(f"self-test ok: {name}")
+    if failures:
+        print(f"self-test: {failures} failure(s)")
+        return 1
+    print("self-test: all cases passed")
     return 0
 
 
 def main() -> int:
-    args = sys.argv[1:]
-    if args and not args[0].startswith("-"):
-        args = args[1:]  # positional REPOSITORY_ROOT, already consumed into ROOT
-    build_dir = ROOT / "build"
-    if "--build-dir" in args:
-        index = args.index("--build-dir")
-        build_dir = Path(args[index + 1])
-        del args[index:index + 2]
-    if "--self-test" in args:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("root", nargs="?", default=str(REPO))
+    parser.add_argument("--build-dir", default="build")
+    parser.add_argument("--self-test", action="store_true")
+    arguments = parser.parse_args()
+    if arguments.self_test:
         return self_test()
-    if args:
-        print(f"unknown arguments: {args}")
-        return 2
-    problems, _, _ = audit(ROOT, build_dir)
-    for problem in problems:
-        print(f"kernel-staleness: {problem}")
-    if problems:
-        print(f"kernel-staleness: FAILED ({len(problems)} stale or unverified objects).")
-        return 1
-    return 0
+    return run_guard(Path(arguments.root).resolve(), Path(arguments.build_dir).resolve())
 
 
 if __name__ == "__main__":

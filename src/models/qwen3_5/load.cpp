@@ -247,6 +247,14 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
             fused.push_back({{dense->gate, dense->up}});
         }
     }
+    if (definition->weights().draft) {
+        for (const auto& layer : definition->weights().draft->layers) {
+            fused.push_back({{layer.attention.query, layer.attention.key, layer.attention.value}});
+            // The draft MLP reads gate|up as one fused swiglu parent (draft.cpp project_swiglu),
+            // so its gate and up need the same treatment as the MTP blocks dense gate|up.
+            fused.push_back({{layer.mlp.gate, layer.mlp.up}});
+        }
+    }
     RepackedWeights repacked;
     repacked.gather(bound, fused);
     auto banks = moe::bind_banks(definition->expert_banks(), backing, plan.bank_devices_);

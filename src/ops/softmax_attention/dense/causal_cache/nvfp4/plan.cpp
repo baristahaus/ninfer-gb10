@@ -35,20 +35,26 @@ Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
     const int tiles =
         family == Nvfp4KvFamily::ParallelGrouped ? (width + grouped_limit - 1) / grouped_limit : 1;
     const int independent_tiles = batch * kv_heads * tiles;
-    const int query_tile        = family == Nvfp4KvFamily::ParallelGrouped && width <= 16
-                                      ? (width + 1) / 2
-                                      : std::min(width, grouped_limit);
+    // The decode/capacity regime rides the full token tile regardless of the step's width, so
+    // its row count and split budget are width-invariant across T=1..8. Decode budgets two
+    // CTAs per SM; wider queries start with one and double the budget if complete query-tile
+    // groups would leave over 10% of the SMs idle.
+    const int query_tile =
+        family == Nvfp4KvFamily::ParallelGrouped && width <= 16 ? (width + 1) / 2 : grouped_limit;
     // Keyed on the group size (query heads per KV head), not the head count: 24/4 and 12/2 both
     // group 6, and 16/2 groups 8. A head-count ternary here would mis-tune 12/2.
     const int row_tiles    = (query_tile * (heads / kv_heads) + 15) / 16;
     const std::int64_t sms = multiprocessor_count;
     const auto budget =
-        row_tiles <= 2 || causal_query_tiles_underfill_sms(independent_tiles, multiprocessor_count)
+        family == Nvfp4KvFamily::Grouped || row_tiles <= 2 ||
+                causal_query_tiles_underfill_sms(independent_tiles, multiprocessor_count)
             ? 2 * sms
             : sms;
     CausalKvPartition partition{1, causal_partition_target(budget, independent_tiles)};
-    // Bound partial traffic by keeping enough KV work in each split.
-    partition.key_shift = (row_tiles <= 2 ? 7 : 8) - (heads == 16 ? 1 : 0);
+    // Bound partial traffic by keeping enough KV work in each split. The decode regime
+    // keeps the small-step shift; wider queries shift by their live row count.
+    partition.key_shift =
+        (family == Nvfp4KvFamily::Grouped || row_tiles <= 2 ? 7 : 8) - (heads == 16 ? 1 : 0);
     partition.capacity  = partition.active(envelope.max_visible_keys);
     return {family, heads, width, batch, query_tile, envelope, partition};
 }

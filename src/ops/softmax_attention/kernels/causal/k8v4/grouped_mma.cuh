@@ -70,7 +70,9 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     static_assert(!ParallelQueries || !CacheInput::writes_cache);
     const int kv_head      = ParallelQueries ? blockIdx.x % Geometry::KVHeads : blockIdx.x;
     const int column_begin = ParallelQueries ? (blockIdx.x / Geometry::KVHeads) * TokenTile : 0;
-    const int tile_tokens = ParallelQueries ? min(TokenTile, full_width - column_begin) : TokenTile;
+    // Capacity schedules serve every step width up to the token tile, so the live
+    // tile is the step's own width, not the schedule's compile-time tile.
+    const int tile_tokens    = min(TokenTile, full_width - column_begin);
     const int live_row_tiles = (tile_tokens * Geometry::GroupSize + 15) / 16;
     const int partial_width = full_width, partial_begin = column_begin;
     const int split       = static_cast<int>(blockIdx.y);

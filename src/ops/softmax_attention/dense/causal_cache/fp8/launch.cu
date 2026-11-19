@@ -33,21 +33,10 @@ void grouped(const CausalAttentionOperands& p, Fp8KvCacheView<Writable> cache, I
 template <class G, class Input, bool Writable>
 void grouped_instance(const CausalAttentionOperands& p, Fp8KvCacheView<Writable> cache, Input input,
                       CausalKvPartition partition, CausalPartialView partial, cudaStream_t stream) {
-    switch (p.width) {
-#define NINFER_FP8_GROUPED(T)                                                                      \
-    case T:                                                                                        \
-        return grouped<G, T>(p, cache, input, partition, partial, stream)
-        NINFER_FP8_GROUPED(1);
-        NINFER_FP8_GROUPED(2);
-        NINFER_FP8_GROUPED(3);
-        NINFER_FP8_GROUPED(4);
-        NINFER_FP8_GROUPED(5);
-        NINFER_FP8_GROUPED(6);
-        NINFER_FP8_GROUPED(7);
-        NINFER_FP8_GROUPED(8);
-#undef NINFER_FP8_GROUPED
-    }
-    throw std::logic_error("FP8 grouped plan exceeds the selected token tile");
+    // Decode determinism (ninfer-gb10-dpl): T=1..8 ride one capacity instance per
+    // dtype, so a row's bits cannot depend on the step's token count through the
+    // kernel selection. The TokenTile schedule masks partial token tiles.
+    grouped<G, Fp8KvCausalPlan::kTokenTile>(p, cache, input, partition, partial, stream);
 }
 
 template <class Input>

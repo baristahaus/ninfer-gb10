@@ -70,10 +70,11 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
                   "Parallel query tiles read the completed represented cache");
     const int kv_head      = ParallelQueries ? blockIdx.x % Geometry::KVHeads : blockIdx.x;
     const int column_begin = ParallelQueries ? (blockIdx.x / Geometry::KVHeads) * TokenTile : 0;
-    const int tile_tokens = ParallelQueries ? min(TokenTile, full_width - column_begin) : TokenTile;
+    // Capacity schedules serve every step width up to the token tile, so the live
+    // tile is the step's own width, not the schedule's compile-time tile.
+    const int tile_tokens    = min(TokenTile, full_width - column_begin);
     const int live_row_tiles = (tile_tokens * Geometry::GroupSize + 15) / 16;
-    const int partial_width  = ParallelQueries ? full_width : TokenTile;
-    const int partial_begin  = ParallelQueries ? column_begin : 0;
+    const int partial_width = full_width, partial_begin = column_begin;
     const int split          = static_cast<int>(blockIdx.y);
     const int batch          = MultiBatch ? static_cast<int>(blockIdx.z) : 0;
     const int split_count    = static_cast<int>(gridDim.y);
@@ -89,7 +90,6 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     std::int64_t column_base = column_begin;
     if constexpr (MultiBatch) { column_base += static_cast<std::int64_t>(batch) * full_width; }
     q += static_cast<std::int64_t>(D) * Geometry::QHeads * column_base;
-    const int global_last_pos = positions[(MultiBatch ? batch * full_width : 0) + full_width - 1];
     positions += column_base;
     if constexpr (CacheInput::writes_cache) {
         input.k += static_cast<std::int64_t>(D) * Geometry::KVHeads * column_base;
@@ -111,7 +111,9 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     if (valid_tokens == 0) return; // Merge owns exact zero for masked output columns.
 
     const std::int32_t first_pos = positions[0];
-    const std::int32_t last_pos  = ParallelQueries ? global_last_pos : positions[TokenTile - 1];
+    // The last column of the step owns the largest position; the merge derives the
+    // same window from the same element, so partial tiles stay split-consistent.
+    const std::int32_t last_pos = positions[(MultiBatch ? batch * full_width : 0) + full_width - 1];
     if (first_pos < 0 || last_pos < 0 || last_pos >= logical_capacity) return;
 
     const int window             = last_pos + 1;
@@ -248,33 +250,16 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     float l1 = 0.0F;
 
     auto issue_kv_tile = [&](int tile_k0, int physical_page) {
-        if constexpr (TokenTile == 1 && Bc == 32) {
-            for (int chunk = tid; chunk < Bc / 8; chunk += Threads) {
-                const int key_l                 = chunk * 8;
-                const int key                   = tile_k0 + key_l;
-                const int valid_keys            = max(0, min(8, split_end - key));
+        for (int key_l = tid; key_l < Bc; key_l += Threads) {
+            const int key = tile_k0 + key_l;
+            if (key >= split_start && key < split_end) {
                 const std::int64_t scale_offset = kv::Fp8RowLayout<Geometry::KVHeads>::scale_offset(
                     physical_page, kv_head, key & kv::kPageMask);
-                common::cp_async_zfill<16, Cache::cg>(
-                    &k_scale_s[key_l], &cache_k_scale[scale_offset],
-                    valid_keys * static_cast<int>(sizeof(__half)));
-                common::cp_async_zfill<16, Cache::cg>(
-                    &v_scale_s[key_l], &cache_v_scale[scale_offset],
-                    valid_keys * static_cast<int>(sizeof(__half)));
-            }
-        } else {
-            for (int key_l = tid; key_l < Bc; key_l += Threads) {
-                const int key = tile_k0 + key_l;
-                if (key >= split_start && key < split_end) {
-                    const std::int64_t scale_offset =
-                        kv::Fp8RowLayout<Geometry::KVHeads>::scale_offset(physical_page, kv_head,
-                                                                          key & kv::kPageMask);
-                    k_scale_s[key_l] = cache_k_scale[scale_offset];
-                    v_scale_s[key_l] = cache_v_scale[scale_offset];
-                } else {
-                    k_scale_s[key_l] = __float2half_rn(0.0F);
-                    v_scale_s[key_l] = __float2half_rn(0.0F);
-                }
+                k_scale_s[key_l] = cache_k_scale[scale_offset];
+                v_scale_s[key_l] = cache_v_scale[scale_offset];
+            } else {
+                k_scale_s[key_l] = __float2half_rn(0.0F);
+                v_scale_s[key_l] = __float2half_rn(0.0F);
             }
         }
 #pragma unroll 1

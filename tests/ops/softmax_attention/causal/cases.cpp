@@ -210,9 +210,12 @@ void add_graph_envelope_cases(OpSuite& suite, KvCacheStorage storage) {
 void add_quantized_causal_cases(OpSuite& suite, KvCacheStorage storage) {
     for (const Geometry& geometry : kGeometries) {
         // Grouped/parallel and decode/prefill width boundaries remain independent
-        // of context length, for both public entries.
+        // of context length, for both public entries. The decode range rides one
+        // capacity instance per dtype (ninfer-gb10-dpl), so every T=1..8 runs the
+        // same TokenTile schedule with masked partial token tiles; pinning each
+        // width against the oracle verifies the masking and the append path.
         constexpr int grouped_limit = 8;
-        for (int width : {grouped_limit - 1, grouped_limit, grouped_limit + 1, 15, 16, 17}) {
+        for (int width : {1, 2, 3, 4, 5, 6, 7, 8, grouped_limit + 1, 15, 16, 17}) {
             add_append_case(suite, geometry, storage, {width, 17, 64, 600u},
                             MappingPattern::Fragmented);
             add_cached_case(suite, geometry, storage, {width, 17, 64, 600u},

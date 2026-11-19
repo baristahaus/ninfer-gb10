@@ -35,15 +35,19 @@ Int8KvCausalPlan select_int8_kv_causal_plan(int heads, int width, int batch,
     const int tiles =
         family == Int8KvFamily::ParallelGrouped ? (width + grouped_limit - 1) / grouped_limit : 1;
     const int independent_tiles = batch * kv_heads * tiles;
-    const std::int64_t sms      = multiprocessor_count;
+    // The decode/capacity regime rides one instance for T=1..8, so its split budget must not
+    // depend on the step's token count: a row's partition, and therefore its bits, stay fixed
+    // across the decode range. Decode budgets two CTAs per SM; wider queries start with one
+    // and double the budget if complete query-tile groups would leave over 10% of the SMs idle.
+    const std::int64_t sms = multiprocessor_count;
     const auto budget =
-        heads == 24 || width <= 4 ||
+        family == Int8KvFamily::Grouped || heads == 24 ||
                 causal_query_tiles_underfill_sms(independent_tiles, multiprocessor_count)
             ? 2 * sms
             : sms;
     CausalKvPartition partition{1, causal_partition_target(budget, independent_tiles)};
     // Bound partial traffic by keeping enough KV work in each split.
-    partition.key_shift = (width == 1 ? 7 : 8) - (heads == 16 ? 1 : 0);
+    partition.key_shift = (family == Int8KvFamily::Grouped ? 7 : 8) - (heads == 16 ? 1 : 0);
     partition.capacity  = partition.active(envelope.max_visible_keys);
     return {family, heads, width, batch, envelope, partition};
 }

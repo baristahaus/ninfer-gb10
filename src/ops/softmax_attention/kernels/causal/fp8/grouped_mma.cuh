@@ -75,12 +75,12 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     const int tile_tokens    = min(TokenTile, full_width - column_begin);
     const int live_row_tiles = (tile_tokens * Geometry::GroupSize + 15) / 16;
     const int partial_width = full_width, partial_begin = column_begin;
-    const int split          = static_cast<int>(blockIdx.y);
-    const int batch          = MultiBatch ? static_cast<int>(blockIdx.z) : 0;
-    const int split_count    = static_cast<int>(gridDim.y);
-    const int tid            = static_cast<int>(threadIdx.x);
-    const int warp           = tid >> 5;
-    const int lane           = tid & 31;
+    const int split       = static_cast<int>(blockIdx.y);
+    const int batch       = MultiBatch ? static_cast<int>(blockIdx.z) : 0;
+    const int split_count = static_cast<int>(gridDim.y);
+    const int tid         = static_cast<int>(threadIdx.x);
+    const int warp        = tid >> 5;
+    const int lane        = tid & 31;
 
     int valid_tokens = tile_tokens;
     if constexpr (Masked) {

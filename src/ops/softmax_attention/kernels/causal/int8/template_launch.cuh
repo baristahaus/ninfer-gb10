@@ -17,10 +17,10 @@ void launch_int8_kv_grouped_mma(const CausalAttentionOperands& p, Int8KvCacheVie
                                 cudaStream_t stream) {
     static_assert(Writable == Input::writes_cache);
     validate_quantized_causal_operands<G>(p, cache);
-    if ((!ParallelQueries && p.width != S::kTokenTile) || MultiBatch != (p.batch > 1) ||
-        Masked != (cache.valid_columns != nullptr) || partition.capacity < 1 ||
-        partition.target > CausalKvPartition::kMaxSplits || partition.target < 1 ||
-        partition.key_shift < 6 || partition.key_shift > 12 ||
+    if ((!ParallelQueries && (p.width < 1 || p.width > S::kTokenTile)) ||
+        MultiBatch != (p.batch > 1) || Masked != (cache.valid_columns != nullptr) ||
+        partition.capacity < 1 || partition.target > CausalKvPartition::kMaxSplits ||
+        partition.target < 1 || partition.key_shift < 6 || partition.key_shift > 12 ||
         partition.capacity != partition.active(p.visible_capacity) || !partial.acc ||
         !partial.maximum || !partial.sum)
         throw std::invalid_argument("INT8 grouped attention: invalid schedule/partials");

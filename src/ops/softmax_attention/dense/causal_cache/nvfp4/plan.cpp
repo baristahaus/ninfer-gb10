@@ -55,7 +55,7 @@ Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
     // keeps the small-step shift; wider queries shift by their live row count.
     partition.key_shift =
         (family == Nvfp4KvFamily::Grouped || row_tiles <= 2 ? 7 : 8) - (heads == 16 ? 1 : 0);
-    partition.capacity  = partition.active(envelope.max_visible_keys);
+    partition.capacity = partition.active(envelope.max_visible_keys);
     return {family, heads, width, batch, query_tile, envelope, partition};
 }
 

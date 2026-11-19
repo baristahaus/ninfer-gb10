@@ -910,8 +910,9 @@ int run_desynced_rounds() {
     StateImageStorage images(state_storage.span(), image_layout);
     LinearAttentionStateView state_pool(images, state_layout);
 
-    // Distinct represented patterns per (layer, row, token). Gates are token-major: element
-    // (token, head) at token * heads + head, exactly as the record kernels consume them.
+    // The record inputs are per (row, token) — the op runs per layer over the same projected
+    // columns — while the conv records live in a per-layer storage. Gates are token-major:
+    // element (token, head) at token * heads + head, as the record kernels consume them.
     const std::size_t qk_elements = static_cast<std::size_t>(kStateDim) * kQkHeads * columns;
     const std::size_t value_elements = token_values * columns;
     const std::size_t gate_elements = heads * columns;
@@ -919,48 +920,45 @@ int run_desynced_rounds() {
     std::vector<float> g_bits(gate_elements), beta_bits(gate_elements);
     std::vector<std::uint16_t> conv_bits(static_cast<std::size_t>(kProfile.layers) *
                                          kRecordCapacity * kWidth * kProfile.conv_channels);
+    for (std::int32_t row = 0; row < kRows; ++row) {
+        for (std::int32_t token = 0; token < kWidth; ++token) {
+            const std::size_t column = static_cast<std::size_t>(row) * kWidth + token;
+            for (std::int32_t head = 0; head < kQkHeads; ++head) {
+                const std::size_t base = ((column * kQkHeads + head) * kStateDim);
+                for (std::int32_t dim = 0; dim < kStateDim; ++dim) {
+                    q_bits[base + dim] =
+                        bf16_pattern(kSeed + 100003U + row * 23U + token * 11U + head * 5U + dim,
+                                     0.08F);
+                    k_bits[base + dim] =
+                        bf16_pattern(kSeed + 200003U + row * 29U + token * 13U + head * 7U + dim,
+                                     0.08F);
+                }
+            }
+            for (std::int32_t head = 0; head < kProfile.value_heads; ++head) {
+                const std::size_t vector_base = (column * kProfile.value_heads + head) * kStateDim;
+                for (std::int32_t dim = 0; dim < kStateDim; ++dim) {
+                    v_bits[vector_base + dim] =
+                        bf16_pattern(kSeed + 300003U + row * 31U + token * 17U + head * 11U + dim,
+                                     0.08F);
+                }
+                const std::size_t gate_index = column * heads + head;
+                g_bits[gate_index] =
+                    -0.04F -
+                    static_cast<float>(mix(kSeed + row * 19U + token * 7U + head) % 900U) /
+                        1000.0F;
+                beta_bits[gate_index] =
+                    0.06F +
+                    static_cast<float>(mix(kSeed + 400003U + row * 23U + token * 9U + head) %
+                                       900U) /
+                        1000.0F;
+            }
+        }
+    }
     for (std::int32_t layer = 0; layer < kProfile.layers; ++layer) {
         for (std::int32_t row = 0; row < kRows; ++row) {
-            const std::int64_t record_outer =
-                static_cast<std::int64_t>(layer) * kRecordCapacity + row;
             for (std::int32_t token = 0; token < kWidth; ++token) {
-                const std::size_t column = static_cast<std::size_t>(record_outer * kWidth + token);
-                for (std::int32_t head = 0; head < kQkHeads; ++head) {
-                    const std::size_t base = ((column * kQkHeads + head) * kStateDim);
-                    for (std::int32_t dim = 0; dim < kStateDim; ++dim) {
-                        q_bits[base + dim] = bf16_pattern(kSeed + 100003U + layer * 197U +
-                                                              row * 23U + token * 11U + head * 5U +
-                                                              dim,
-                                                          0.08F);
-                        k_bits[base + dim] = bf16_pattern(kSeed + 200003U + layer * 211U +
-                                                              row * 29U + token * 13U + head * 7U +
-                                                              dim,
-                                                          0.08F);
-                    }
-                }
-                for (std::int32_t head = 0; head < kProfile.value_heads; ++head) {
-                    const std::size_t vector_base =
-                        (column * kProfile.value_heads + head) * kStateDim;
-                    for (std::int32_t dim = 0; dim < kStateDim; ++dim) {
-                        v_bits[vector_base + dim] = bf16_pattern(kSeed + 300003U + layer * 227U +
-                                                                     row * 31U + token * 17U +
-                                                                     head * 11U + dim,
-                                                                 0.08F);
-                    }
-                    const std::size_t gate_index = column * heads + head;
-                    g_bits[gate_index] =
-                        -0.04F -
-                        static_cast<float>(mix(kSeed + layer * 41U + row * 19U + token * 7U +
-                                               head) %
-                                           900U) /
-                            1000.0F;
-                    beta_bits[gate_index] =
-                        0.06F +
-                        static_cast<float>(mix(kSeed + 400003U + layer * 43U + row * 23U +
-                                               token * 9U + head) %
-                                           900U) /
-                            1000.0F;
-                }
+                const std::size_t column =
+                    (static_cast<std::size_t>(layer) * kRecordCapacity + row) * kWidth + token;
                 for (std::int32_t channel = 0; channel < kProfile.conv_channels; ++channel) {
                     conv_bits[column * kProfile.conv_channels + channel] =
                         bf16_pattern(kSeed + 500003U + layer * 131U + row * 17U + token * 7U +
@@ -1134,12 +1132,11 @@ int run_desynced_rounds() {
             ninfer::test::cuda_environment().default_execution);
         return from_device<std::uint16_t>(token_out.data(), token_values);
     };
-    const auto out_at = [&](std::int32_t layer, std::int32_t row, std::int32_t token) {
+    const auto out_at = [&](std::int32_t, std::int32_t row, std::int32_t token) {
         const auto* base = static_cast<const std::uint16_t*>(device_out.data());
         const std::size_t begin =
-            (static_cast<std::size_t>(layer) * kRecordCapacity * kWidth +
-             static_cast<std::size_t>(row) * kWidth + token) * token_values;
-        return std::vector<std::uint16_t>(base + begin, base + begin + token_values);
+            (static_cast<std::size_t>(row) * kWidth + token) * token_values;
+        return from_device<std::uint16_t>(base + begin, token_values);
     };
     const auto conv_word = [&](std::int32_t layer, std::int32_t row, std::int32_t token,
                                std::int32_t channel) {
@@ -1188,8 +1185,8 @@ int run_desynced_rounds() {
             layer_records.value.data, static_cast<std::size_t>(kStateDim) * heads * columns);
         const auto gate_after =
             from_device<std::uint32_t>(layer_records.gate.data, heads * columns * 2);
-        const auto* k_base = static_cast<const std::uint16_t*>(device_k.data());
-        const auto* v_base = static_cast<const std::uint16_t*>(device_v.data());
+        const auto* k_base = k_bits.data();
+        const auto* v_base = v_bits.data();
         for (std::size_t i = 0; i < qk_elements; ++i)
             if (key_after[i] != k_base[i]) { fail("key record is not bit-preserving"); break; }
         for (std::size_t i = 0; i < value_elements; ++i)
@@ -1287,7 +1284,7 @@ int run_desynced_rounds() {
 // Df2Positions one-ulp row-dependent drift.
 int run_desynced_direct_path() {
     constexpr std::int32_t kStateSlots = 4;
-    constexpr std::int32_t kRow0Slot   = 1;
+    constexpr std::int32_t kRow0Slot   = 0;
     constexpr std::uint32_t kSeed      = 6200U;
     constexpr float kScale             = 1.0F / std::sqrt(128.0F);
     constexpr std::int32_t kQkHeads    = 16;

@@ -1168,7 +1168,14 @@ int exercise_forced_own_source_compound(const char* artifact) {
         // planned while the middle turn still runs and still consumes the capture endpoint.
         options.long_prefill_wait_ms = 200;
         ninfer::Engine engine(std::move(options));
-        capture = engine.submit(engine.prepare(capture_turn()), greedy_options(64, true)).wait();
+        // The capture turn must halt at the model's own stop token: with model-default
+        // stops disabled the raw window contains special-token ids that the frontend
+        // strips from content, so the middle turn's re-tokenized prompt diverges from
+        // the endpoint ledger and the admission rejects the capture endpoint with
+        // 'digest-mismatch' (the forced-compound failure).
+        auto capture_options                        = greedy_options(64, true);
+        capture_options.stop.include_model_defaults = true;
+        capture = engine.submit(engine.prepare(capture_turn()), std::move(capture_options)).wait();
         if (capture.generated_token_ids.empty() || capture.content.empty()) {
             std::cerr << "Flash-Next forced-compound capture turn did not generate\n";
             return 1;

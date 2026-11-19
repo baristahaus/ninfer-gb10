@@ -90,6 +90,11 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     std::int64_t column_base = column_begin;
     if constexpr (MultiBatch) { column_base += static_cast<std::int64_t>(batch) * full_width; }
     q += static_cast<std::int64_t>(D) * Geometry::QHeads * column_base;
+    // The step's last column owns the largest position, indexed on the base pointer:
+    // the per-tile advance below shifts `positions` to the tile's own columns, and
+    // every parallel query tile must derive one shared window — the same element the
+    // merge reads — so partial tiles stay split-consistent.
+    const std::int32_t last_pos = positions[(MultiBatch ? batch * full_width : 0) + full_width - 1];
     positions += column_base;
     if constexpr (CacheInput::writes_cache) {
         input.k += static_cast<std::int64_t>(D) * Geometry::KVHeads * column_base;
@@ -111,9 +116,6 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) __global__
     if (valid_tokens == 0) return; // Merge owns exact zero for masked output columns.
 
     const std::int32_t first_pos = positions[0];
-    // The last column of the step owns the largest position; the merge derives the
-    // same window from the same element, so partial tiles stay split-consistent.
-    const std::int32_t last_pos = positions[(MultiBatch ? batch * full_width : 0) + full_width - 1];
     if (first_pos < 0 || last_pos < 0 || last_pos >= logical_capacity) return;
 
     const int window             = last_pos + 1;

@@ -57,13 +57,21 @@ void launch_recurrent_batch_update_fixed(const Tensor& q, const Tensor& k, const
     CUDA_CHECK(cudaGetLastError());
 }
 
+// The packed batch update runs the same transition formulation as every other recurrence on
+// this target (recurrent_batch_update_kernel, the replay record, the fold, and the fused
+// fold-record all share run_recurrent_sequence's per-lane segments and 32-lane XOR tree). The
+// desynced speculative rounds route one row's state contribution through this direct path and
+// the other rows' through the record/fold commit, so any reduction-order difference between the
+// two would surface as a one-ulp row-dependent state drift.
 template <int QkHeads, int ValueHeads, bool Normalize>
 __global__
 __launch_bounds__(128,
                   2) void packed_batch_kernel(PackedBatchUpdateAccess<QkHeads, ValueHeads> access) {
-    extern __shared__ __align__(16) char backing[];
-    subgroup::run<16, Normalize, subgroup::Mode::Update, true>(
-        access, access.coordinates(), 1, reinterpret_cast<subgroup::Window<1>*>(backing));
+    const RecurrentCoordinates coord = access.coordinates();
+    __align__(16) float state[kDvPerWarp][kQkPerLane];
+    load_state_tile(state, access.state_read_base(coord), coord);
+    run_recurrent_sequence<Normalize, OutputEffects>(state, access, coord, 1);
+    store_state_tile(state, access.state_write_base(coord), coord);
 }
 } // namespace
 
@@ -121,7 +129,7 @@ void launch_recurrent_batch_update_packed_qkv(const Tensor& packed_qkv, std::int
                         scale};
     const dim3 grid(48, static_cast<unsigned>(packed_qkv.ne[1]), kStateDim / kBlockDv);
     const dim3 block(32, kNumWarps);
-    packed_batch_kernel<16, 48, true><<<grid, block, sizeof(subgroup::Window<1>), stream>>>(access);
+    packed_batch_kernel<16, 48, true><<<grid, block, 0, stream>>>(access);
     CUDA_CHECK(cudaGetLastError());
 }
 

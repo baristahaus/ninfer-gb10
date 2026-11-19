@@ -6,7 +6,8 @@ template <class S, int T = 0, bool Exact = false>
 using Instance = Nvfp4ScheduleInstance<S, 8704, T, Exact>;
 
 LinearAddLaunch select_a16(int tokens) {
-    if (tokens <= 8) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<8, 4, 2>>>;
+    // DFH pin: the 8-token tile instance keeps per-token numerics identical through T=16.
+    if (tokens <= 16) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<8, 4, 2>>>;
     if (tokens <= 16) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<16, 4, 2>>>;
     if (tokens <= 24) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<32, 4, 2>>>;
     if (tokens <= 32) return launch_nvfp4_add_sliced_k_mma<Instance<Nvfp4SlicedInstance<32, 4, 1>>>;
@@ -19,7 +20,9 @@ LinearAddLaunch select_a16(int tokens) {
 } // namespace
 
 Nvfp4LinearAddPlan select_nvfp4_add_n5120_k8704(LinearPolicy policy, std::int32_t tokens) {
-    if (!allows_a4(policy) || tokens < 8) return {select_a16(tokens)};
+    // DFH (temporary DivergeHunt pin): keep the A16 sliced kernel through the verify
+    // widths so the down projection reproduces the decode-round numerics bit-for-bit.
+    if (!allows_a4(policy) || tokens < 17) return {select_a16(tokens)};
     if (tokens >= 1024)
         return {nullptr, launch_nvfp4_add_n5120_k8704_tma, Nvfp4ScaleLayout::Tiled256};
     if (tokens <= 64)

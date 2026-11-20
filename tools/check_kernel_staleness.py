@@ -73,7 +73,7 @@ def verify_pair(source: Path, object_path: Path) -> tuple[str, str]:
         if source.stat().st_mtime > object_path.stat().st_mtime:
             return "stale", "no sidecar and the source is newer than the object"
         return "unverified", "object was built before source tracking was enabled"
-    recorded = sidecar.read_text().strip()
+    recorded = sidecar.read_text().strip().split()[0]
     current = sha256_of(source)
     if recorded == current:
         return "ok", ""
@@ -170,6 +170,10 @@ def self_test() -> int:
             "kernel v1", "kernel v1", 0, True, "ok",
         ),
         (
+            "launcher-format sidecar (sha256sum '<digest>  <path>') passes",
+            "kernel v1", "kernel v1", 0, "launcher", "ok",
+        ),
+        (
             "tar trap: content changed under an old mtime with a skipped recompile",
             "kernel v2", "kernel v1", -6 * 365 * 24 * 3600, True, "stale",
         ),
@@ -200,10 +204,15 @@ def self_test() -> int:
             os.utime(source, (stamp, stamp))
             if sidecar:
                 # The launcher records the hash of the content AS COMPILED; the
-                # later content change is what the guard must catch.
-                object_path.with_name(object_path.name + ".srcsha").write_text(
-                    hashlib.sha256(built_text.encode()).hexdigest() + "\n"
-                )
+                # later content change is what the guard must catch. The real
+                # launcher writes the sha256sum CLI format '<digest>  <path>';
+                # both that and the bare digest must verify as "ok".
+                digest = hashlib.sha256(built_text.encode()).hexdigest()
+                sidecar_path = object_path.with_name(object_path.name + ".srcsha")
+                if sidecar == "launcher":
+                    sidecar_path.write_text(f"{digest}  {source.name}\n")
+                else:
+                    sidecar_path.write_text(digest + "\n")
             verdict, _ = verify_pair(source, object_path)
             if verdict != expected:
                 print(f"self-test FAIL: {name}: expected {expected}, got {verdict}")

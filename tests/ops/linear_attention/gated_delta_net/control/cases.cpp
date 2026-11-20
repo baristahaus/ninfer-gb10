@@ -54,7 +54,7 @@ std::vector<Case> projection_cases(Profile p) {
 std::vector<Case> norm_cases(Profile p) {
     std::vector<Case> outputs{{1}, {64}, {128}, {8192}};
     if (p.input_rows == 5120)
-        boundaries(outputs, {2, 14, 28, 42, 1024, 2048, 4096});
+        boundaries(outputs, {2, 16, 28, 42, 1024, 2048, 4096});
     else
         boundaries(outputs, {6, 8, 12, 16, 127, 1024, 2048, 4096});
     unique(outputs);

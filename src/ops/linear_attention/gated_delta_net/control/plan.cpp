@@ -84,10 +84,14 @@ NormPlan select_norm_plan(Geometry geometry, std::int32_t columns) {
     // single-device geometry. A 24-head rank falls through to the materialized fallback below,
     // which normalizes with ops::rmsnorm and then runs the projection plan.
     if (geometry.input_rows == 5120 && geometry.heads == 48 && columns <= 42) {
-        // One split factor for the whole decode regime: the kernel's per-token reduction order
-        // depends only on the thread count (the token tile is a masked capacity), so 1x512 vs
-        // 2x512 at T=1/2 would make a row's bits depend on T. 2x512 keeps 512 threads.
-        if (columns <= 14) return {NormKernel::Simt, {}, {}, 2, 512};
+        // One thread configuration for the whole decode regime: the kernel's per-token
+        // reduction order depends only on the thread count (the token tile is a masked
+        // capacity), so 1x512 vs 2x512 at T=1/2 would make a row's bits depend on T. The band
+        // must also cover the batched speculative verify round — a desynced two-row record op
+        // runs the control projection at T=16 while the same row's single-stream round runs it
+        // at T<=8 — so 15 and 16 stay on the 2x512 instance and every decode-shaped T<=16
+        // produces bit-identical g/beta per row. 2x512 keeps 512 threads.
+        if (columns <= 16) return {NormKernel::Simt, {}, {}, 2, 512};
         if (columns <= 28) return {NormKernel::Simt, {}, {}, 2, 256};
         return {NormKernel::Simt, {}, {}, 4, 256};
     }

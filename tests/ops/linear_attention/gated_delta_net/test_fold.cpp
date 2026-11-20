@@ -870,12 +870,11 @@ int run_desynced_rounds() {
     const std::size_t recurrent_slot_elements =
         static_cast<std::size_t>(kStateDim) * kStateDim * kProfile.value_heads;
     const std::size_t recurrent_slot_bytes = recurrent_slot_elements * sizeof(float);
-    const std::size_t conv_slot_elements =
-        static_cast<std::size_t>(kProfile.conv_channels) * 3;
-    const std::size_t conv_slot_bytes = conv_slot_elements * sizeof(std::uint16_t);
-    const std::size_t columns = static_cast<std::size_t>(kWidth) * kRows;
+    const std::size_t conv_slot_elements   = static_cast<std::size_t>(kProfile.conv_channels) * 3;
+    const std::size_t conv_slot_bytes      = conv_slot_elements * sizeof(std::uint16_t);
+    const std::size_t columns              = static_cast<std::size_t>(kWidth) * kRows;
     const std::size_t token_values = static_cast<std::size_t>(kStateDim) * kProfile.value_heads;
-    const std::size_t heads = static_cast<std::size_t>(kProfile.value_heads);
+    const std::size_t heads        = static_cast<std::size_t>(kProfile.value_heads);
 
     const GdnReplayRecordSpec record_spec{.layers          = kProfile.layers,
                                           .record_capacity = kRecordCapacity,
@@ -913,9 +912,9 @@ int run_desynced_rounds() {
     // The record inputs are per (row, token) — the op runs per layer over the same projected
     // columns — while the conv records live in a per-layer storage. Gates are token-major:
     // element (token, head) at token * heads + head, as the record kernels consume them.
-    const std::size_t qk_elements = static_cast<std::size_t>(kStateDim) * kQkHeads * columns;
+    const std::size_t qk_elements    = static_cast<std::size_t>(kStateDim) * kQkHeads * columns;
     const std::size_t value_elements = token_values * columns;
-    const std::size_t gate_elements = heads * columns;
+    const std::size_t gate_elements  = heads * columns;
     std::vector<std::uint16_t> q_bits(qk_elements), k_bits(qk_elements), v_bits(value_elements);
     std::vector<float> g_bits(gate_elements), beta_bits(gate_elements);
     std::vector<std::uint16_t> conv_bits(static_cast<std::size_t>(kProfile.layers) *
@@ -926,31 +925,26 @@ int run_desynced_rounds() {
             for (std::int32_t head = 0; head < kQkHeads; ++head) {
                 const std::size_t base = ((column * kQkHeads + head) * kStateDim);
                 for (std::int32_t dim = 0; dim < kStateDim; ++dim) {
-                    q_bits[base + dim] =
-                        bf16_pattern(kSeed + 100003U + row * 23U + token * 11U + head * 5U + dim,
-                                     0.08F);
-                    k_bits[base + dim] =
-                        bf16_pattern(kSeed + 200003U + row * 29U + token * 13U + head * 7U + dim,
-                                     0.08F);
+                    q_bits[base + dim] = bf16_pattern(
+                        kSeed + 100003U + row * 23U + token * 11U + head * 5U + dim, 0.08F);
+                    k_bits[base + dim] = bf16_pattern(
+                        kSeed + 200003U + row * 29U + token * 13U + head * 7U + dim, 0.08F);
                 }
             }
             for (std::int32_t head = 0; head < kProfile.value_heads; ++head) {
                 const std::size_t vector_base = (column * kProfile.value_heads + head) * kStateDim;
                 for (std::int32_t dim = 0; dim < kStateDim; ++dim) {
-                    v_bits[vector_base + dim] =
-                        bf16_pattern(kSeed + 300003U + row * 31U + token * 17U + head * 11U + dim,
-                                     0.08F);
+                    v_bits[vector_base + dim] = bf16_pattern(
+                        kSeed + 300003U + row * 31U + token * 17U + head * 11U + dim, 0.08F);
                 }
                 const std::size_t gate_index = column * heads + head;
                 g_bits[gate_index] =
                     -0.04F -
-                    static_cast<float>(mix(kSeed + row * 19U + token * 7U + head) % 900U) /
-                        1000.0F;
+                    static_cast<float>(mix(kSeed + row * 19U + token * 7U + head) % 900U) / 1000.0F;
                 beta_bits[gate_index] =
-                    0.06F +
-                    static_cast<float>(mix(kSeed + 400003U + row * 23U + token * 9U + head) %
-                                       900U) /
-                        1000.0F;
+                    0.06F + static_cast<float>(
+                                mix(kSeed + 400003U + row * 23U + token * 9U + head) % 900U) /
+                                1000.0F;
             }
         }
     }
@@ -960,10 +954,8 @@ int run_desynced_rounds() {
                 const std::size_t column =
                     (static_cast<std::size_t>(layer) * kRecordCapacity + row) * kWidth + token;
                 for (std::int32_t channel = 0; channel < kProfile.conv_channels; ++channel) {
-                    conv_bits[column * kProfile.conv_channels + channel] =
-                        bf16_pattern(kSeed + 500003U + layer * 131U + row * 17U + token * 7U +
-                                         channel,
-                                     0.05F);
+                    conv_bits[column * kProfile.conv_channels + channel] = bf16_pattern(
+                        kSeed + 500003U + layer * 131U + row * 17U + token * 7U + channel, 0.05F);
                 }
             }
         }
@@ -1003,33 +995,30 @@ int run_desynced_rounds() {
         }
     }
 
-    DeviceBuffer device_q = to_device(q_bits);
-    DeviceBuffer device_k = to_device(k_bits);
-    DeviceBuffer device_v = to_device(v_bits);
-    DeviceBuffer device_g = to_device(g_bits);
-    DeviceBuffer device_beta = to_device(beta_bits);
-    DeviceBuffer device_pending_q = to_device(pending_q);
-    DeviceBuffer device_pending_k = to_device(pending_k);
-    DeviceBuffer device_pending_v = to_device(pending_v);
+    DeviceBuffer device_q            = to_device(q_bits);
+    DeviceBuffer device_k            = to_device(k_bits);
+    DeviceBuffer device_v            = to_device(v_bits);
+    DeviceBuffer device_g            = to_device(g_bits);
+    DeviceBuffer device_beta         = to_device(beta_bits);
+    DeviceBuffer device_pending_q    = to_device(pending_q);
+    DeviceBuffer device_pending_k    = to_device(pending_k);
+    DeviceBuffer device_pending_v    = to_device(pending_v);
     DeviceBuffer device_pending_gate = to_device(pending_gate);
     DeviceBuffer device_out(ninfer::test::cuda_environment().context.device(),
                             value_elements * sizeof(std::uint16_t));
     device_out.fill(0);
-    DeviceBuffer device_initial = to_device(std::vector<std::int32_t>{kRow0Slot, kRow1Slot});
-    DeviceBuffer device_valid = to_device(std::vector<std::int32_t>{kWidth, kWidth});
-    DeviceBuffer device_pending_rows =
-        to_device(std::vector<std::int32_t>{kRow0Slot, kRow0Slot, kRow0Pending, 0, kRow1Slot,
-                                            kRow1Slot, 0, 0});
-    DeviceBuffer device_source = to_device(std::vector<std::int32_t>{kRow0Slot, kRow1Slot});
+    DeviceBuffer device_initial      = to_device(std::vector<std::int32_t>{kRow0Slot, kRow1Slot});
+    DeviceBuffer device_valid        = to_device(std::vector<std::int32_t>{kWidth, kWidth});
+    DeviceBuffer device_pending_rows = to_device(std::vector<std::int32_t>{
+        kRow0Slot, kRow0Slot, kRow0Pending, 0, kRow1Slot, kRow1Slot, 0, 0});
+    DeviceBuffer device_source       = to_device(std::vector<std::int32_t>{kRow0Slot, kRow1Slot});
     DeviceBuffer device_destination =
         to_device(std::vector<std::int32_t>{kRow0Slot, kRow1Destination});
-    DeviceBuffer device_commits =
-        to_device(std::vector<std::int32_t>{kRow0Commit, kRow1Commit});
+    DeviceBuffer device_commits = to_device(std::vector<std::int32_t>{kRow0Commit, kRow1Commit});
 
     Tensor q_tensor(device_q.span(), DType::BF16, {kStateDim, kQkHeads, kWidth, kRows});
     Tensor k_tensor(device_k.span(), DType::BF16, {kStateDim, kQkHeads, kWidth, kRows});
-    Tensor v_tensor(device_v.span(), DType::BF16,
-                    {kStateDim, kProfile.value_heads, kWidth, kRows});
+    Tensor v_tensor(device_v.span(), DType::BF16, {kStateDim, kProfile.value_heads, kWidth, kRows});
     Tensor g_tensor(device_g.span(), DType::FP32, {kProfile.value_heads, kWidth, kRows});
     Tensor beta_tensor(device_beta.span(), DType::FP32, {kProfile.value_heads, kWidth, kRows});
     Tensor pending_q_tensor(device_pending_q.span(), DType::BF16,
@@ -1068,9 +1057,9 @@ int run_desynced_rounds() {
                    "upload row1 initial state");
         for (const std::int32_t slot : {kRow0Slot, kRow1Slot, kRow1Destination}) {
             const Tensor conv = state_pool.conv_slot(static_cast<std::uint32_t>(layer), slot);
-            cuda_check(cudaMemcpy(conv.data, initial_conv.data(), conv_slot_bytes,
-                                  cudaMemcpyHostToDevice),
-                       "upload initial conv");
+            cuda_check(
+                cudaMemcpy(conv.data, initial_conv.data(), conv_slot_bytes, cudaMemcpyHostToDevice),
+                "upload initial conv");
         }
     }
 
@@ -1086,7 +1075,7 @@ int run_desynced_rounds() {
                            token_values * sizeof(std::uint16_t));
     Tensor token_out_tensor(token_out.span(), DType::BF16, {kStateDim, kProfile.value_heads, 1});
 
-    int failures = 0;
+    int failures    = 0;
     const auto fail = [&](const std::string& what) {
         std::cerr << "desynced record/fold: " << what << "\n";
         ++failures;
@@ -1115,27 +1104,25 @@ int run_desynced_rounds() {
     const auto chain_step = [&](std::int32_t row, std::int32_t token, const Tensor& q_plane,
                                 const Tensor& key_plane, const Tensor& value_plane,
                                 const float* g_words, const float* beta_words) {
-        const std::size_t offset =
-            (static_cast<std::size_t>(row) * kWidth + token) * heads;
-        Tensor query = q_plane.slice(3, row, 1).slice(2, token, 1);
-        Tensor key = key_plane.slice(3, row, 1).slice(2, token, 1);
-        Tensor value = value_plane.slice(3, row, 1).slice(2, token, 1);
-        DeviceBuffer step_g = to_device(std::vector<float>(g_words + offset,
-                                                           g_words + offset + heads));
-        DeviceBuffer step_beta = to_device(std::vector<float>(beta_words + offset,
-                                                              beta_words + offset + heads));
+        const std::size_t offset = (static_cast<std::size_t>(row) * kWidth + token) * heads;
+        Tensor query             = q_plane.slice(3, row, 1).slice(2, token, 1);
+        Tensor key               = key_plane.slice(3, row, 1).slice(2, token, 1);
+        Tensor value             = value_plane.slice(3, row, 1).slice(2, token, 1);
+        DeviceBuffer step_g =
+            to_device(std::vector<float>(g_words + offset, g_words + offset + heads));
+        DeviceBuffer step_beta =
+            to_device(std::vector<float>(beta_words + offset, beta_words + offset + heads));
         Tensor g_token(step_g.span(), DType::FP32, {kProfile.value_heads, 1});
         Tensor beta_token(step_beta.span(), DType::FP32, {kProfile.value_heads, 1});
-        ops::gated_delta_net_batch_update(
-            query, key, value, g_token, beta_token, kScale, true, local_state_tensor,
-            selected_reference_slot, selected_reference_slot, token_out_tensor,
-            ninfer::test::cuda_environment().default_execution);
+        ops::gated_delta_net_batch_update(query, key, value, g_token, beta_token, kScale, true,
+                                          local_state_tensor, selected_reference_slot,
+                                          selected_reference_slot, token_out_tensor,
+                                          ninfer::test::cuda_environment().default_execution);
         return from_device<std::uint16_t>(token_out.data(), token_values);
     };
     const auto out_at = [&](std::int32_t, std::int32_t row, std::int32_t token) {
-        const auto* base = static_cast<const std::uint16_t*>(device_out.data());
-        const std::size_t begin =
-            (static_cast<std::size_t>(row) * kWidth + token) * token_values;
+        const auto* base        = static_cast<const std::uint16_t*>(device_out.data());
+        const std::size_t begin = (static_cast<std::size_t>(row) * kWidth + token) * token_values;
         return from_device<std::uint16_t>(base + begin, token_values);
     };
     const auto conv_word = [&](std::int32_t layer, std::int32_t row, std::int32_t token,
@@ -1148,7 +1135,7 @@ int run_desynced_rounds() {
     // The pending gate record interleaves {g, beta}; the chain consumes separate per-head words.
     std::vector<float> pending_g_words(gate_elements), pending_beta_words(gate_elements);
     for (std::size_t i = 0; i < gate_elements; ++i) {
-        pending_g_words[i] = pending_gate[2 * i];
+        pending_g_words[i]    = pending_gate[2 * i];
         pending_beta_words[i] = pending_gate[2 * i + 1];
     }
 
@@ -1188,9 +1175,15 @@ int run_desynced_rounds() {
         const auto* k_base = k_bits.data();
         const auto* v_base = v_bits.data();
         for (std::size_t i = 0; i < qk_elements; ++i)
-            if (key_after[i] != k_base[i]) { fail("key record is not bit-preserving"); break; }
+            if (key_after[i] != k_base[i]) {
+                fail("key record is not bit-preserving");
+                break;
+            }
         for (std::size_t i = 0; i < value_elements; ++i)
-            if (value_after[i] != v_base[i]) { fail("value record is not bit-preserving"); break; }
+            if (value_after[i] != v_base[i]) {
+                fail("value record is not bit-preserving");
+                break;
+            }
         for (std::size_t i = 0; i < gate_elements; ++i)
             if (gate_after[2 * i] != std::bit_cast<std::uint32_t>(g_bits[i]) ||
                 gate_after[2 * i + 1] != std::bit_cast<std::uint32_t>(beta_bits[i])) {
@@ -1204,19 +1197,19 @@ int run_desynced_rounds() {
         chain_step(0, 0, pending_q_tensor, pending_k_tensor, pending_v_tensor,
                    pending_g_words.data(), pending_beta_words.data());
         for (std::int32_t token = 0; token < kWidth; ++token) {
-            const auto reference = chain_step(0, token, q_tensor, k_tensor, v_tensor,
-                                              g_bits.data(), beta_bits.data());
+            const auto reference =
+                chain_step(0, token, q_tensor, k_tensor, v_tensor, g_bits.data(), beta_bits.data());
             if (reference != out_at(layer, 0, token))
-                fail("row0 token output != single-stream chain at layer " +
-                     std::to_string(layer) + " token " + std::to_string(token));
+                fail("row0 token output != single-stream chain at layer " + std::to_string(layer) +
+                     " token " + std::to_string(token));
         }
         load_initial(row1_initial);
         for (std::int32_t token = 0; token < kWidth; ++token) {
-            const auto reference = chain_step(1, token, q_tensor, k_tensor, v_tensor,
-                                              g_bits.data(), beta_bits.data());
+            const auto reference =
+                chain_step(1, token, q_tensor, k_tensor, v_tensor, g_bits.data(), beta_bits.data());
             if (reference != out_at(layer, 1, token))
-                fail("row1 token output != single-stream chain at layer " +
-                     std::to_string(layer) + " token " + std::to_string(token));
+                fail("row1 token output != single-stream chain at layer " + std::to_string(layer) +
+                     " token " + std::to_string(token));
         }
     }
 
@@ -1235,15 +1228,13 @@ int run_desynced_rounds() {
         for (std::int32_t token = 0; token < kRow0Commit; ++token)
             chain_step(0, token, q_tensor, k_tensor, v_tensor, g_bits.data(), beta_bits.data());
         if (slot_bits(layer, kRow0Slot) != local_bits())
-            fail("row0 committed state != single-stream chain at layer " +
-                 std::to_string(layer));
+            fail("row0 committed state != single-stream chain at layer " + std::to_string(layer));
 
         load_initial(row1_initial);
         for (std::int32_t token = 0; token < kRow1Commit; ++token)
             chain_step(1, token, q_tensor, k_tensor, v_tensor, g_bits.data(), beta_bits.data());
         if (slot_bits(layer, kRow1Destination) != local_bits())
-            fail("row1 committed state != single-stream chain at layer " +
-                 std::to_string(layer));
+            fail("row1 committed state != single-stream chain at layer " + std::to_string(layer));
 
         // The rows carried different sequences; their committed states must differ.
         if (slot_bits(layer, kRow0Slot) == slot_bits(layer, kRow1Destination))
@@ -1270,10 +1261,10 @@ int run_desynced_rounds() {
         const auto conv3 = from_device<std::uint16_t>(
             state_pool.conv_slot(static_cast<std::uint32_t>(layer), kRow1Destination).data,
             conv_slot_elements);
-        if (conv0 != expected_row0) fail("row0 conv history != tail_3 at layer " +
-                                         std::to_string(layer));
-        if (conv3 != expected_row1) fail("row1 conv history != tail_3 at layer " +
-                                         std::to_string(layer));
+        if (conv0 != expected_row0)
+            fail("row0 conv history != tail_3 at layer " + std::to_string(layer));
+        if (conv3 != expected_row1)
+            fail("row1 conv history != tail_3 at layer " + std::to_string(layer));
     }
     return failures;
 }
@@ -1289,25 +1280,22 @@ int run_desynced_direct_path() {
     constexpr float kScale             = 1.0F / std::sqrt(128.0F);
     constexpr std::int32_t kQkHeads    = 16;
     constexpr std::int32_t kHeads      = 48;
-    const std::size_t slot_elements =
-        static_cast<std::size_t>(kStateDim) * kStateDim * kHeads;
-    const std::size_t slot_bytes = slot_elements * sizeof(float);
-    const std::size_t packed_column = (2 * kQkHeads + kHeads) * kStateDim;
+    const std::size_t slot_elements    = static_cast<std::size_t>(kStateDim) * kStateDim * kHeads;
+    const std::size_t slot_bytes       = slot_elements * sizeof(float);
+    const std::size_t packed_column    = (2 * kQkHeads + kHeads) * kStateDim;
 
     const auto& environment = ninfer::test::cuda_environment();
-    DeviceBuffer packed(environment.context.device(),
-                        packed_column * sizeof(std::uint16_t));
+    DeviceBuffer packed(environment.context.device(), packed_column * sizeof(std::uint16_t));
     DeviceBuffer states(environment.context.device(), slot_bytes * kStateSlots);
     states.fill(0);
     DeviceBuffer scratch(environment.context.device(), slot_bytes);
     DeviceBuffer g_buffer(environment.context.device(), kHeads * sizeof(float));
     DeviceBuffer beta_buffer(environment.context.device(), kHeads * sizeof(float));
     DeviceBuffer out_buffer(environment.context.device(),
-                            static_cast<std::size_t>(kStateDim) * kHeads *
-                                sizeof(std::uint16_t));
-    DeviceBuffer source_slot = to_device(std::vector<std::int32_t>{kRow0Slot});
+                            static_cast<std::size_t>(kStateDim) * kHeads * sizeof(std::uint16_t));
+    DeviceBuffer source_slot      = to_device(std::vector<std::int32_t>{kRow0Slot});
     DeviceBuffer destination_slot = to_device(std::vector<std::int32_t>{kRow0Slot});
-    DeviceBuffer reference_slot = to_device(std::vector<std::int32_t>{0});
+    DeviceBuffer reference_slot   = to_device(std::vector<std::int32_t>{0});
 
     // One token of represented inputs, shared by both paths.
     std::vector<std::uint16_t> q_bits(static_cast<std::size_t>(kStateDim) * kQkHeads);
@@ -1327,8 +1315,7 @@ int run_desynced_direct_path() {
             v_bits[static_cast<std::size_t>(head) * kStateDim + dim] =
                 bf16_pattern(kSeed + 200003U + head * 11U + dim, 0.08F);
         }
-        g_bits[head] =
-            -0.04F - static_cast<float>(mix(kSeed + head) % 900U) / 1000.0F;
+        g_bits[head]    = -0.04F - static_cast<float>(mix(kSeed + head) % 900U) / 1000.0F;
         beta_bits[head] = 0.06F + static_cast<float>(mix(kSeed + 300003U + head) % 900U) / 1000.0F;
     }
     // The packed column interleaves q, k, and v head-major.
@@ -1347,9 +1334,9 @@ int run_desynced_direct_path() {
     cuda_check(cudaMemcpy(packed.data(), packed_bits.data(), packed_bits.size() * 2,
                           cudaMemcpyHostToDevice),
                "upload packed column");
-    cuda_check(cudaMemcpy(g_buffer.data(), g_bits.data(), kHeads * sizeof(float),
-                          cudaMemcpyHostToDevice),
-               "upload gates");
+    cuda_check(
+        cudaMemcpy(g_buffer.data(), g_bits.data(), kHeads * sizeof(float), cudaMemcpyHostToDevice),
+        "upload gates");
     cuda_check(cudaMemcpy(beta_buffer.data(), beta_bits.data(), kHeads * sizeof(float),
                           cudaMemcpyHostToDevice),
                "upload betas");
@@ -1373,8 +1360,7 @@ int run_desynced_direct_path() {
     Tensor scratch_tensor(scratch.data(), environment.context.device(), DType::FP32,
                           {kStateDim, kStateDim, kHeads});
     Tensor g_tensor(g_buffer.data(), environment.context.device(), DType::FP32, {kHeads, 1});
-    Tensor beta_tensor(beta_buffer.data(), environment.context.device(), DType::FP32,
-                       {kHeads, 1});
+    Tensor beta_tensor(beta_buffer.data(), environment.context.device(), DType::FP32, {kHeads, 1});
     Tensor out_tensor(out_buffer.data(), environment.context.device(), DType::BF16,
                       {kStateDim, kHeads, 1});
     Tensor source_tensor(source_slot.span(), DType::I32, {1});
@@ -1383,9 +1369,8 @@ int run_desynced_direct_path() {
 
     // The direct packed path, in place in slot 1.
     ninfer::ops::detail::gated_delta_net::launch_recurrent_batch_update_packed_qkv(
-        packed_tensor, kQkHeads, kHeads, g_tensor, beta_tensor, kScale, state_tensor,
-        source_tensor, destination_tensor, out_tensor,
-        environment.default_execution.stream());
+        packed_tensor, kQkHeads, kHeads, g_tensor, beta_tensor, kScale, state_tensor, source_tensor,
+        destination_tensor, out_tensor, environment.default_execution.stream());
     cuda_check(cudaDeviceSynchronize(), "packed direct path");
 
     // The single-stream reference: the same token through the state-pool batch update.
@@ -1402,15 +1387,15 @@ int run_desynced_direct_path() {
     Tensor beta_step(beta_buffer.data(), environment.context.device(), DType::FP32, {kHeads, 1});
     Tensor token_out(out_buffer.data(), environment.context.device(), DType::BF16,
                      {kStateDim, kHeads, 1});
-    ops::gated_delta_net_batch_update(
-        q_tensor, k_tensor, v_tensor, g_step, beta_step, kScale, true, scratch_tensor,
-        reference_tensor, reference_tensor, token_out, environment.default_execution);
+    ops::gated_delta_net_batch_update(q_tensor, k_tensor, v_tensor, g_step, beta_step, kScale, true,
+                                      scratch_tensor, reference_tensor, reference_tensor, token_out,
+                                      environment.default_execution);
     cuda_check(cudaDeviceSynchronize(), "reference batch update");
 
     const auto* direct_ptr =
         static_cast<const char*>(states.data()) +
         static_cast<std::ptrdiff_t>(kRow0Slot) * static_cast<std::ptrdiff_t>(slot_bytes);
-    const auto direct_bits = from_device<std::uint32_t>(direct_ptr, slot_elements);
+    const auto direct_bits    = from_device<std::uint32_t>(direct_ptr, slot_elements);
     const auto reference_bits = from_device<std::uint32_t>(scratch.data(), slot_elements);
     if (direct_bits != reference_bits) {
         std::cerr << "desynced direct path: state bits differ from the single-stream chain "
@@ -1488,8 +1473,7 @@ int main(int argc, char** argv) {
     suite.add("gdn_fold/record_rounds/q8", [] { return run_record_fold_rounds(true); },
               {{"format", "q8"}});
     suite.add("gdn_fold/desynced_two_row/l36/h24", [] { return run_desynced_rounds(); });
-    suite.add("gdn_fold/desynced_direct_path/l36/h24",
-              [] { return run_desynced_direct_path(); });
+    suite.add("gdn_fold/desynced_direct_path/l36/h24", [] { return run_desynced_direct_path(); });
 
     for (int b = 1; b <= 8; ++b) {
         for (int t : {2, 4, 6, 8, 16}) {

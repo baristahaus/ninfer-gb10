@@ -271,6 +271,8 @@ def _specs() -> tuple[TensorSpec, ...]:
     """The closed FP8+MTP inventory for a BF16-derived artifact."""
 
     replaced = set(_DENSE_FP8_IDS) | set(_PACKED_PARENTS)
+    for parent in _PACKED_PARENTS.values():
+        replaced |= set(parent.parameters)  # gate/up bind row ranges of the packed parent
     replaced |= {_mtp_bank_source(role) for role in _BANK_SHAPES}
     replaced |= {spec.id for spec in inventory.TENSOR_SPECS
                  if spec.id.endswith("_input_divisors")}

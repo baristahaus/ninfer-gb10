@@ -433,6 +433,8 @@ def _describe(objects: list[dict]) -> dict:
             components[component]["resources"][role] = name
             continue
         bindings[name] = {"object": name}
+        if name in _PACKED_PARENTS:
+            continue  # the parent is object-only; its gate/up parameters carry the Uses
         if obj["layout"] == EXPERT_NVFP4:
             auxiliary = _divisor_parameter(name)
             if auxiliary not in names:
@@ -442,6 +444,10 @@ def _describe(objects: list[dict]) -> dict:
                          "auxiliaries": {"weight_divisor": {"object": auxiliary}}})
         elif len(obj["shape"]) >= 2 and obj["format"] != "fp8_e4m3fn":
             uses.append({"parameter": name, "input": name + "/input",
+                         "activation_policy": "A16Only"})
+    for parent in _PACKED_PARENTS.values():
+        for parameter in parent.parameters:
+            uses.append({"parameter": parameter, "input": parameter + "/input",
                          "activation_policy": "A16Only"})
     return {"components": components, "bindings": bindings, "uses": uses}
 

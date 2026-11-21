@@ -156,6 +156,26 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
             bindings.push_back({artifact::StorageId{request_index}, 0, reference.binding.elements});
             continue;
         }
+        // EXL3 payloads cannot be sliced into a rank's own tensor: their geometry resolves
+        // from the encoded payload (the bank's directory or the dense extent), and the native
+        // consumer requires the complete object -- the packed parents dispatch as row-sliced
+        // views at execution (`exl3_dense_slice`). So an EXL3 row-band binding shares the
+        // complete object as its storage and binds the band as a region of it. That also keeps
+        // a fused consumer's members on one parent, so the group stays a single native weight
+        // (projection_region_count 1) instead of a gather no EXL3 geometry can express.
+        if (reference.binding.parts.size() == 1) {
+            const auto& part = reference.binding.parts.front();
+            const auto& g    = reader.geometry(part.object);
+            const auto k     = g.shape.back();
+            if (g.format == QType::EXL3 &&
+                (g.layout == QuantLayout::Exl3ExpertBank || g.layout == QuantLayout::Exl3Dense) &&
+                part.begin % k == 0 && (part.end - part.begin) % k == 0) {
+                requests.push_back(
+                    {artifact::whole_tensor(reader, part.object), devices[i], access});
+                bindings.push_back({artifact::StorageId{request_index}, part.begin, part.end});
+                continue;
+            }
+        }
         const auto slices = matrix_slices(reader, reference);
         if (std::getenv("NINFER_DEBUG_SLICES") != nullptr) {
             std::fprintf(stderr, "[slices] %s rank_shape=%llu,%llu n=%zu\n", reference.name.c_str(),

@@ -119,9 +119,12 @@ workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
         qkv_rows        = ops::projection_profile(parameters.role_rows->at(0)).first.n;
         out.value_width = ops::projection_profile(parameters.role_rows->at(1)).first.n;
     } else {
-        const auto profile = ops::projection_profile(parameters.projection);
-        qkv_rows           = profile.first.n;
-        out.value_width    = parameters.projection_rows[1];
+        // The logical q|k|v rows, not the projection profile's `n`: a fused EXL3 parent packs
+        // z after q|k|v (`gdn_input_proj_exl3` slices the roles out of the complete object), so
+        // its n is q|k|v+z and the conv plane must not size to it. `projection_rows` records the
+        // members' own extents and agrees with the profile's n whenever the parent is unpacked.
+        qkv_rows        = parameters.projection_rows[0];
+        out.value_width = parameters.projection_rows[1];
     }
     out.key_width = (qkv_rows - out.value_width) / 2;
     if (out.value_heads <= 0 || out.key_width <= 0 || out.value_width <= 0 ||

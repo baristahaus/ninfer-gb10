@@ -373,8 +373,12 @@ def _read(reader: SafetensorsSource, name: str) -> torch.Tensor:
         else pieces[0].reshape(info.shape)
 
 
-def _ple_payload(reader: SafetensorsSource) -> tuple[bytes, float, dict]:
-    """Two streaming passes over the BF16 shards: the global BF16 scale, then the codes."""
+def _ple_payload(reader: SafetensorsSource) -> tuple[Iterator[bytes], float, dict]:
+    """Two streaming passes over the BF16 shards: the global BF16 scale, then the codes.
+
+    The error statistics accumulate per shard; nothing larger than one shard's fp64 scratch
+    (about 3.2 GiB) is ever resident, so the 51 GB table never materializes in host memory.
+    """
 
     maximum = 0.0
     for name in _PLE_SHARDS:
@@ -382,25 +386,33 @@ def _ple_payload(reader: SafetensorsSource) -> tuple[bytes, float, dict]:
     if maximum == 0.0:
         raise ValueError("the PLE table is all zeros")
     scale = torch.tensor(maximum / 448.0).to(torch.bfloat16).float()
-    codes: list[torch.Tensor] = []
-    exact: list[torch.Tensor] = []
-    for name in _PLE_SHARDS:
-        shard = _read(reader, name)
-        codes.append((shard.float() / float(scale)).to(torch.float8_e4m3fn).view(torch.uint8))
-        exact.append(shard.float().double())
-    table = torch.cat(codes)
-    if tuple(table.shape) != (320001536, 160):
-        raise ValueError("PLE table payload has the wrong shape")
-    exact_table = torch.cat(exact)
-    error = (table.float().double() * float(scale) - exact_table).abs()
+
+    squared_error = 0.0
+    squared_value = 0.0
+    max_abs_error = 0.0
+
+    def encode():
+        nonlocal squared_error, squared_value, max_abs_error
+        for name in _PLE_SHARDS:
+            shard = _read(reader, name)
+            code = (shard.float() / float(scale)).to(torch.float8_e4m3fn).view(torch.uint8)
+            exact = shard.float().double()
+            represented = code.float().double() * float(scale)
+            error = represented - exact
+            squared_error += float(error.square().sum())
+            squared_value += float(exact.square().sum())
+            max_abs_error = max(max_abs_error, float(error.abs().max()))
+            del exact, represented, error
+            report["relative_rms_error"] = math.sqrt(squared_error / squared_value) \
+                if squared_value else 0.0
+            report["max_abs_error"] = max_abs_error
+            yield encode_direct(code, inventory.FP8)
+
     report = {
         "shape": [320001536, 160],
         "weight_scale": float(scale),
-        "relative_rms_error": float(error.square().sum().sqrt()
-                                    / exact_table.square().sum().sqrt()),
-        "max_abs_error": float(error.max()),
     }
-    return encode_direct(table, inventory.FP8), float(scale), report
+    return encode(), float(scale), report
 
 
 def encode_tensor_payload(value, spec, device):
@@ -506,8 +518,8 @@ def convert(model_dir: str | Path, out_path: str | Path, *, device: str = "cpu")
                 if spec_id == _PLE_TABLE:
                     return ple_payloads.pop(_PLE_TABLE)
                 if spec_id == _PLE_SCALE:
-                    payload, scale, report = _ple_payload(reader)
-                    ple_payloads[_PLE_TABLE] = payload
+                    iterator, scale, report = _ple_payload(reader)
+                    ple_payloads[_PLE_TABLE] = iterator
                     errors["ple_table"] = report
                     return encode_direct(torch.tensor(scale).to(torch.bfloat16), "bf16")
                 if spec_id in _PACKED_PARENTS:

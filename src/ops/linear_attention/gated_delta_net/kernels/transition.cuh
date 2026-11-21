@@ -128,6 +128,24 @@ __device__ __forceinline__ void apply_gdn_transition(float (&state)[kDvPerWarp][
 #pragma unroll
         for (int c = 0; c < kQkPerLane; ++c) { state[r][c] = alpha * state[r][c] + delta * key[c]; }
     }
+
+    // The transition can grow the state past the bf16 output range when the decay gate
+    // saturates: the fp32 state reaches Inf within a few tokens and every later output is
+    // non-finite. Bound it far above any reachable healthy magnitude and below the
+    // fp32-to-bf16 overflow point; the clamp is a no-op for every distribution that stays
+    // finite on its own, so exact decode is untouched.
+    constexpr float kStateBound = 1.0e30F;
+#pragma unroll
+    for (int r = 0; r < kDvPerWarp; ++r) {
+#pragma unroll
+        for (int c = 0; c < kQkPerLane; ++c) {
+            const float v = state[r][c];
+            state[r][c] = v > kStateBound   ? kStateBound
+                          : v < -kStateBound ? -kStateBound
+                          : v == v           ? v
+                                             : 0.0F; // NaN carries no state information
+        }
+    }
 }
 
 template <bool Normalize>

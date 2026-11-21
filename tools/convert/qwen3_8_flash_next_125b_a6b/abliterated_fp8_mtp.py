@@ -395,9 +395,9 @@ def _ple_payload(reader: SafetensorsSource) -> tuple[Iterator[bytes], float, dic
         nonlocal squared_error, squared_value, max_abs_error
         for name in _PLE_SHARDS:
             shard = _read(reader, name)
-            code = (shard.float() / float(scale)).to(torch.float8_e4m3fn).view(torch.uint8)
+            fp8 = (shard.float() / float(scale)).to(torch.float8_e4m3fn)
             exact = shard.float().double()
-            represented = code.float().double() * float(scale)
+            represented = fp8.float().double() * float(scale)
             error = represented - exact
             squared_error += float(error.square().sum())
             squared_value += float(exact.square().sum())
@@ -406,7 +406,7 @@ def _ple_payload(reader: SafetensorsSource) -> tuple[Iterator[bytes], float, dic
             report["relative_rms_error"] = math.sqrt(squared_error / squared_value) \
                 if squared_value else 0.0
             report["max_abs_error"] = max_abs_error
-            yield encode_direct(code, inventory.FP8)
+            yield encode_direct(fp8, inventory.FP8)
 
     report = {
         "shape": [320001536, 160],

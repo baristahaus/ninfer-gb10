@@ -46,7 +46,7 @@ from tools.artifact.codecs.nvfp4 import swizzle_nvfp4_scales
 from tools.artifact.codecs.row_split import encode_row_split
 from tools.artifact.layouts import align_up, encoded_size
 from tools.artifact.reader import Artifact
-from tools.artifact.schema import ResourceSpec, TensorSpec, plan_objects
+from tools.artifact.schema import ArtifactError, ResourceSpec, TensorSpec, plan_objects
 from tools.artifact.writer import ArtifactWriter
 from tools.convert.quantization.fp8_row import quantize_bf16_rows
 from tools.convert.quantization.groupwise import pick_device, quantize_matrix
@@ -554,7 +554,10 @@ def convert(model_dir: str | Path, out_path: str | Path, *, device: str = "cpu")
                         raise ValueError(f"{spec_id}: convolution source shape mismatch")
                     return encode_direct(tensor[:, 0, :].transpose(0, 1).contiguous(), "bf16")
                 tensor = _read(reader, spec_id)
-                if spec_id.endswith(("/A_log", "/dt_bias")):
+                if spec_id.endswith((".A_log", ".dt_bias")):
+                    # GDN controls are exact FP32 expansions; the object is FP32 while the
+                    # checkpoint words are BF16, so the generic direct branch would write
+                    # half the object's bytes and fail the writer's coverage check.
                     return encode_direct(tensor.float(), "fp32")
                 if tensor.dtype != torch.bfloat16 or tuple(tensor.shape) != tuple(spec.shape):
                     raise ValueError(f"{spec_id}: direct source signature mismatch")
@@ -582,7 +585,14 @@ def convert(model_dir: str | Path, out_path: str | Path, *, device: str = "cpu")
             ) as writer:
                 for index, spec in enumerate(list(resource_specs) + list(tensor_specs), start=1):
                     label = spec if isinstance(spec, str) else spec.id
-                    writer.write_object(label, payload_for(spec))
+                    payload = payload_for(spec)
+                    if isinstance(payload, (bytes, bytearray, memoryview)) \
+                            and len(payload) != writer.by_id[label].bytes:
+                        raise ArtifactError(
+                            f"{label}: payload has {len(payload)} bytes, "
+                            f"expected {writer.by_id[label].bytes}"
+                        )
+                    writer.write_object(label, payload)
                     print(f"[{index}/{total}] {label}", flush=True)
 
     with Artifact(output) as artifact:

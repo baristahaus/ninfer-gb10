@@ -765,7 +765,11 @@ def refit_scales(
         b_vec = (q * hw).sum(dim=1)
         a_mat.diagonal().add_(1e-6 * a_mat.diagonal().mean())
         r = torch.linalg.solve(a_mat, b_vec)
-        r = torch.where(torch.isfinite(r) & (r > 0), r, torch.ones_like(r))
+        # A degenerate Hessian row (an input channel the capture never saw) solves to an
+        # arbitrary huge multiplier that would overflow the fp16 scale on store and poison
+        # the decode. The refit is a polish: keep the previous scale when the step leaves
+        # the range a legitimate round can reach.
+        r = torch.where(torch.isfinite(r) & (r > 0) & (r < 1024.0), r, torch.ones_like(r))
         q = q * r.view(k, 1)
         su = su * r.view(k, 1)
     e_after = err(q)
@@ -823,6 +827,11 @@ def quantize_linear(
             raise ValueError("quantize_linear expects the Hessian to match the input dimension")
         h_damped = hessian.to(device=device, dtype=torch.float32).clone()
         h_damped.diagonal().add_(sigma_reg * h_damped.diagonal().mean())
+        if not torch.isfinite(h_damped).all():
+            # A corrupt capture would poison both the LDLQ feedback and the scale refit
+            # (non-finite stored scales, an uncorrelated trellis); the plain route is
+            # strictly better than a broken tensor set.
+            h_damped = None
 
     # Step 2: the incoherence transforms, then the global scale search on the inner weight.
     suh, svh, inner, applied = incoherence(
@@ -855,6 +864,10 @@ def quantize_linear(
     trellis = trellis.reshape(k // 16, n // 16, 8 * k2)
     reconstruction = decode_composition(suh, inner_q, svh)
     nmse = float(((reconstruction - weight) ** 2).sum() / (weight ** 2).sum())
+    if not nmse < 0.5:  # also false for NaN
+        raise ValueError(
+            f"quantize_linear produced a broken tensor set (nmse {nmse:.4f} at k2={k2}); "
+            "refusing to store it")
     return {
         "suh": suh.to(torch.float16).contiguous(),
         "svh": svh.to(torch.float16).contiguous(),

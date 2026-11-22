@@ -30,6 +30,7 @@ wrongly typed source tensor and writes a conversion report beside the artifact.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -71,6 +72,13 @@ RECIPE_ID = "qwen3_8_flash_next_125b_a6b_abliterated_fp8_mtp-v3"
 SOURCE_KIND = "bf16_hf"
 
 _PLE_PREFIX = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
+# The digest the Qwen3.8-Flash-Next frontend engine registers for the family's
+# reasoning-effort chat template (src/models/qwen3_8_flash_next/impl/frontend/
+# chat_template.cpp, kReasoningEffortTemplateDigest) — the revision the official
+# Qwen3.8-Flash-Next checkpoint ships and serving artifacts carry.
+_REGISTERED_CHAT_TEMPLATE_DIGEST = (
+    "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+)
 _PLE_TABLE = _PLE_PREFIX + "weight"
 _PLE_SHARDS = tuple(_PLE_PREFIX + f"shard_{part}.weight" for part in range(128))
 _PLE_SCALE = _PLE_PREFIX + "weight_scale"
@@ -476,6 +484,22 @@ def convert(model_dir: str | Path, out_path: str | Path, *, device: str = "cpu")
     config_summary = _validate_config(source)
     resource_map = {name: (source / name.removeprefix("frontend/")).read_bytes()
                     for name in inventory.RESOURCE_SPECS}
+    # The engine resolves frontend/chat_template.jinja against its registered template
+    # digests and requires tokenizer_config.json.chat_template to equal that resource
+    # byte for byte. Fine-tunes may ship their own unsupported template revision, so
+    # this route always emits the registered family template.
+    chat_template = (Path(__file__).resolve().parent / "chat_template.jinja").read_bytes()
+    if hashlib.sha256(chat_template).hexdigest() != _REGISTERED_CHAT_TEMPLATE_DIGEST:
+        raise ValueError(
+            "bundled chat_template.jinja is not the registered family template "
+            f"(expected sha256 {_REGISTERED_CHAT_TEMPLATE_DIGEST})"
+        )
+    resource_map["frontend/chat_template.jinja"] = chat_template
+    tokenizer_config = json.loads(resource_map["frontend/tokenizer_config.json"])
+    tokenizer_config["chat_template"] = chat_template.decode("utf-8")
+    resource_map["frontend/tokenizer_config.json"] = (
+        json.dumps(tokenizer_config, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
     resource_specs = [ResourceSpec(name, len(data)) for name, data in resource_map.items()]
     tensor_specs = _specs()
     objects = plan_objects(list(resource_specs) + list(tensor_specs))
